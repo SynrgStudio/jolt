@@ -1,0 +1,2 @@
+// Recursos del ejecutable. El icono se genera con assets/hacer_icono.py.
+1 ICON "../assets/jolt.ico"

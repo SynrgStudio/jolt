@@ -1,0 +1,7 @@
+build/
+*.user
+.vs/
+
+# Material de referencia de File Pilot: queda solo en esta máquina
+docs/paleta-filepilot.md
+docs/extract_fp_commands.py

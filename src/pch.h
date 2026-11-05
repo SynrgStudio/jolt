@@ -1,0 +1,41 @@
+#pragma once
+// Headers precompilados: todo lo del sistema se procesa una sola vez (ver build.bat).
+// Acá van solo cosas que no cambian; nada de código nuestro.
+#include <windows.h>
+#include <windowsx.h>
+#include <winternl.h>
+#include <shellapi.h>
+#include <shlwapi.h>
+#include <shlobj.h>
+#include <shobjidl.h>
+#include <exdisp.h>
+#include <shlguid.h>
+#include <dbt.h>
+#include <commctrl.h>
+#include <commoncontrols.h>
+#include <dwmapi.h>
+#include <d2d1.h>
+#include <dwrite.h>
+#include <wincodec.h>
+#include <uiautomation.h>
+#include <wrl/client.h>
+
+#include <algorithm>
+#include <atomic>
+#include <cmath>
+#include <condition_variable>
+#include <cstdarg>
+#include <cstdint>
+#include <cstdio>
+#include <cwchar>
+#include <deque>
+#include <fstream>
+#include <functional>
+#include <memory>
+#include <mutex>
+#include <string>
+#include <thread>
+#include <bit>
+#include <unordered_map>
+#include <unordered_set>
+#include <vector>

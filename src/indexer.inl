@@ -1,0 +1,494 @@
+// Índice global de los discos, para que Ctrl+P encuentre cualquier carpeta o archivo al instante
+// (la idea de Everything). Por cada disco fijo se guarda un árbol compacto: un nodo por elemento con
+// el índice de su carpeta padre y su nombre en un bloque común.
+//  - Si Jolt corre como administrador y el disco es NTFS, se lee la tabla del disco (MFT) entera:
+//    segundos para millones de archivos. Si no, se recorre con NtQueryDirectoryFile en segundo plano.
+//  - Se guarda en %LOCALAPPDATA%\Jolt\indice-X.bin: al arrancar está disponible enseguida y se
+//    vuelve a armar en segundo plano (con prioridad baja de disco) para ponerse al día.
+//  - Lo que se crea mientras Jolt está abierto se agrega solo (vigilancia de cada disco); lo que se
+//    borra se descarta al mostrar los resultados.
+//  - La búsqueda difusa corre en varios hilos y se corta si se sigue escribiendo.
+// Se incluye desde app.cpp antes de palette.inl.
+
+constexpr UINT WM_APP_IDX = WM_APP + 8;
+
+struct IdxNode {
+    uint32_t parent;  // UINT32_MAX = raíz
+    uint32_t nameOff;
+    uint16_t nameLen;
+    uint8_t dir;
+    uint8_t depth;
+};
+// Mientras se arma vive en los vectores. Ya guardado, se lee directo del archivo: Windows trae a memoria solo
+// lo que se usa y lo puede soltar cuando quiera, así que no ocupa memoria propia de Jolt.
+struct IdxVolume {
+    wchar_t letter = 0;
+    std::vector<IdxNode> nodes;  // nodes[0] = la raíz ("C:")
+    std::vector<wchar_t> names;
+    const IdxNode* node = nullptr;
+    const wchar_t* name = nullptr;
+    size_t count = 0;
+    const void* view = nullptr;
+    IdxVolume() = default;
+    IdxVolume(const IdxVolume&) = delete;
+    ~IdxVolume() {
+        if (view) UnmapViewOfFile(view);
+    }
+    void Seal() {
+        node = nodes.data();
+        name = names.data();
+        count = nodes.size();
+    }
+};
+
+std::mutex g_ixm;
+std::vector<std::shared_ptr<const IdxVolume>> g_ixVols;
+std::vector<std::wstring> g_ixAdded;  // creados en esta sesión (rutas completas)
+std::atomic<uint64_t> g_ixCount{0};
+std::atomic<int> g_ixBuilding{0};
+std::atomic<uint64_t> g_ixGen{0};  // búsqueda vigente
+
+struct IdxResult {
+    uint64_t gen = 0;
+    std::wstring query;
+    std::vector<std::pair<std::wstring, bool>> hits;  // ruta, es carpeta
+};
+IdxResult g_ixRes;          // último resultado (hilo de la ventana)
+std::wstring g_ixAsked;     // última búsqueda pedida
+
+// Aviso en la barra de estado (desde cualquier hilo).
+constexpr UINT WM_APP_IDXMSG = WM_APP + 9;
+void IdxStatus(const std::wstring& s) {
+    auto* p = new std::wstring(s);
+    if (!PostMessageW(g_hwnd, WM_APP_IDXMSG, 0, reinterpret_cast<LPARAM>(p))) delete p;
+}
+
+void IdxPublish(std::shared_ptr<const IdxVolume> v) {
+    std::lock_guard lk(g_ixm);
+    bool replaced = false;
+    for (auto& x : g_ixVols)
+        if (x->letter == v->letter) {
+            x = v;
+            replaced = true;
+        }
+    if (!replaced) g_ixVols.push_back(v);
+    uint64_t n = 0;
+    for (auto& x : g_ixVols) n += x->count;
+    g_ixCount = n;
+}
+
+void IdxAddNode(IdxVolume& v, uint32_t parent, const wchar_t* name, size_t len, bool dir) {
+    IdxNode n;
+    n.parent = parent;
+    n.nameOff = static_cast<uint32_t>(v.names.size());
+    n.nameLen = static_cast<uint16_t>(std::min<size_t>(len, 65535));
+    n.dir = dir;
+    n.depth = parent == UINT32_MAX ? 0 : static_cast<uint8_t>(std::min(250, v.nodes[parent].depth + 1));
+    v.names.insert(v.names.end(), name, name + n.nameLen);
+    v.nodes.push_back(n);
+}
+
+// Recorrido normal (sin permisos especiales).
+std::shared_ptr<IdxVolume> IdxWalk(wchar_t letter) {
+    auto v = std::make_shared<IdxVolume>();
+    v->letter = letter;
+    wchar_t root[3] = {letter, L':', 0};
+    IdxAddNode(*v, UINT32_MAX, root, 2, true);
+    std::vector<std::pair<uint32_t, std::wstring>> stack{{0, std::wstring(root) + L"\\"}};
+    Listing l;
+    uint64_t base = g_ixCount;
+    while (!stack.empty()) {
+        auto [idx, path] = std::move(stack.back());
+        stack.pop_back();
+        l = Listing{};
+        EnumerateDir(path, EnumMethod::Nt, l);
+        for (const Entry& e : l.entries) {
+            uint32_t me = static_cast<uint32_t>(v->nodes.size());
+            IdxAddNode(*v, idx, l.name(e), e.nameLen, e.isDir());
+            if (e.isDir() && !(e.attrs & FILE_ATTRIBUTE_REPARSE_POINT)) stack.push_back({me, Join(path, l.name(e))});
+        }
+        if ((v->nodes.size() & 0x3FFF) < l.entries.size()) g_ixCount = base + v->nodes.size();
+    }
+    v->Seal();
+    return v;
+}
+
+// Lectura directa de la tabla del disco (NTFS, solo como administrador).
+std::shared_ptr<IdxVolume> IdxMft(wchar_t letter) {
+    wchar_t root[4] = {letter, L':', L'\\', 0}, fs[32] = {};
+    if (!GetVolumeInformationW(root, nullptr, 0, nullptr, nullptr, nullptr, fs, 32) || wcscmp(fs, L"NTFS") != 0) return nullptr;
+    wchar_t dev[8] = {L'\\', L'\\', L'.', L'\\', letter, L':', 0};
+    HANDLE h = CreateFileW(dev, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return nullptr;  // sin permisos: se recorre normalmente
+    struct Raw {
+        uint64_t frn, parent;
+        uint32_t nameOff;
+        uint16_t nameLen;
+        bool dir;
+    };
+    std::vector<Raw> raws;
+    std::vector<wchar_t> names;
+    MFT_ENUM_DATA_V0 med{0, 0, MAXLONGLONG};
+    std::vector<BYTE> buf(1 << 20);
+    DWORD got = 0;
+    while (DeviceIoControl(h, FSCTL_ENUM_USN_DATA, &med, sizeof(med), buf.data(), static_cast<DWORD>(buf.size()), &got, nullptr) &&
+           got > sizeof(USN)) {
+        BYTE* p = buf.data() + sizeof(USN);
+        while (p < buf.data() + got) {
+            auto* r = reinterpret_cast<USN_RECORD_V2*>(p);
+            if (r->RecordLength == 0) break;
+            if (r->MajorVersion == 2) {
+                const wchar_t* nm = reinterpret_cast<const wchar_t*>(p + r->FileNameOffset);
+                uint16_t len = static_cast<uint16_t>(r->FileNameLength / sizeof(wchar_t));
+                raws.push_back({r->FileReferenceNumber, r->ParentFileReferenceNumber, static_cast<uint32_t>(names.size()), len,
+                                (r->FileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0});
+                names.insert(names.end(), nm, nm + len);
+            }
+            p += r->RecordLength;
+        }
+        med.StartFileReferenceNumber = *reinterpret_cast<DWORDLONG*>(buf.data());
+    }
+    CloseHandle(h);
+    if (raws.empty()) return nullptr;
+    std::unordered_map<uint64_t, uint32_t> byFrn;
+    byFrn.reserve(raws.size());
+    for (size_t i = 0; i < raws.size(); ++i) byFrn[raws[i].frn] = static_cast<uint32_t>(i);
+    // en orden de padres a hijos (para calcular la profundidad y que el padre exista antes)
+    auto v = std::make_shared<IdxVolume>();
+    v->letter = letter;
+    wchar_t rootName[3] = {letter, L':', 0};
+    IdxAddNode(*v, UINT32_MAX, rootName, 2, true);
+    std::vector<uint32_t> nodeOf(raws.size(), UINT32_MAX);
+    // la raíz del disco es su propio padre
+    for (size_t i = 0; i < raws.size(); ++i) {
+        auto it = byFrn.find(raws[i].parent);
+        if (it != byFrn.end() && it->second == i) nodeOf[i] = 0;
+    }
+    std::vector<uint32_t> chain;
+    for (size_t i = 0; i < raws.size(); ++i) {
+        if (nodeOf[i] != UINT32_MAX) continue;
+        // subir hasta un ancestro ya ubicado (o la raíz) y después bajar agregando, así el padre siempre existe
+        chain.clear();
+        uint32_t cur = static_cast<uint32_t>(i), parentNode = 0;
+        for (int guard = 0; guard < 512; ++guard) {
+            chain.push_back(cur);
+            auto it = byFrn.find(raws[cur].parent);
+            if (it == byFrn.end()) break;
+            if (nodeOf[it->second] != UINT32_MAX) {
+                parentNode = nodeOf[it->second];
+                break;
+            }
+            cur = it->second;
+        }
+        for (size_t k = chain.size(); k-- > 0;) {
+            const Raw& r = raws[chain[k]];
+            if (nodeOf[chain[k]] != UINT32_MAX) {
+                parentNode = nodeOf[chain[k]];
+                continue;
+            }
+            if (parentNode == 0 && r.nameLen > 0 && names[r.nameOff] == L'$') {  // archivos internos de NTFS
+                nodeOf[chain[k]] = 0;
+                continue;
+            }
+            nodeOf[chain[k]] = static_cast<uint32_t>(v->nodes.size());
+            IdxAddNode(*v, parentNode, names.data() + r.nameOff, r.nameLen, r.dir);
+            parentNode = nodeOf[chain[k]];
+        }
+    }
+    v->Seal();
+    return v;
+}
+
+std::wstring IdxFile(wchar_t letter) { return LocalDataDir() + L"\\indice-" + std::wstring(1, letter) + L".bin"; }
+
+// Un índice nuevo se escribe aparte (".nuevo"): el que está en uso no se puede pisar mientras esté mapeado.
+std::wstring IdxNewFile(wchar_t letter) { return IdxFile(letter) + L".nuevo"; }
+
+void IdxSave(const IdxVolume& v) {
+    std::wstring f = IdxNewFile(v.letter), tmp = IdxFile(v.letter) + L".tmp";
+    HANDLE h = CreateFileW(tmp.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return;
+    uint32_t head[3] = {0x58445952, static_cast<uint32_t>(v.nodes.size()), static_cast<uint32_t>(v.names.size())};  // "RYDX"
+    DWORD w;
+    bool ok = WriteFile(h, head, sizeof(head), &w, nullptr) &&
+              WriteFile(h, v.nodes.data(), static_cast<DWORD>(v.nodes.size() * sizeof(IdxNode)), &w, nullptr) &&
+              WriteFile(h, v.names.data(), static_cast<DWORD>(v.names.size() * sizeof(wchar_t)), &w, nullptr);
+    CloseHandle(h);
+    if (ok) MoveFileExW(tmp.c_str(), f.c_str(), MOVEFILE_REPLACE_EXISTING);
+}
+
+std::shared_ptr<IdxVolume> IdxLoad(wchar_t letter) {
+    HANDLE h = CreateFileW(IdxFile(letter).c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, 0, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return nullptr;
+    LARGE_INTEGER size{};
+    HANDLE m = GetFileSizeEx(h, &size) && size.QuadPart >= 12 ? CreateFileMappingW(h, nullptr, PAGE_READONLY, 0, 0, nullptr) : nullptr;
+    CloseHandle(h);
+    if (!m) return nullptr;
+    const void* view = MapViewOfFile(m, FILE_MAP_READ, 0, 0, 0);
+    CloseHandle(m);  // la vista mantiene vivo el mapeo
+    if (!view) return nullptr;
+    const auto* head = static_cast<const uint32_t*>(view);
+    const uint64_t want = 12 + static_cast<uint64_t>(head[1]) * sizeof(IdxNode) + static_cast<uint64_t>(head[2]) * sizeof(wchar_t);
+    if (head[0] != 0x58445952 || static_cast<uint64_t>(size.QuadPart) != want) {
+        UnmapViewOfFile(view);
+        return nullptr;
+    }
+    auto v = std::make_shared<IdxVolume>();
+    v->letter = letter;
+    v->view = view;
+    v->count = head[1];
+    v->node = reinterpret_cast<const IdxNode*>(head + 3);
+    v->name = reinterpret_cast<const wchar_t*>(v->node + head[1]);
+    return v;
+}
+
+// Pasa a usar el índice nuevo: suelta el mapeo anterior (una búsqueda en curso lo retiene un momento),
+// reemplaza el archivo y lo mapea. Un índice que todavía vive en memoria sigue visible hasta entonces.
+bool IdxPromote(wchar_t letter) {
+    const std::wstring fresh = IdxNewFile(letter);
+    if (GetFileAttributesW(fresh.c_str()) == INVALID_FILE_ATTRIBUTES) return false;
+    {
+        std::lock_guard lk(g_ixm);
+        for (size_t i = 0; i < g_ixVols.size(); ++i)
+            if (g_ixVols[i]->letter == letter && g_ixVols[i]->view) {
+                g_ixVols.erase(g_ixVols.begin() + i);
+                break;
+            }
+    }
+    bool moved = false;
+    for (int i = 0; i < 50 && !moved; ++i) {
+        moved = MoveFileExW(fresh.c_str(), IdxFile(letter).c_str(), MOVEFILE_REPLACE_EXISTING);
+        if (!moved) Sleep(100);
+    }
+    if (auto v = IdxLoad(letter)) IdxPublish(v);
+    return moved;
+}
+
+// Vigila un disco entero: lo que se crea se agrega a la lista de esta sesión.
+void IdxWatch(wchar_t letter) {
+    wchar_t root[4] = {letter, L':', L'\\', 0};
+    HANDLE d = CreateFileW(root, FILE_LIST_DIRECTORY, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+                           OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+    if (d == INVALID_HANDLE_VALUE) return;
+    std::vector<BYTE> buf(64 * 1024);
+    DWORD got = 0;
+    while (ReadDirectoryChangesW(d, buf.data(), static_cast<DWORD>(buf.size()), TRUE,
+                                 FILE_NOTIFY_CHANGE_FILE_NAME | FILE_NOTIFY_CHANGE_DIR_NAME, &got, nullptr, nullptr)) {
+        if (!got) continue;  // se desbordó: se pierde esa tanda (el próximo armado la recupera)
+        std::lock_guard lk(g_ixm);
+        for (BYTE* p = buf.data();;) {
+            auto* fni = reinterpret_cast<FILE_NOTIFY_INFORMATION*>(p);
+            if (fni->Action == FILE_ACTION_ADDED || fni->Action == FILE_ACTION_RENAMED_NEW_NAME) {
+                std::wstring rel(fni->FileName, fni->FileNameLength / sizeof(wchar_t));
+                if (g_ixAdded.size() < 20000) g_ixAdded.push_back(root + rel);
+            }
+            if (!fni->NextEntryOffset) break;
+            p += fni->NextEntryOffset;
+        }
+    }
+    CloseHandle(d);
+}
+
+// Horas desde que se guardó el índice de un disco (o mucho si no hay).
+double IdxAgeHours(wchar_t letter) {
+    WIN32_FILE_ATTRIBUTE_DATA d{};
+    if (!GetFileAttributesExW(IdxFile(letter).c_str(), GetFileExInfoStandard, &d)) return 1e9;
+    int64_t t = (static_cast<int64_t>(d.ftLastWriteTime.dwHighDateTime) << 32) | d.ftLastWriteTime.dwLowDateTime;
+    return static_cast<double>(NowFileTime() - t) / 36000000000.0;
+}
+
+std::vector<wchar_t> IdxLetters() {
+    std::vector<wchar_t> letters;
+    DWORD mask = GetLogicalDrives();
+    for (int i = 0; i < 26; ++i) {
+        if (!(mask & (1u << i))) continue;
+        wchar_t root[4] = {static_cast<wchar_t>(L'A' + i), L':', L'\\', 0};
+        if (GetDriveTypeW(root) == DRIVE_FIXED) letters.push_back(root[0]);
+    }
+    return letters;
+}
+
+// Modo "jolt.exe --indexar-mft": lo lanza Jolt como administrador; lee la MFT de cada disco, guarda y sale.
+void IdxElevatedMain() {
+    for (wchar_t c : IdxLetters())
+        if (auto v = IdxMft(c)) IdxSave(*v);
+}
+
+// Pide permiso de administrador una vez y reindexa leyendo la tabla de cada disco (segundos).
+void IdxReindexElevated() {
+    wchar_t exe[MAX_PATH];
+    GetModuleFileNameW(nullptr, exe, MAX_PATH);
+    SHELLEXECUTEINFOW sei{sizeof(sei)};
+    sei.fMask = SEE_MASK_NOCLOSEPROCESS;
+    sei.hwnd = g_hwnd;
+    sei.lpVerb = L"runas";
+    sei.lpFile = exe;
+    sei.lpParameters = L"--indexar-mft";
+    sei.nShow = SW_HIDE;
+    if (!ShellExecuteExW(&sei) || !sei.hProcess) {
+        IdxStatus(L"Reindexado cancelado (hace falta el permiso de administrador)");
+        return;
+    }
+    g_ixBuilding = 1;
+    IdxStatus(L"Reindexando los discos…");
+    HANDLE proc = sei.hProcess;
+    std::thread([proc] {
+        // cada disco se usa apenas su índice queda escrito, y se avisa cómo va
+        const double t0 = NowMs();
+        const std::vector<wchar_t> letters = IdxLetters();
+        std::vector<bool> done(letters.size(), false);
+        std::wstring progress;
+        auto check = [&] {
+            for (size_t i = 0; i < letters.size(); ++i) {
+                if (!done[i] && IdxPromote(letters[i])) {
+                    done[i] = true;
+                    wchar_t b[64];
+                    swprintf(b, 64, L"%c: %.0f s", letters[i], (NowMs() - t0) / 1000.0);
+                    progress += (progress.empty() ? L"" : L"   ·   ") + std::wstring(b);
+                    IdxStatus(L"Reindexando…   " + progress);
+                }
+            }
+        };
+        while (WaitForSingleObject(proc, 500) == WAIT_TIMEOUT) check();
+        check();
+        CloseHandle(proc);
+        g_ixBuilding = 0;
+        int ok = 0;
+        for (bool d : done) ok += d;
+        wchar_t b[160];
+        if (ok == 0)
+            swprintf(b, 160, L"No se pudo reindexar: no se pudo leer la tabla de los discos");
+        else
+            swprintf(b, 160, L"Índice listo: %s elementos en %.0f s%s", Thousands(static_cast<int>(std::min<uint64_t>(g_ixCount, INT_MAX))).c_str(),
+                     (NowMs() - t0) / 1000.0, ok < static_cast<int>(letters.size()) ? L" (algún disco no se pudo leer)" : L"");
+        IdxStatus(b);
+    }).detach();
+}
+
+void IdxBuilder() {
+    SetThreadPriority(GetCurrentThread(), THREAD_MODE_BACKGROUND_BEGIN);  // disco y CPU en segundo plano
+    const std::vector<wchar_t> letters = IdxLetters();
+    for (wchar_t c : letters) {
+        IdxPromote(c);  // uno que quedó sin estrenar porque Jolt se cerró antes
+        if (auto v = IdxLoad(c)) IdxPublish(v);  // lo de la vez anterior, ya mismo
+    }
+    for (wchar_t c : letters) std::thread(IdxWatch, c).detach();
+    for (;;) {
+        for (wchar_t c : letters) {
+            // un índice de menos de 12 horas alcanza (lo nuevo se suma en vivo; lo borrado se descarta al mostrar)
+            if (IdxAgeHours(c) < 12) continue;
+            g_ixBuilding = 1;
+            auto v = IdxMft(c);
+            if (!v) v = IdxWalk(c);
+            IdxPublish(v);
+            IdxSave(*v);
+            v.reset();
+            IdxPromote(c);  // de los vectores pasa al archivo
+            std::lock_guard lk(g_ixm);
+            const std::wstring pre = std::wstring(1, c) + L":";
+            g_ixAdded.erase(std::remove_if(g_ixAdded.begin(), g_ixAdded.end(), [&](const std::wstring& p) { return p.rfind(pre, 0) == 0; }),
+                            g_ixAdded.end());
+        }
+        g_ixBuilding = 0;
+        Sleep(30 * 60 * 1000);  // cada media hora se revisa si algún índice quedó viejo
+    }
+}
+
+std::wstring IdxPath(const IdxVolume& v, uint32_t i) {
+    std::vector<uint32_t> chain;
+    for (uint32_t c = i; c != UINT32_MAX && chain.size() < 300; c = v.node[c].parent) chain.push_back(c);
+    std::wstring p;
+    for (size_t k = chain.size(); k-- > 0;) {
+        const IdxNode& n = v.node[chain[k]];
+        if (!p.empty() && p.back() != L'\\') p += L'\\';
+        p.append(v.name + n.nameOff, n.nameLen);
+        if (k == chain.size() - 1) p += L'\\';  // "C:\"
+    }
+    return p;
+}
+
+// Busca en un hilo aparte y avisa a la ventana con los mejores resultados.
+void IdxSearch(std::wstring query, uint64_t gen) {
+    std::vector<std::shared_ptr<const IdxVolume>> vols;
+    std::vector<std::wstring> added;
+    {
+        std::lock_guard lk(g_ixm);
+        vols = g_ixVols;
+        added = g_ixAdded;
+    }
+    const std::wstring pat = Lower(query);
+    struct Hit {
+        int key;
+        uint32_t vol, node;  // vol = UINT32_MAX: de "added"
+        bool operator<(const Hit& o) const { return key > o.key; }  // montículo de mínimos
+    };
+    const size_t kTop = 80;
+    unsigned nth = std::max(1u, std::min(8u, std::thread::hardware_concurrency()));
+    std::vector<std::vector<Hit>> part(nth);
+    std::vector<std::thread> th;
+    for (unsigned t = 0; t < nth; ++t) {
+        th.emplace_back([&, t] {
+            auto& heap = part[t];
+            int sc;
+            for (uint32_t vi = 0; vi < vols.size(); ++vi) {
+                const IdxVolume& v = *vols[vi];
+                const size_t n = v.count;
+                for (size_t i = 1 + t; i < n; i += nth) {
+                    if ((i & 0xFFFF) < nth && g_ixGen != gen) return;
+                    const IdxNode& nd = v.node[i];
+                    if (nd.nameLen < pat.size()) continue;
+                    if (!FuzzyMatch(v.name + nd.nameOff, nd.nameLen, pat, sc, nullptr)) continue;
+                    int key = sc * 8 - std::min<int>(nd.depth, 40) + (nd.dir ? 4 : 0);
+                    if (heap.size() < kTop) {
+                        heap.push_back({key, vi, static_cast<uint32_t>(i)});
+                        std::push_heap(heap.begin(), heap.end());
+                    } else if (key > heap.front().key) {
+                        std::pop_heap(heap.begin(), heap.end());
+                        heap.back() = {key, vi, static_cast<uint32_t>(i)};
+                        std::push_heap(heap.begin(), heap.end());
+                    }
+                }
+            }
+        });
+    }
+    for (auto& x : th) x.join();
+    if (g_ixGen != gen) return;
+    std::vector<Hit> all;
+    for (auto& p : part) all.insert(all.end(), p.begin(), p.end());
+    // lo creado en esta sesión
+    int sc;
+    for (uint32_t i = 0; i < added.size(); ++i) {
+        std::wstring leaf = LeafOf(added[i]);
+        if (FuzzyMatch(leaf.c_str(), leaf.size(), pat, sc, nullptr)) all.push_back({sc * 8, UINT32_MAX, i});
+    }
+    std::sort(all.begin(), all.end(), [](const Hit& a, const Hit& b) { return a.key > b.key; });
+    auto res = std::make_unique<IdxResult>();
+    res->gen = gen;
+    res->query = query;
+    std::unordered_set<std::wstring> seen;
+    for (const Hit& h : all) {
+        if (res->hits.size() >= 40) break;
+        std::wstring p = h.vol == UINT32_MAX ? added[h.node] : IdxPath(*vols[h.vol], h.node);
+        DWORD a = GetFileAttributesW(ToExtendedPath(p).c_str());  // lo borrado no se muestra
+        if (a == INVALID_FILE_ATTRIBUTES || !seen.insert(Key(p)).second) continue;
+        res->hits.push_back({p, (a & FILE_ATTRIBUTE_DIRECTORY) != 0});
+    }
+    IdxResult* raw = res.release();
+    if (!PostMessageW(g_hwnd, WM_APP_IDX, 0, reinterpret_cast<LPARAM>(raw))) delete raw;
+}
+
+void IdxRequest(const std::wstring& query) {
+    if (query == g_ixAsked) return;
+    g_ixAsked = query;
+    uint64_t gen = ++g_ixGen;
+    if (query.size() < 2) return;
+    std::thread(IdxSearch, query, gen).detach();
+}
+
+void IdxStart() { std::thread(IdxBuilder).detach(); }
+void IdxStartReadOnly() {
+    std::thread([] {
+        for (wchar_t c : IdxLetters())
+            if (auto v = IdxLoad(c)) IdxPublish(v);
+    }).detach();
+}
