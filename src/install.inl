@@ -142,7 +142,7 @@ void InstSetPath(bool on) {
 std::wstring InstOpenCommand() { return L"\"" + InstExe() + L"\" \"%1\""; }
 std::wstring InstClassShell(const wchar_t* cls) { return std::wstring(L"Software\\Classes\\") + cls + L"\\shell"; }
 std::wstring InstWinEVerb() { return std::wstring(kRegWinE) + L"\\shell\\opennewwindow"; }
-std::wstring InstWinECommand() { return L"\"" + InstExe() + L"\""; }  // sin carpeta: muestra Jolt tal como estaba
+std::wstring InstWinECommand() { return L"\"" + InstExe() + L"\" --alternar"; }
 
 bool InstIsDefault() {
     for (const wchar_t* cls : kFolderClasses) {

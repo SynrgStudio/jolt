@@ -3994,6 +3994,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return 0;
         case WM_COPYDATA: {
             const auto* cd = reinterpret_cast<const COPYDATASTRUCT*>(lp);
+            if (cd->dwData == 2) BgToggle(true);
             if (cd->dwData == 1 && cd->cbData >= sizeof(wchar_t)) {
                 const std::wstring p(static_cast<const wchar_t*>(cd->lpData), cd->cbData / sizeof(wchar_t) - 1);
                 if (!p.empty()) BgOpenPath(p);
@@ -4098,7 +4099,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdLine, int show) {
         }
     }
     const bool hidden = !g_test && HasArg(L"--oculto");
-    if (!g_test && BgHandOff(hidden ? L"" : ArgPath())) return 0;
+    if (!g_test && BgHandOff(hidden ? L"" : ArgPath(), HasArg(L"--alternar"))) return 0;
     BootMark(L"inicio");
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     SetErrorMode(SEM_FAILCRITICALERRORS);  // nada de cuadros "inserte un disco"
@@ -4137,6 +4138,8 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdLine, int show) {
     DwmSetWindowAttribute(g_hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark, sizeof(dark));
     COLORREF border = RGB(0x2B, 0x2B, 0x31);
     DwmSetWindowAttribute(g_hwnd, DWMWA_BORDER_COLOR, &border, sizeof(border));
+    BOOL noFade = TRUE;  // sin esto, Windows funde la ventana al esconderla
+    DwmSetWindowAttribute(g_hwnd, DWMWA_TRANSITIONS_FORCEDISABLED, &noFade, sizeof(noFade));
     // aplica WM_NCCALCSIZE: la barra de título de Windows desaparece y la dibujamos nosotros
     SetWindowPos(g_hwnd, nullptr, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
     if (g_test)  // pruebas: fuera de la pantalla y sin mostrarse nunca

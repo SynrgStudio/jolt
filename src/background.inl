@@ -22,7 +22,8 @@ void InstPanelClose();
 // ---- una sola instancia
 
 // Si ya hay un Jolt, le pasa la carpeta y devuelve true. El que arranca tiene permiso de pasar al frente; se lo cede.
-bool BgHandOff(const std::wstring& path) {
+// Con toggle ("--alternar", lo que corre Win+E) hace lo mismo que el atajo global: mostrar o esconder.
+bool BgHandOff(const std::wstring& path, bool toggle) {
     g_instance = CreateMutexW(nullptr, FALSE, L"Local\\JoltInstancia");
     if (GetLastError() != ERROR_ALREADY_EXISTS) return false;
     HWND w = nullptr;
@@ -34,7 +35,7 @@ bool BgHandOff(const std::wstring& path) {
     DWORD pid = 0;
     GetWindowThreadProcessId(w, &pid);
     AllowSetForegroundWindow(pid);
-    COPYDATASTRUCT cd{1, static_cast<DWORD>((path.size() + 1) * sizeof(wchar_t)), const_cast<wchar_t*>(path.c_str())};
+    COPYDATASTRUCT cd{static_cast<ULONG_PTR>(toggle ? 2 : 1), static_cast<DWORD>((path.size() + 1) * sizeof(wchar_t)), const_cast<wchar_t*>(path.c_str())};
     SendMessageTimeoutW(w, WM_COPYDATA, 0, reinterpret_cast<LPARAM>(&cd), SMTO_ABORTIFHUNG, 3000, nullptr);
     return true;
 }

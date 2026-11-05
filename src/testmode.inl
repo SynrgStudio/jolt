@@ -536,6 +536,9 @@ void TestRunStep() {
             }
         } else if (s.cmd == L"atajo") {
             SendMessageW(g_hwnd, WM_HOTKEY, kHotkeyId, 0);
+        } else if (s.cmd == L"alternar") {
+            COPYDATASTRUCT cd{2, sizeof(wchar_t), const_cast<wchar_t*>(L"")};
+            SendMessageW(g_hwnd, WM_COPYDATA, 0, reinterpret_cast<LPARAM>(&cd));
         } else if (s.cmd == L"abrir_ruta") {
             COPYDATASTRUCT cd{1, static_cast<DWORD>((s.arg.size() + 1) * sizeof(wchar_t)), const_cast<wchar_t*>(s.arg.c_str())};
             SendMessageW(g_hwnd, WM_COPYDATA, 0, reinterpret_cast<LPARAM>(&cd));
@@ -557,7 +560,7 @@ void TestRunStep() {
         } else if (s.cmd == L"estado") {
             TestLog(std::wstring(L"estado: instalado ") + (InstIsInstalled() ? L"si" : L"no") + L", path " + (InstInPath() ? L"si" : L"no") +
                     L", predeterminado " + (InstIsDefault() ? L"si" : L"no") + L", inicio " + (InstStartsWithWindows() ? L"si" : L"no") +
-                    L", atajo " + (g_hotkeyOk ? L"si" : L"no"));
+                    L", atajo " + (g_hotkeyOk ? L"si" : L"no") + L", visible " + (g_testShown ? L"si" : L"no"));
         } else if (s.cmd == L"reg") {
             const size_t bar = s.arg.find(L'|');
             const std::wstring sub = Trim(s.arg.substr(0, bar)), name = bar == std::wstring::npos ? L"" : Trim(s.arg.substr(bar + 1));
