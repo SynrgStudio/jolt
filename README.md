@@ -222,3 +222,7 @@ el permiso de administrador: Windows lo muestra en un escritorio seguro, a prop�
 - Iconos: los que dependen solo de la extensión se resuelven al momento sin tocar el disco; los que dependen
   del archivo (carpetas, .exe, accesos directos) se piden a otro hilo y solo para las filas visibles.
 - Dibuja solo lo visible.
+
+## Licencia
+
+Jolt es software libre bajo la [GNU GPL v3](LICENSE): podés usarlo, modificarlo y distribuirlo, siempre que quien distribuya una versión modificada publique su código con la misma licencia.
