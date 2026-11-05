@@ -8,6 +8,8 @@ constexpr wchar_t kRegRun[] = L"Software\\Microsoft\\Windows\\CurrentVersion\\Ru
 constexpr wchar_t kRegBackup[] = L"Software\\Jolt\\Anterior";
 constexpr wchar_t kRegEnv[] = L"Environment";
 const wchar_t* const kFolderClasses[] = {L"Directory", L"Drive"};
+// Win+E no pasa por Directory ni Drive: Windows abre este objeto, el de la vista de inicio del Explorador.
+constexpr wchar_t kRegWinE[] = L"Software\\Classes\\CLSID\\{52205fd8-5dfb-447d-801a-d0b52f2e83e1}";
 
 std::wstring ExePath() {
     std::wstring p(32768, L'\0');
@@ -50,6 +52,7 @@ void RegRemoveValue(const std::wstring& sub, const wchar_t* name) {
 }
 
 void RegRemoveTree(const std::wstring& sub) { RegDeleteTreeW(HKEY_CURRENT_USER, RegKey(sub).c_str()); }
+void RegRemoveIfEmpty(const std::wstring& sub) { RegDeleteKeyW(HKEY_CURRENT_USER, RegKey(sub).c_str()); }  // con subclaves, falla y queda
 
 std::wstring InstDir() {
     if (g_test) {
@@ -138,13 +141,45 @@ void InstSetPath(bool on) {
 
 std::wstring InstOpenCommand() { return L"\"" + InstExe() + L"\" \"%1\""; }
 std::wstring InstClassShell(const wchar_t* cls) { return std::wstring(L"Software\\Classes\\") + cls + L"\\shell"; }
+std::wstring InstWinEVerb() { return std::wstring(kRegWinE) + L"\\shell\\opennewwindow"; }
+std::wstring InstWinECommand() { return L"\"" + InstExe() + L"\""; }  // sin carpeta: muestra Jolt tal como estaba
 
 bool InstIsDefault() {
     for (const wchar_t* cls : kFolderClasses) {
         std::wstring cmd;
         if (!RegRead(InstClassShell(cls) + L"\\open\\command", nullptr, cmd) || Key(cmd) != Key(InstOpenCommand())) return false;
     }
-    return true;
+    std::wstring cmd;
+    return RegRead(InstWinEVerb() + L"\\command", nullptr, cmd) && Key(cmd) == Key(InstWinECommand());
+}
+
+// DelegateExecute vacío hace que Windows use este comando y no el manejador propio del Explorador.
+void InstSetWinE(bool on) {
+    const std::wstring verb = InstWinEVerb(), command = verb + L"\\command";
+    std::wstring v;
+    if (on) {
+        if (!RegRead(kRegBackup, L"WinE.guardado", v)) {
+            if (RegRead(command, nullptr, v)) RegWrite(kRegBackup, L"WinE.comando", v);
+            if (RegRead(command, L"DelegateExecute", v)) RegWrite(kRegBackup, L"WinE.delegado", v);
+            RegWrite(kRegBackup, L"WinE.guardado", L"1");
+        }
+        RegWrite(command, nullptr, InstWinECommand());
+        RegWrite(command, L"DelegateExecute", L"");
+        return;
+    }
+    if (!RegRead(kRegBackup, L"WinE.guardado", v)) return;
+    if (RegRead(kRegBackup, L"WinE.comando", v)) {
+        RegWrite(command, nullptr, v);
+        if (RegRead(kRegBackup, L"WinE.delegado", v)) RegWrite(command, L"DelegateExecute", v);
+        else RegRemoveValue(command, L"DelegateExecute");
+    } else {
+        RegRemoveTree(verb);
+        RegRemoveIfEmpty(std::wstring(kRegWinE) + L"\\shell");
+        RegRemoveIfEmpty(kRegWinE);
+    }
+    RegRemoveValue(kRegBackup, L"WinE.guardado");
+    RegRemoveValue(kRegBackup, L"WinE.comando");
+    RegRemoveValue(kRegBackup, L"WinE.delegado");
 }
 
 // Antes de pisar nada se guarda lo que había, una sola vez: al apagar la opción vuelve exactamente eso.
@@ -172,6 +207,7 @@ void InstSetDefault(bool on) {
             RegRemoveValue(kRegBackup, cmdName.c_str());
         }
     }
+    InstSetWinE(on);
     if (!g_test) SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, nullptr, nullptr);
 }
 

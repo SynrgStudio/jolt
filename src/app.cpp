@@ -4026,7 +4026,7 @@ std::wstring ArgPath() {
     std::wstring p;
     for (int i = 1; argv && i < argc && p.empty(); ++i) {
         std::wstring a = argv[i];
-        if (a.rfind(L"--", 0) == 0) continue;
+        if (a.rfind(L"--", 0) == 0 || a.rfind(L"::", 0) == 0) continue;  // "::{...}": carpeta virtual del shell, sin ruta
         while (!a.empty() && a.back() == L'"') a.pop_back();
         if (a.size() == 2 && a[1] == L':') a += L'\\';
         wchar_t full[4096];
