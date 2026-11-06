@@ -31,7 +31,7 @@ Folders open instantly. One small file, no dependencies, no telemetry.
 
 <table>
 <tr>
-<td width="33%" valign="top"><b>⚡ Instant folders</b><br>Lists with the fastest Windows API and keeps visited folders in memory, so going back takes no time.</td>
+<td width="33%" valign="top"><b>⚡ Instant folders</b><br>Reads folders with a low-level Windows API and keeps visited ones in memory, so going back takes no time.</td>
 <td width="33%" valign="top"><b>🔎 Find anything</b><br>Ctrl+P searches everything on your drives. Just start typing to fuzzy-filter any folder.</td>
 <td width="33%" valign="top"><b>🖼️ Preview</b><br>Space shows images, code, folder contents and thumbnails right next to the list.</td>
 </tr>
@@ -43,7 +43,7 @@ Folders open instantly. One small file, no dependencies, no telemetry.
 <tr>
 <td valign="top"><b>🎛️ Views per folder</b><br>Sort, group and filter each folder its own way, with rules applied instantly.</td>
 <td valign="top"><b>⌨️ Keyboard first</b><br>A command palette, and any shortcut can be changed with one click.</td>
-<td valign="top"><b>↩️ Undo</b><br>Rename, move, copy, create or delete by mistake? Ctrl+Z.</td>
+<td valign="top"><b>↩️ Undo</b><br>Renamed, moved or sent something to the Recycle Bin by mistake? Ctrl+Z.</td>
 </tr>
 <tr>
 <td valign="top"><b>🎨 Yours to customize</b><br>Colors, font, sizes and columns in one plain text file that reloads on save.</td>
