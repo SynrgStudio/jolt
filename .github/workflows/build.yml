@@ -1,11 +1,10 @@
 # Builds jolt.exe on GitHub's own machines, so every release can be traced back to this repository.
-# Pushing a tag like v0.1.1 also publishes it as a release.
+# A push to master with a new version in src/version.h also creates the tag and publishes the release.
 name: Build
 
 on:
   push:
     branches: [master]
-    tags: ['v*']
   pull_request:
   workflow_dispatch:
 
@@ -15,22 +14,29 @@ permissions:
 jobs:
   build:
     runs-on: windows-2025
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v7
 
-      - name: Check that the tag matches the version
-        if: github.ref_type == 'tag'
+      - name: Read the version
+        id: version
         shell: pwsh
         run: |
-          $version = (Select-String -Path src/version.h -Pattern 'JOLT_VERSION "(.+)"').Matches.Groups[1].Value
-          if ("v$version" -ne $env:GITHUB_REF_NAME) { throw "Tag $env:GITHUB_REF_NAME doesn't match version $version" }
+          $text = Get-Content src/version.h -Raw
+          $version = [regex]::Match($text, 'JOLT_VERSION "(\d+)\.(\d+)\.(\d+)"')
+          if (!$version.Success) { throw 'No version in src/version.h' }
+          $v = $version.Groups
+          $number = "JOLT_VERSION_NUM $($v[1]), $($v[2]), $($v[3]), 0"
+          $wide = "JOLT_VERSION_W L`"$($v[1]).$($v[2]).$($v[3])`""
+          if (!$text.Contains($number) -or !$text.Contains($wide)) { throw 'The versions in src/version.h do not match' }
+          "version=$($v[1]).$($v[2]).$($v[3])" >> $env:GITHUB_OUTPUT
 
       - name: Build
         shell: cmd
         run: build.bat
 
       - name: Upload the executable
-        id: upload
         uses: actions/upload-artifact@v7
         with:
           name: jolt
@@ -38,21 +44,36 @@ jobs:
           if-no-files-found: error
 
   release:
-    if: github.ref_type == 'tag'
+    if: github.ref == 'refs/heads/master' && github.event_name != 'pull_request'
     needs: build
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      VERSION: ${{ needs.build.outputs.version }}
     steps:
       - uses: actions/download-artifact@v8
         with:
           name: jolt
 
-      - name: Publish the release
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Publish the release if this version is new
         run: |
+          if gh release view "v$VERSION" > /dev/null 2>&1; then
+            echo "v$VERSION is already published"
+            exit 0
+          fi
           sha256sum jolt.exe > SHA256SUMS.txt
-          gh release create "$GITHUB_REF_NAME" jolt.exe SHA256SUMS.txt \
-            --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes --title "Jolt ${GITHUB_REF_NAME#v}" \
-            --notes "Built by GitHub Actions from this tag. See the [code signing policy](https://github.com/$GITHUB_REPOSITORY#code-signing-policy)."
+          cat > notes.md <<EOF
+          Download \`jolt.exe\` and open it: the same file is the installer. It isn't signed yet, so Windows SmartScreen may warn you the first time: **More info → Run anyway**.
+
+          Built by GitHub Actions from this release's commit. See the [code signing policy](https://github.com/$GH_REPO#code-signing-policy).
+
+          \`\`\`
+          SHA-256  $(cut -d' ' -f1 SHA256SUMS.txt)  jolt.exe
+          \`\`\`
+          EOF
+          sed -i 's/^ *//' notes.md
+          gh release create "v$VERSION" jolt.exe SHA256SUMS.txt --target "$GITHUB_SHA" \
+            --title "Jolt $VERSION" --notes-file notes.md --generate-notes

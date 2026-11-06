@@ -1,4 +1,5 @@
-// The one place with Jolt's version. A release tag has to match it: v0.1.1 for "0.1.1".
+// The one place with Jolt's version. Change all three lines and push to master: GitHub Actions builds it, creates
+// the tag and publishes the release.
 #pragma once
 
 #define JOLT_VERSION_NUM 0, 1, 1, 0

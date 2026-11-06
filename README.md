@@ -233,6 +233,12 @@ the administrator prompt: Windows shows it on a secure desktop, deliberately out
   on the file (folders, .exe, shortcuts) are requested from another thread and only for visible rows.
 - Draws only what is visible.
 
+## Release
+
+Change the version in `src/version.h` and push to master. GitHub Actions builds `jolt.exe`, creates the tag and publishes
+the release. Pushes that keep the same version only build. The latest version is always at
+<https://github.com/SynrgStudio/jolt/releases/latest/download/jolt.exe>.
+
 ## Code signing policy
 
 Releases are built by [GitHub Actions](.github/workflows/build.yml) from this repository's source, on GitHub's own
