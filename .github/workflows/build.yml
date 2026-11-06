@@ -1,0 +1,58 @@
+# Builds jolt.exe on GitHub's own machines, so every release can be traced back to this repository.
+# Pushing a tag like v0.1.1 also publishes it as a release.
+name: Build
+
+on:
+  push:
+    branches: [master]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Check that the tag matches the version
+        if: github.ref_type == 'tag'
+        shell: pwsh
+        run: |
+          $version = (Select-String -Path src/version.h -Pattern 'JOLT_VERSION "(.+)"').Matches.Groups[1].Value
+          if ("v$version" -ne $env:GITHUB_REF_NAME) { throw "Tag $env:GITHUB_REF_NAME doesn't match version $version" }
+
+      - name: Build
+        shell: cmd
+        run: build.bat
+
+      - name: Upload the executable
+        id: upload
+        uses: actions/upload-artifact@v7
+        with:
+          name: jolt
+          path: build/jolt.exe
+          if-no-files-found: error
+
+  release:
+    if: github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: jolt
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sha256sum jolt.exe > SHA256SUMS.txt
+          gh release create "$GITHUB_REF_NAME" jolt.exe SHA256SUMS.txt \
+            --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes --title "Jolt ${GITHUB_REF_NAME#v}" \
+            --notes "Built by GitHub Actions from this tag. See the [code signing policy](https://github.com/$GITHUB_REPOSITORY#code-signing-policy)."

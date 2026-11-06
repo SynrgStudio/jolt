@@ -970,7 +970,7 @@ void OpenAppMenu(const RECT& anchorScreen) {
             }
             case CmdAbout:
                 MessageBoxW(g_hwnd,
-                            L"Jolt — file explorer.\n\nC++ · Win32 · Direct2D.\n"
+                            L"Jolt " JOLT_VERSION_W L" — file explorer.\n\nC++ · Win32 · Direct2D.\n"
                             L"Built so that opening folders feels instant.",
                             L"About Jolt", MB_OK | MB_ICONINFORMATION);
                 break;

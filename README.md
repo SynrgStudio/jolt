@@ -1,4 +1,4 @@
-# Jolt (working name)
+# Jolt
 
 File explorer for Windows, built so that opening folders feels instant.
 C++20 + Win32 + Direct2D/DirectWrite, no external dependencies.
@@ -6,12 +6,15 @@ C++20 + Win32 + Direct2D/DirectWrite, no external dependencies.
 ## Install
 
 Download `jolt.exe` from the [latest release](https://github.com/SynrgStudio/jolt/releases/latest). It isn't signed, so
-Windows SmartScreen may warn you the first time: More info → Run anyway.
+Windows SmartScreen may warn you the first time: More info → Run anyway. See the [code signing policy](#code-signing-policy).
 
 The same `jolt.exe` is the installer. Copy it anywhere and open it: it offers to install itself to `%LOCALAPPDATA%\Jolt`
 without asking for administrator rights. From ☰ → Install you can turn PATH, default file explorer and
 start with Windows on and off. Making it the default saves what was there before, and turning it off restores it. Builds
 with `jolt.dev` next to them don't offer this on their own.
+
+To uninstall it, use ☰ → Install, Windows Settings → Apps, or `jolt.exe --uninstall`. Your settings and favorites are
+kept in `%APPDATA%\Jolt`.
 
 ## Always ready
 
@@ -229,6 +232,21 @@ the administrator prompt: Windows shows it on a secure desktop, deliberately out
 - Icons: those that depend only on the extension are resolved on the spot without touching the disk; those that depend
   on the file (folders, .exe, shortcuts) are requested from another thread and only for visible rows.
 - Draws only what is visible.
+
+## Code signing policy
+
+Releases are built by [GitHub Actions](.github/workflows/build.yml) from this repository's source, on GitHub's own
+machines. They aren't signed yet: the project is applying to the SignPath Foundation. Once approved, this will apply:
+Free code signing provided by [SignPath.io](https://about.signpath.io), certificate by
+[SignPath Foundation](https://signpath.org).
+
+Team roles:
+
+- Committers and reviewers: [SynrgStudio](https://github.com/SynrgStudio)
+- Approvers: [SynrgStudio](https://github.com/SynrgStudio)
+
+Privacy policy: this program will not transfer any information to other networked systems unless specifically requested
+by the user or the person installing or operating it.
 
 ## License
 

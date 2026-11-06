@@ -155,7 +155,7 @@ void PaletteBuild() {
     add(L"Open the config folder", L"settings", L"", [] { NewTab(ConfigDir()); });
     add(L"Context menu editor", L"menu", L"", [] { OpenMenuEditor(); });
     add(L"About Jolt", L"", L"", [] {
-        MessageBoxW(g_hwnd, L"Jolt — file explorer.\n\nC++ · Win32 · Direct2D.", L"About Jolt",
+        MessageBoxW(g_hwnd, L"Jolt " JOLT_VERSION_W L" — file explorer.\n\nC++ · Win32 · Direct2D.", L"About Jolt",
                     MB_OK | MB_ICONINFORMATION);
     });
 }
