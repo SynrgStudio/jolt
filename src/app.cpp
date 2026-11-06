@@ -1,13 +1,13 @@
-// Jolt — explorador de archivos para Windows, pensado para sentirse instantáneo.
+// Jolt — a file explorer for Windows, built to feel instant.
 //
-// Ideas centrales:
-//  - Listado con NtQueryDirectoryFile en lotes de 64 KiB (un hilo aparte).
-//  - Cada carpeta visitada queda en memoria: volver a ella es instantáneo,
-//    y en segundo plano se revisa si cambió.
-//  - Se vigila la carpeta actual; si cambia algo, se actualiza sola.
-//  - Se precarga la carpeta seleccionada para que Enter sea instantáneo.
-//  - Los iconos reales de Windows se resuelven en otro hilo, solo para las filas visibles.
-//  - Se dibuja solo lo visible (Direct2D + DirectWrite).
+// Core ideas:
+//  - Listing with NtQueryDirectoryFile in 64 KiB batches (on a separate thread).
+//  - Every visited folder stays in memory: going back to it is instant,
+//    and a background check looks for changes.
+//  - The current folder is watched; if anything changes, it updates itself.
+//  - The selected folder is prefetched so Enter is instant.
+//  - Real Windows icons are resolved on another thread, only for visible rows.
+//  - Only what's visible is drawn (Direct2D + DirectWrite).
 #include <windows.h>
 #include <windowsx.h>
 #include <shellapi.h>
@@ -39,27 +39,30 @@
 #include "dirlist.h"
 
 #pragma comment(linker, "\"/manifestdependency:type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'\"")
-#pragma comment(lib, "oleaut32.lib")  // UI Automation del modo de prueba (SysFreeString)
+#pragma comment(lib, "oleaut32.lib")  // UI Automation for test mode (SysFreeString)
 
 using Microsoft::WRL::ComPtr;
 
 namespace {
 
-// ---------------------------------------------------------------- diseño (DIPs)
+// ---------------------------------------------------------------- layout (DIPs)
 constexpr float kTabH = 36.f, kToolH = 42.f, kHeadH = 28.f, kStatus = 26.f;
 float kRow = 25.f;  // configurable (config.txt)
-constexpr float kCapBtnW = 46.f;  // minimizar / maximizar / cerrar
-constexpr float kTitleLeft = 118.f;  // zona fija a la izquierda de las pestañas: futuro menú + botón de barra lateral
+constexpr float kCapBtnW = 46.f;  // minimize / maximize / close
+constexpr float kTitleLeft = 118.f;  // fixed area left of the tabs: future menu + sidebar button
 float kSideW = 208.f;  // configurable
-bool g_preview = false;  // vista previa a la derecha
-float g_previewW = 360.f;  // configurable
+bool g_preview = false;  // preview on the right
+constexpr float kPreviewDefaultW = 360.f, kPreviewMinW = 240.f;
+float g_previewW = kPreviewDefaultW;  // configurable
+bool g_pvDrag = false;  // dragging the preview's left edge
+float g_pvDragX = 0, g_pvDragW = 0;
 constexpr float kSideRow = 25.f;
-float kDateW = 118.f, kSizeW = 72.f;  // configurables (y arrastrables desde el encabezado)
+float kDateW = 118.f, kSizeW = 72.f;  // configurable (and draggable from the header)
 constexpr float kDateMin = 64.f, kDateMax = 400.f, kSizeMin = 48.f, kSizeMax = 300.f;
 constexpr float kPad = 12.f, kTabMaxW = 190.f, kTabMinW = 70.f;
 constexpr float kIcon = 16.f;
 
-// Colores (configurables en config.txt; estos son los valores por defecto)
+// Colors (configurable in config.txt; these are the defaults)
 UINT32 cBg = 0x1A1A1E, cTabBar = 0x0F0F12, cTop = 0x202024, cSide = 0x151518, cBorder = 0x2B2B31, cText = 0xE9E9EE,
        cDim = 0x8C8C97, cFaint = 0x4C4C55, cAccent = 0x4F8CF7, cSel = 0x2C4C86, cError = 0xF07178, cDisk = 0x3B8EEA,
        cDiskFull = 0xE5484D;
@@ -74,15 +77,15 @@ constexpr UINT_PTR kTimerRevalidate = 1, kTimerPrefetch = 2, kTimerTabSlide = 12
 
 HWND g_hwnd = nullptr;
 HWND g_edit = nullptr;
-// g_dpi es el DPI con el que se dibuja: el del monitor por el zoom de la interfaz. Como todo el diseño
-// está en DIPs, cambiarlo escala la app entera. El zoom va en píxeles de fuente sobre 12 para que el
-// texto caiga en tamaños enteros (12 = 100 %).
+// g_dpi is the DPI used for drawing: the monitor's times the interface zoom. Since the whole layout
+// is in DIPs, changing it scales the entire app. Zoom is in font pixels over 12 so that text
+// lands on whole sizes (12 = 100%).
 UINT g_dpi = 96, g_sysDpi = 96;
 constexpr int kUiPxMin = 9, kUiPxMax = 24;
 int g_uiPx = 12;
 void ApplyDpi() { g_dpi = static_cast<UINT>(MulDiv(static_cast<int>(g_sysDpi), g_uiPx, 12)); }
 
-// Registro opcional: con JOLT_DEBUG=1 escribe en %TEMP%\jolt.log.
+// Optional log: with JOLT_DEBUG=1 it writes to %TEMP%\jolt.log.
 void Log(const wchar_t* fmt, ...) {
     static FILE* f = [] {
         wchar_t v[8];
@@ -102,11 +105,11 @@ void Log(const wchar_t* fmt, ...) {
     fwprintf(f, L"\n");
     fflush(f);
 }
-// Modo de prueba (testmode.inl): la ventana no se muestra y Ctrl/Shift/Alt se simulan.
+// Test mode (testmode.inl): the window isn't shown and Ctrl/Shift/Alt are simulated.
 bool g_test = false;
 UINT g_testMods = 0;      // 1 = Ctrl, 2 = Shift, 4 = Alt
-bool g_testActive = true; // la ventana "activa" en el modo de prueba (paso "activar si|no")
-std::wstring g_dataDir;   // carpeta de datos (vacío = %APPDATA%\Jolt)
+bool g_testActive = true; // whether the window counts as "active" in test mode (set by a script step)
+std::wstring g_dataDir;   // data folder (empty = %APPDATA%\Jolt)
 bool KeyDown(int vk) {
     if (g_test)
         return (vk == VK_CONTROL && (g_testMods & 1)) || (vk == VK_SHIFT && (g_testMods & 2)) || (vk == VK_MENU && (g_testMods & 4));
@@ -115,13 +118,13 @@ bool KeyDown(int vk) {
 
 std::atomic<int> g_sortBy{static_cast<int>(SortBy::Name)};
 std::atomic<bool> g_sortAsc{true};
-std::atomic<int> g_foldersFirst{2};  // 0 = mezcladas, 1 = siempre primero, 2 = primero solo por nombre
+std::atomic<int> g_foldersFirst{2};  // 0 = mixed, 1 = always first, 2 = first only when sorting by name
 bool FoldersFirstFor(SortBy by) {
     int m = g_foldersFirst.load();
     return m == 1 || (m == 2 && by == SortBy::Name);
 }
 
-// ---------------------------------------------------------------- trabajo en segundo plano
+// ---------------------------------------------------------------- background work
 enum class JobKind { Load, Revalidate, Prefetch };
 
 struct Job {
@@ -150,7 +153,7 @@ void WorkerMain() {
             j = q.front();
             q.pop_front();
         }
-        // Una precarga vieja ya no sirve si el usuario se movió a otro lado.
+        // An old prefetch is useless if the user has moved elsewhere.
         bool stale = j->kind == JobKind::Prefetch && j->gen != g_navGen.load();
         if (!stale) {
             auto l = std::make_shared<Listing>();
@@ -188,8 +191,8 @@ std::shared_ptr<Job> Enqueue(const std::wstring& path, JobKind kind) {
     return j;
 }
 
-// ---------------------------------------------------------------- vigilancia de cambios
-// Se vigilan las carpetas visibles (una por panel); con el árbol abierto, también sus subcarpetas.
+// ---------------------------------------------------------------- change watching
+// The visible folders are watched (one per pane); with the tree open, their subfolders too.
 std::mutex g_wm;
 std::vector<std::pair<std::wstring, bool>> g_watchList;
 HANDLE g_watchEvt = nullptr;
@@ -236,7 +239,7 @@ void WatcherMain() {
     }
 }
 
-// ---------------------------------------------------------------- rutas
+// ---------------------------------------------------------------- paths
 std::wstring Lower(std::wstring s) {
     if (!s.empty()) CharLowerBuffW(s.data(), static_cast<DWORD>(s.size()));
     return s;
@@ -255,7 +258,7 @@ std::wstring ParentOf(const std::wstring& p) {
     if (p.empty() || IsDriveRoot(p)) return L"";
     size_t pos = p.find_last_of(L'\\');
     if (pos == std::wstring::npos) return L"";
-    if (p.rfind(L"\\\\", 0) == 0 && p.find(L'\\', 2) == pos) return L"";  // \\servidor\recurso
+    if (p.rfind(L"\\\\", 0) == 0 && p.find(L'\\', 2) == pos) return L"";  // \\server\share
     std::wstring par = p.substr(0, pos);
     if (par.size() == 2 && par[1] == L':') par += L'\\';
     return par;
@@ -286,7 +289,7 @@ std::wstring ExtOf(const wchar_t* name, size_t len) {
     return L"";
 }
 
-// Unidades: "Stuff (D:)". Se calcula una vez por letra.
+// Drives: "Stuff (D:)". Computed once per letter.
 std::unordered_map<wchar_t, std::wstring> g_driveLabels;
 const std::wstring& DriveLabel(wchar_t letter) {
     auto it = g_driveLabels.find(letter);
@@ -299,39 +302,51 @@ const std::wstring& DriveLabel(wchar_t letter) {
         GetVolumeInformationW(root, vol, MAX_PATH + 1, nullptr, nullptr, nullptr, nullptr, 0) && vol[0])
         label = vol;
     if (label.empty()) {
-        label = type == DRIVE_FIXED      ? L"Disco local"
-                : type == DRIVE_REMOVABLE ? L"Unidad extraíble"
-                : type == DRIVE_REMOTE    ? L"Unidad de red"
-                : type == DRIVE_CDROM     ? L"Unidad de CD"
-                                          : L"Unidad";
+        label = type == DRIVE_FIXED      ? L"Local Disk"
+                : type == DRIVE_REMOVABLE ? L"Removable Drive"
+                : type == DRIVE_REMOTE    ? L"Network Drive"
+                : type == DRIVE_CDROM     ? L"CD Drive"
+                                          : L"Drive";
     }
     std::wstring s = label + L" (" + std::wstring(1, letter) + L":)";
     return g_driveLabels.emplace(letter, s).first->second;
 }
 
-// Fracción usada del disco (0..1), o -1 si no aplica. Se recalcula cada 10 s por unidad.
-float DriveUsage(wchar_t letter) {
-    struct Cached {
-        float usage = -1;
-        double at = -1e9;
-    };
-    static std::unordered_map<wchar_t, Cached> cache;
-    Cached& c = cache[letter];
+// Disk space; usage is the used fraction (0..1), or -1 if not applicable.
+struct DriveSpace {
+    float usage = -1;
+    uint64_t freeB = 0, totalB = 0;
+    double at = -1e9;
+};
+
+// Re-read every 10 s per drive, or immediately with fresh.
+const DriveSpace& DriveSpaceOf(wchar_t letter, bool fresh = false) {
+    static std::unordered_map<wchar_t, DriveSpace> cache;
+    DriveSpace& c = cache[letter];
     double now = NowMs();
-    if (now - c.at < 10000) return c.usage;
+    if (!fresh && now - c.at < 10000) return c;
     c.at = now;
     wchar_t root[4] = {letter, L':', L'\\', 0};
     UINT type = GetDriveTypeW(root);
     c.usage = -1;
     if (type == DRIVE_FIXED || type == DRIVE_REMOVABLE) {
         ULARGE_INTEGER freeB, totalB;
-        if (GetDiskFreeSpaceExW(root, nullptr, &totalB, &freeB) && totalB.QuadPart > 0)
+        if (GetDiskFreeSpaceExW(root, nullptr, &totalB, &freeB) && totalB.QuadPart > 0) {
+            c.freeB = freeB.QuadPart;
+            c.totalB = totalB.QuadPart;
             c.usage = static_cast<float>(1.0 - static_cast<double>(freeB.QuadPart) / static_cast<double>(totalB.QuadPart));
+        }
     }
-    return c.usage;
+    return c;
 }
 
-// ---------------------------------------------------------------- favoritos
+// Drive under the mouse: its row shows the space and is re-read every second.
+constexpr UINT_PTR kTimerDisk = 14;
+constexpr UINT kDiskTickMs = 1000;
+wchar_t g_diskHover = 0;
+std::wstring g_diskShown;  // free space currently shown
+
+// ---------------------------------------------------------------- favorites
 struct Favorite {
     std::wstring name, path;
 };
@@ -346,7 +361,7 @@ std::wstring FavFile() {
     }
     if (dir.empty()) return L"";
     CreateDirectoryW(dir.c_str(), nullptr);
-    return dir + L"\\favoritos.txt";
+    return dir + L"\\favorites.txt";
 }
 
 std::wstring Known(const KNOWNFOLDERID& id) {
@@ -372,12 +387,17 @@ std::wstring Wide(const std::string& s) {
     return w;
 }
 
+void RefreshConfigSig();
+
 void SaveFavs() {
     std::wstring f = FavFile();
     if (f.empty()) return;
-    std::ofstream out(f, std::ios::binary);
-    out << "# Favoritos de Jolt: una linea por carpeta, \"Nombre|Ruta\" o solo la ruta.\n";
-    for (const Favorite& v : g_favs) out << Utf8(v.name) << '|' << Utf8(v.path) << '\n';
+    {
+        std::ofstream out(f, std::ios::binary);
+        out << "# Jolt favorites: one line per folder, \"Name|Path\" or just the path.\n";
+        for (const Favorite& v : g_favs) out << Utf8(v.name) << '|' << Utf8(v.path) << '\n';
+    }
+    RefreshConfigSig();  // we wrote it ourselves: no need to reload
 }
 
 void LoadFavs() {
@@ -388,11 +408,11 @@ void LoadFavs() {
         struct Def {
             const wchar_t* name;
             const KNOWNFOLDERID* id;
-        } defs[] = {{L"Escritorio", &FOLDERID_Desktop},
-                    {L"Descargas", &FOLDERID_Downloads},
-                    {L"Documentos", &FOLDERID_Documents},
-                    {L"Imágenes", &FOLDERID_Pictures},
-                    {L"Usuario", &FOLDERID_Profile}};
+        } defs[] = {{L"Desktop", &FOLDERID_Desktop},
+                    {L"Downloads", &FOLDERID_Downloads},
+                    {L"Documents", &FOLDERID_Documents},
+                    {L"Pictures", &FOLDERID_Pictures},
+                    {L"User", &FOLDERID_Profile}};
         for (const Def& d : defs) {
             std::wstring p = Known(*d.id);
             if (!p.empty()) g_favs.push_back({d.name, Normalize(p)});
@@ -423,9 +443,9 @@ void LoadFavs() {
 #include "dirsize.inl"
 #include "views.inl"
 
-// ---------------------------------------------------------------- estado
-// Una fila visible: un elemento de algún listado (la carpeta de la pestaña, una subcarpeta
-// desplegada en el árbol, o una carpeta de la búsqueda en subcarpetas).
+// ---------------------------------------------------------------- state
+// A visible row: an item from some listing (the tab's folder, a subfolder
+// expanded in the tree, or a folder from the subfolder search).
 struct Row {
     const Listing* l;
     int e;
@@ -437,35 +457,35 @@ struct Tab {
     std::shared_ptr<const Listing> list;
     bool loading = false;
     bool has = false;
-    int pane = 0;                // 0 = izquierda, 1 = derecha (vista dividida)
-    std::wstring pendingSelect;  // nombre (en la carpeta) o ruta completa a seleccionar cuando aparezca
+    int pane = 0;                // 0 = left, 1 = right (split view)
+    std::wstring pendingSelect;  // name (in the folder) or full path to select when it appears
     int sel = 0;                 // cursor
-    int anchor = 0;              // inicio del rango con Shift
-    std::vector<uint8_t> selMask;  // paralelo a rows
-    std::wstring filter;           // texto del filtro difuso ("" = sin filtro)
-    std::vector<Row> rows;         // filas visibles: árbol aplanado y, con filtro, ordenadas por puntaje
-    // árbol: carpetas desplegadas (clave -> ruta) y sus listados
+    int anchor = 0;              // start of the Shift range
+    std::vector<uint8_t> selMask;  // parallel to rows
+    std::wstring filter;           // fuzzy filter text ("" = no filter)
+    std::vector<Row> rows;         // visible rows: flattened tree and, with a filter, sorted by score
+    // tree: expanded folders (key -> path) and their listings
     std::unordered_map<std::wstring, std::wstring> expanded;
     std::unordered_map<std::wstring, std::shared_ptr<const Listing>> kids;
-    // grupos plegados o desplegados a mano en esta visita (título -> plegado); al volver a entrar,
-    // manda lo que diga la vista
+    // groups collapsed or expanded by hand on this visit (title -> collapsed); on coming back,
+    // the view decides
     std::unordered_map<std::wstring, bool> fold;
-    // búsqueda en subcarpetas
+    // subfolder search
     bool recursive = false, recDone = false;
     uint64_t recGen = 0;
     int recDirs = 0;
     std::vector<std::shared_ptr<const Listing>> rec;
     float scroll = 0;
     std::vector<std::wstring> back, fwd;
-    float slide = 0;     // desplazamiento inicial de la animación, en lugares de pestaña
-    double slideAt = 0;  // cuándo empezó
+    float slide = 0;     // initial animation offset, in tab places
+    double slideAt = 0;  // when it started
 };
 
 std::vector<std::unique_ptr<Tab>> g_tabs;
-int g_cur = 0;              // pestaña activa (la visible del panel activo)
-bool g_split = false;       // vista dividida
-int g_act = 0;              // panel activo
-int g_paneCur[2] = {0, 0};  // pestaña visible de cada panel
+int g_cur = 0;              // active tab (the visible one in the active pane)
+bool g_split = false;       // split view
+int g_act = 0;              // active pane
+int g_paneCur[2] = {0, 0};  // visible tab of each pane
 float g_splitRatio = 0.5f;
 Tab& T() { return *g_tabs[g_cur]; }
 int PaneCount() { return g_split ? 2 : 1; }
@@ -479,17 +499,17 @@ struct Stats {
 
 std::unordered_map<std::wstring, std::shared_ptr<const Listing>> g_cache;
 std::unordered_map<std::wstring, std::wstring> g_lastSel;
-std::unordered_map<std::wstring, std::unordered_map<std::wstring, std::wstring>> g_expandMem;  // árbol por carpeta
-std::vector<std::wstring> g_recents;  // carpetas y archivos visitados, lo más reciente primero
+std::unordered_map<std::wstring, std::unordered_map<std::wstring, std::wstring>> g_expandMem;  // tree per folder
+std::vector<std::wstring> g_recents;  // visited folders and files, most recent first
 bool g_editing = false;
 bool g_renaming = false;
 int g_hoverRow = -1, g_hoverPane = 0, g_hoverHeader = -1;
-std::unordered_set<std::wstring> g_cutKeys;  // rutas "cortadas" (se dibujan atenuadas hasta pegar)
+std::unordered_set<std::wstring> g_cutKeys;  // "cut" paths (drawn dimmed until pasted)
 bool g_ignoreClipUpdate = false;
-int g_dropRow = -1, g_dropPane = 0, g_dropSide = -1, g_dropTab = -1;  // destino resaltado durante un arrastre
+int g_dropRow = -1, g_dropPane = 0, g_dropSide = -1, g_dropTab = -1;  // target highlighted during a drag
 
-// Zonas clickeables, recalculadas en cada dibujo.
-enum class HitKind { None, Tab, TabClose, TabNew, SideToggle, AppMenu, Back, Fwd, Up, Crumb, PathEmpty, Side, Header, Divider, ViewBtn, FoldBtn, ColEdge };
+// Clickable areas, recomputed on every draw.
+enum class HitKind { None, Tab, TabClose, TabNew, SideToggle, AppMenu, Back, Fwd, Up, Crumb, PathEmpty, Side, Header, Divider, ViewBtn, FoldBtn, ColEdge, PreviewEdge };
 struct Hit {
     D2D1_RECT_F r;
     HitKind kind;
@@ -501,7 +521,7 @@ std::vector<std::wstring> g_sidePaths;
 Hit g_hover{{}, HitKind::None, -1};
 bool g_sideVisible = true;
 float SideW() { return g_sideVisible ? kSideW : 0.f; }
-// Botones de la barra de título (zona no cliente): hover y presionado se siguen por código HT*.
+// Title bar buttons (non-client area): hover and pressed are tracked by HT* code.
 D2D1_RECT_F g_capRects[3];
 int g_capHover = 0, g_capPressed = 0;
 
@@ -515,10 +535,12 @@ void AddRecent(const std::wstring& p) {
     if (g_recents.size() > 300) g_recents.resize(300);
 }
 
-// --- filas
+#include "heat.inl"
+
+// --- rows
 int RowCount(const Tab& t) { return static_cast<int>(t.rows.size()); }
 int Count() { return RowCount(T()); }
-// Las filas con e < 0 son títulos de grupo (vistas agrupadas): no se seleccionan ni se abren.
+// Rows with e < 0 are group titles (grouped views): they can't be selected or opened.
 bool IsHeader(const Tab& t, int row) { return t.rows[row].e < 0; }
 const Entry& EntryAt(const Tab& t, int row) {
     static const Entry kNone{};
@@ -533,7 +555,7 @@ bool FlatView(const Tab& t) { return !t.filter.empty() || t.recursive; }
 
 #include "fuzzy.inl"
 
-// ¿El grupo gi está plegado? Lo hecho a mano en esta visita, o si no lo que diga la vista.
+// Is group gi collapsed? What was done by hand on this visit, otherwise what the view says.
 bool GroupFolded(const Tab& t, const Listing* l, size_t gi) {
     auto it = t.fold.find(l->groups[gi].second);
     if (it != t.fold.end()) return it->second;
@@ -547,7 +569,7 @@ void AddTree(const Tab& t, const Listing* l, int depth, std::vector<Row>& out) {
     bool folded = false;
     for (size_t i = 0; i < l->entries.size(); ++i) {
         if (groups && gi < l->groups.size() && l->groups[gi].first == i) {
-            out.push_back({l, -1 - static_cast<int>(gi), 0});  // título del grupo
+            out.push_back({l, -1 - static_cast<int>(gi), 0});  // group title
             folded = GroupFolded(t, l, gi);
             ++gi;
         }
@@ -563,8 +585,8 @@ void AddTree(const Tab& t, const Listing* l, int depth, std::vector<Row>& out) {
     }
 }
 
-// Arma las filas visibles: el árbol (o lo encontrado en subcarpetas) y, si hay filtro, solo lo que
-// coincide, ordenado por puntaje como fzf.
+// Builds the visible rows: the tree (or what was found in subfolders) and, with a filter, only what
+// matches, sorted by score like fzf.
 void BuildRows(Tab& t) {
     t.rows.clear();
     if (!t.list) return;
@@ -582,7 +604,7 @@ void BuildRows(Tab& t) {
     }
     if (t.filter.empty()) return;
     std::wstring pat = Lower(t.filter);
-    std::vector<std::pair<int, int>> hits;  // (puntaje, fila)
+    std::vector<std::pair<int, int>> hits;  // (score, row)
     for (size_t i = 0; i < t.rows.size(); ++i) {
         const Row& r = t.rows[i];
         if (r.e < 0) continue;
@@ -597,7 +619,7 @@ void BuildRows(Tab& t) {
     t.rows.swap(out);
 }
 
-// Fila de un nombre de la carpeta de la pestaña, o de una ruta completa (si tiene "\").
+// Row of a name in the tab's folder, or of a full path (if it contains "\").
 int FindRow(const Tab& t, const std::wstring& s) {
     if (s.empty()) return -1;
     const int n = RowCount(t);
@@ -631,11 +653,11 @@ float ListHeight() { return std::max(0.f, ListBottom() - ListTop()); }
 float PreviewW() {
     if (!g_preview) return 0.f;
     float W = ClientDip().width;
-    return std::clamp(g_previewW, 200.f, std::max(200.f, W * 0.6f));
+    return std::clamp(g_previewW, kPreviewMinW, std::max(kPreviewMinW, W * 0.6f));
 }
 
-// Límites horizontales de cada panel: [L, R) para encabezado y lista; [TL, TR) para la barra de ruta y
-// la de estado (que pasan por encima de la barra lateral y de la vista previa).
+// Horizontal bounds of each pane: [L, R) for header and list; [TL, TR) for the path bar and
+// the status bar (which extend over the sidebar and the preview).
 struct PaneX {
     float L, R, TL, TR;
 };
@@ -647,7 +669,7 @@ PaneX PaneGeo(int p) {
     return {mid, right, mid, W};
 }
 
-// Panel bajo un punto (barra de ruta, lista o estado), o -1.
+// Pane under a point (path bar, list or status), or -1.
 int PaneAt(float x, float y) {
     if (y < kTabH) return -1;
     const bool band = y < kTabH + kToolH || y >= ListBottom();
@@ -678,7 +700,7 @@ std::wstring SelectedName(const Tab& t) {
 
 void Invalidate() { InvalidateRect(g_hwnd, nullptr, FALSE); }
 
-// --- selección
+// --- selection
 bool IsSel(const Tab& t, int i) { return i >= 0 && i < static_cast<int>(t.selMask.size()) && t.selMask[i]; }
 
 int SelCount(const Tab& t) {
@@ -712,7 +734,7 @@ void SelectAll(Tab& t) {
     for (int i = 0; i < static_cast<int>(t.selMask.size()); ++i) t.selMask[i] = !IsHeader(t, i);
 }
 
-// Si i cae en un título de grupo, la fila de contenido más cercana en esa dirección (o en la otra).
+// If i lands on a group title, the nearest content row in that direction (or the other one).
 int SkipHeader(const Tab& t, int i, int dir) {
     const int n = RowCount(t);
     if (n == 0) return 0;
@@ -725,10 +747,10 @@ int SkipHeader(const Tab& t, int i, int dir) {
     return i;
 }
 
-// Carpeta de la fila del cursor (en el árbol o la búsqueda puede no ser la de la pestaña).
+// Folder of the cursor row (in the tree or search it may not be the tab's).
 std::wstring SelDir(const Tab& t) { return t.sel >= 0 && t.sel < RowCount(t) ? RowDir(t, t.sel) : t.path; }
 
-// Nombres seleccionados que están en la carpeta del cursor, listos para el Shell ("C:" -> "C:\").
+// Selected names in the cursor's folder, ready for the Shell ("C:" -> "C:\").
 std::vector<std::wstring> SelectedNames(const Tab& t) {
     std::vector<std::wstring> out;
     if (!t.list || t.sel < 0 || t.sel >= RowCount(t)) return out;
@@ -742,17 +764,17 @@ std::vector<std::wstring> SelectedNames(const Tab& t) {
     return out;
 }
 
-// Rutas completas de todo lo seleccionado (de cualquier carpeta).
+// Full paths of everything selected (from any folder).
 std::vector<std::wstring> SelectedFullPaths(const Tab& t) {
     std::vector<std::wstring> out;
-    if (t.path.empty() && !t.recursive) return out;  // unidades: no se copian
+    if (t.path.empty() && !t.recursive) return out;  // drives: not copied
     for (int i = 0; i < RowCount(t); ++i)
         if (IsSel(t, i)) out.push_back(RowPath(t, i));
     return out;
 }
 
-// Listado listo para mostrar: con la vista de su carpeta aplicada (filtros, orden, grupos) y sin
-// ocultos si así se pidió. Se guarda junto al listado: mientras nada cambie, no se recalcula.
+// Listing ready to show: with its folder's view applied (filters, sort, groups) and without
+// hidden items if so requested. Stored with the listing: while nothing changes, it isn't recomputed.
 std::shared_ptr<const Listing> Prepared(std::shared_ptr<const Listing> l) {
     if (!l || l->error || l->isView) return l;
     if (l->view && l->viewSig == g_viewEpoch) return l->view;
@@ -762,7 +784,7 @@ std::shared_ptr<const Listing> Prepared(std::shared_ptr<const Listing> l) {
     return out;
 }
 
-// Lugar del cursor y de la selección, por ruta: sobrevive a recargas, al árbol y al filtro.
+// Cursor and selection position, by path: survives reloads, the tree and the filter.
 struct Place {
     std::wstring cur;
     int row = -1;
@@ -780,7 +802,7 @@ Place SavePlace(const Tab& t) {
     return p;
 }
 
-// Rearma las filas y ubica el cursor: pendingSelect, o el lugar guardado (keep), o prefer.
+// Rebuilds the rows and places the cursor: pendingSelect, or the saved place (keep), or prefer.
 void Rebuild(Tab& t, const Place* keep, const std::wstring& prefer) {
     BuildRows(t);
     const int n = RowCount(t);
@@ -790,7 +812,7 @@ void Rebuild(Tab& t, const Place* keep, const std::wstring& prefer) {
         if (idx >= 0 || !keep) t.pendingSelect.clear();
     }
     if (idx < 0 && keep && !keep->cur.empty()) {
-        // si el elemento ya no está (p. ej. se plegó su carpeta), el ancestro más cercano visible
+        // if the item is gone (e.g. its folder was collapsed), the nearest visible ancestor
         for (std::wstring p = keep->cur; idx < 0 && !p.empty() && Key(p) != Key(t.path); p = ParentOf(p)) {
             idx = FindRow(t, p);
             if (IsDriveRoot(p)) break;
@@ -802,12 +824,12 @@ void Rebuild(Tab& t, const Place* keep, const std::wstring& prefer) {
         int old = t.sel;
         t.sel = idx >= 0 ? idx : std::min(t.sel, n - 1);
         if (t.sel < 0) t.sel = 0;
-        if (idx >= 0 && keep->row >= 0) t.scroll += (t.sel - keep->row) * kRow;  // que no salte en pantalla
+        if (idx >= 0 && keep->row >= 0) t.scroll += (t.sel - keep->row) * kRow;  // so it doesn't jump on screen
         (void)old;
         ClampScroll(t);
     } else {
         t.sel = idx >= 0 ? idx : 0;
-        t.scroll = t.sel * kRow - ListHeight() / 2 + kRow / 2;  // la selección queda centrada
+        t.scroll = t.sel * kRow - ListHeight() / 2 + kRow / 2;  // the selection ends up centered
         ClampScroll(t);
     }
     if (n > 0) t.sel = SkipHeader(t, t.sel, 1);
@@ -822,21 +844,21 @@ void Rebuild(Tab& t, const Place* keep, const std::wstring& prefer) {
 
 void ShowListing(Tab& t, std::shared_ptr<const Listing> l, const std::wstring& prefer, bool keepPlace) {
     Place p;
-    if (keepPlace) p = SavePlace(t);  // antes de soltar el listado viejo: las filas apuntan a él
+    if (keepPlace) p = SavePlace(t);  // before releasing the old listing: the rows point to it
     t.list = Prepared(std::move(l));
     t.loading = false;
     Rebuild(t, keepPlace ? &p : nullptr, prefer);
 }
 
 std::wstring TabTitle(const Tab& t) {
-    if (t.path.empty()) return L"Este equipo";
+    if (t.path.empty()) return L"This PC";
     if (IsDriveRoot(t.path)) return DriveLabel(t.path[0]);
     return LeafOf(t.path);
 }
 
 void UpdateTitle() { SetWindowTextW(g_hwnd, (TabTitle(T()) + L" — Jolt").c_str()); }
 
-// Vigila las carpetas visibles (las dos de la vista dividida); con el árbol abierto, también las subcarpetas.
+// Watches the visible folders (both in split view); with the tree open, the subfolders too.
 void SetWatchAll() {
     std::vector<std::pair<std::wstring, bool>> v;
     for (int p = 0; p < PaneCount(); ++p) {
@@ -856,9 +878,9 @@ void UndoRecordCreate(const std::wstring& path);
 void TreeFollow(Tab& t, const std::wstring& from, const std::wstring& to);
 void TouchSession();
 void StopRecursive(Tab& t, bool rebuild);
-std::wstring g_renameAfterSelect;  // carpeta o archivo nuevo: entrar en renombrado cuando aparezca en la lista
+std::wstring g_renameAfterSelect;  // new folder or file: start renaming when it appears in the list
 
-// Carga (o toma de la memoria) el listado de una subcarpeta desplegada.
+// Loads (or takes from memory) the listing of an expanded subfolder.
 void LoadKid(Tab& t, const std::wstring& k, const std::wstring& path) {
     auto it = g_cache.find(k);
     if (it != g_cache.end()) {
@@ -894,6 +916,7 @@ void Navigate(Tab& t, const std::wstring& path, bool pushHistory) {
         }
     }
     StopRecursive(t, false);
+    if (current && (!t.has || Key(t.path) != Key(path))) HeatMark(path);
     t.has = true;
     t.path = path;
     t.filter.clear();
@@ -901,12 +924,12 @@ void Navigate(Tab& t, const std::wstring& path, bool pushHistory) {
     t.selMask.clear();
     t.expanded.clear();
     t.kids.clear();
-    t.fold.clear();  // los grupos arrancan como diga la vista
+    t.fold.clear();  // groups start the way the view says
     AddRecent(path);
     ++g_navGen;
     auto ls = g_lastSel.find(Key(path));
     t.pendingSelect = ls != g_lastSel.end() ? ls->second : L"";
-    // el árbol que quedó abierto la última vez en esta carpeta
+    // the tree left open last time in this folder
     auto em = g_expandMem.find(Key(path));
     if (em != g_expandMem.end()) {
         t.expanded = em->second;
@@ -915,14 +938,14 @@ void Navigate(Tab& t, const std::wstring& path, bool pushHistory) {
 
     auto it = g_cache.find(Key(path));
     if (it != g_cache.end()) {
-        // En memoria: se muestra ya, y se revisa en segundo plano por si cambió.
+        // In memory: show it now, and check in the background in case it changed.
         ShowListing(t, it->second, t.pendingSelect, false);
         if (current) S.fromCache = true;
         Enqueue(path, JobKind::Revalidate);
     } else {
         auto j = Enqueue(path, JobKind::Load);
-        // Para carpetas locales casi siempre está listo antes de 30 ms: así evitamos
-        // un cuadro intermedio de "cargando". Si tarda más (red), no bloqueamos.
+        // For local folders it's almost always ready within 30 ms: this avoids
+        // an intermediate "loading" frame. If it takes longer (network), we don't block.
         if (WaitForSingleObject(j->done, 30) == WAIT_OBJECT_0 && j->result && !j->taken.exchange(true)) {
             if (j->result->error == 0) g_cache[Key(path)] = j->result;
             ShowListing(t, j->result, t.pendingSelect, false);
@@ -946,7 +969,7 @@ void Navigate(Tab& t, const std::wstring& path, bool pushHistory) {
     }
     if (current) {
         UpdateTitle();
-        UpdateWindow(g_hwnd);  // dibujar ya, sin esperar a la cola de mensajes
+        UpdateWindow(g_hwnd);  // draw now, without waiting for the message queue
     }
     TouchSession();
 }
@@ -957,7 +980,7 @@ void ApplyJob(const std::shared_ptr<Job>& j) {
     const std::wstring k = Key(l->path);
     if (l->error == 0) g_cache[k] = l;
     if (j->kind == JobKind::Prefetch) {
-        if (g_preview) Invalidate();  // la vista previa de una carpeta puede estar esperándolo
+        if (g_preview) Invalidate();  // a folder's preview may be waiting for it
         return;
     }
     bool changed = g_preview;
@@ -1039,7 +1062,7 @@ void NewTab(const std::wstring& path, bool select = true, int pane = -1) {
     }
 }
 
-// Pestaña de un panel cercana a la posición i (la de la derecha, o si no la de la izquierda).
+// Tab of a pane near position i (the one to the right, otherwise the one to the left).
 int NeighborInPane(int pane, int i) {
     int prev = -1;
     for (int k = 0; k < static_cast<int>(g_tabs.size()); ++k) {
@@ -1053,7 +1076,7 @@ int NeighborInPane(int pane, int i) {
 void SetSplit(bool on);
 bool FolderExists(const std::wstring& p);
 
-// Pestañas cerradas, para reabrirlas donde estaban y con su historial.
+// Closed tabs, to reopen them where they were and with their history.
 struct ClosedTab {
     std::wstring path;
     int pane = 0, index = 0;
@@ -1077,7 +1100,7 @@ void CloseTab(int i) {
     for (int& c : g_paneCur)
         if (c > i) --c;
     if (g_split && NeighborInPane(pane, 0) < 0) {
-        // se cerró la última pestaña de un panel: se vuelve a un solo panel
+        // the last tab of a pane was closed: back to a single pane
         int other = 1 - pane;
         g_cur = g_paneCur[other];
         g_split = false;
@@ -1092,7 +1115,7 @@ void CloseTab(int i) {
 }
 
 void ReopenTab() {
-    // si la carpeta ya no existe se sigue con la anterior
+    // if the folder no longer exists, move on to the previous one
     while (!g_closedTabs.empty()) {
         ClosedTab c = std::move(g_closedTabs.back());
         g_closedTabs.pop_back();
@@ -1100,7 +1123,7 @@ void ReopenTab() {
         NewTab(c.path, true, c.pane);
         T().back = std::move(c.back);
         T().fwd = std::move(c.fwd);
-        // NewTab la deja al final: vuelve a su lugar
+        // NewTab leaves it at the end: put it back in its place
         const int last = static_cast<int>(g_tabs.size()) - 1, idx = std::clamp(c.index, 0, last);
         if (idx < last) {
             std::rotate(g_tabs.begin() + idx, g_tabs.begin() + last, g_tabs.end());
@@ -1112,11 +1135,11 @@ void ReopenTab() {
         TouchSession();
         return;
     }
-    S.message = L"No hay pestañas cerradas";
+    S.message = L"No closed tabs";
     Invalidate();
 }
 
-// Pestañas del panel activo, en orden.
+// Tabs of the active pane, in order.
 std::vector<int> ActiveTabs() {
     std::vector<int> idx;
     for (int i = 0; i < static_cast<int>(g_tabs.size()); ++i)
@@ -1124,7 +1147,7 @@ std::vector<int> ActiveTabs() {
     return idx;
 }
 
-// Pasa a la siguiente (d = 1) o a la anterior (d = -1) del panel activo, dando la vuelta.
+// Moves to the next (d = 1) or previous (d = -1) tab of the active pane, wrapping around.
 void CycleTab(int d) {
     const std::vector<int> idx = ActiveTabs();
     const int n = static_cast<int>(idx.size());
@@ -1132,7 +1155,7 @@ void CycleTab(int d) {
     if (n > 1) SelectTab(idx[(pos + d + n) % n]);
 }
 
-// Cuánto le falta a una pestaña para llegar a su lugar, en lugares de pestaña. Frena al final.
+// How far a tab still is from its place, in tab places. Slows down at the end.
 constexpr double kTabSlideMs = 150;
 float TabSlide(Tab& t) {
     if (t.slide == 0) return 0;
@@ -1147,8 +1170,8 @@ void TabSlideBy(Tab& t, float places) {
     t.slideAt = NowMs();
 }
 
-// Mueve la pestaña activa un lugar dentro de su panel (d = 1, a la derecha); en los extremos se queda.
-// El cambio es inmediato: la animación solo dibuja las dos pestañas llegando a su lugar.
+// Moves the active tab one place within its pane (d = 1, to the right); at the ends it stays put.
+// The change is immediate: the animation only draws the two tabs arriving at their places.
 void MoveTab(int d) {
     const std::vector<int> idx = ActiveTabs();
     const int n = static_cast<int>(idx.size());
@@ -1214,14 +1237,15 @@ void OpenSelected(bool inNewTab) {
         return;
     }
     AddRecent(full);
-    std::thread([full] {
+    // Starts in the file's own folder, like File Explorer: games and many programs look for their data there.
+    std::thread([full, dir = ParentOf(full)] {
         CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
-        ShellExecuteW(nullptr, nullptr, full.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+        ShellExecuteW(nullptr, nullptr, full.c_str(), nullptr, dir.empty() ? nullptr : dir.c_str(), SW_SHOWNORMAL);
         CoUninitialize();
     }).detach();
 }
 
-// Mueve el cursor. extend = Shift (rango desde el ancla); toggle = Ctrl (alterna ese elemento).
+// Moves the cursor. extend = Shift (range from the anchor); toggle = Ctrl (toggles that item).
 void MoveCursor(int i, bool extend = false, bool toggle = false) {
     Tab& t = T();
     int n = Count();
@@ -1249,7 +1273,7 @@ void Prefetch() {
     Enqueue(full, JobKind::Prefetch);
 }
 
-// --- árbol: desplegar carpetas dentro de la lista
+// --- tree: expanding folders inside the list
 constexpr float kChev = 14.f, kIndent = 18.f;
 bool IsExpanded(const Tab& t, int row) {
     return row >= 0 && row < RowCount(t) && !FlatView(t) && EntryAt(t, row).isDir() && t.expanded.count(RowKey(t, row));
@@ -1281,7 +1305,7 @@ int ParentRow(const Tab& t, int row) {
     return -1;
 }
 
-// Plegar: la carpeta del cursor si está abierta, o la carpeta que contiene al cursor (y va a ella).
+// Collapse: the cursor's folder if open, or the folder containing the cursor (and go to it).
 bool Collapse() {
     Tab& t = T();
     int r = t.sel;
@@ -1300,7 +1324,7 @@ bool Collapse() {
     return false;
 }
 
-// Filtro difuso: escribir en la lista filtra y ordena por coincidencia (como fzf).
+// Fuzzy filter: typing in the list filters and sorts by match (like fzf).
 void SetFilter(Tab& t, const std::wstring& f) {
     t.filter = f;
     BuildRows(t);
@@ -1333,7 +1357,7 @@ void FilterClear() {
     Invalidate();
 }
 
-// Los globales de orden reflejan la vista general (los usa el hilo que lista, para venir casi ordenado).
+// The sort globals mirror the general view (the listing thread uses them, so results arrive nearly sorted).
 void SyncGlobalSort() {
     SortBy by;
     bool asc;
@@ -1346,11 +1370,11 @@ void SyncGlobalSort() {
 }
 
 void ResortAll() {
-    ++g_viewEpoch;  // todas las vistas se vuelven a aplicar
+    ++g_viewEpoch;  // all views get reapplied
     for (auto& tp : g_tabs) {
         Tab& t = *tp;
         if (!t.list) continue;
-        Place p = SavePlace(t);  // antes de reemplazar los listados: las filas apuntan a ellos
+        Place p = SavePlace(t);  // before replacing the listings: the rows point to them
         for (auto& [k, kl] : t.kids)
             if (kl) kl = Prepared(g_cache.count(k) ? g_cache[k] : kl);
         if (g_cache.count(Key(t.path))) t.list = Prepared(g_cache[Key(t.path)]);
@@ -1361,16 +1385,16 @@ void ResortAll() {
     TouchSession();
 }
 
-// Cambió una vista: se guarda y se vuelve a mostrar todo.
+// A view changed: save it and show everything again.
 void RefreshConfigSig();
 void ViewsChanged() {
     SaveViews();
-    RefreshConfigSig();  // lo escribimos nosotros: no hace falta recargar
+    RefreshConfigSig();  // we wrote it ourselves: no need to reload
     SyncGlobalSort();
     ResortAll();
 }
 
-// Vista de la carpeta activa (la propia, la heredada o la general).
+// View of the active folder (its own, the inherited one or the general one).
 View& CurView() { return *ViewFor(T().path); }
 
 void SetSortField(int field, bool asc) {
@@ -1387,8 +1411,8 @@ void SetSortField(int field, bool asc) {
 void SetSortExplicit(SortBy by, bool asc) {
     SetSortField(by == SortBy::Date ? SfDate : by == SortBy::Size ? SfSize : SfName, asc);
 }
-// Agrupa la carpeta actual (gb < 0: sin grupos). Agrupar es cosa de cada carpeta: si la carpeta usa
-// la vista general, se le crea una propia a partir de ella para no agrupar todas.
+// Groups the current folder (gb < 0: no groups). Grouping is per folder: if the folder uses
+// the general view, it gets its own copy so that not every folder is grouped.
 void SetGroup(int gb) {
     Tab& t = T();
     if (t.path.empty()) return;
@@ -1418,7 +1442,7 @@ void SetSort(SortBy by) {
     if (ViewPrimarySort(CurView(), cur, asc) && cur == by)
         SetSortExplicit(by, !asc);
     else
-        SetSortExplicit(by, by == SortBy::Name);  // fecha y tamaño: lo más grande/nuevo primero
+        SetSortExplicit(by, by == SortBy::Name);  // date and size: largest/newest first
 }
 void SetFoldersFirst(int mode) {
     View& v = CurView();
@@ -1437,19 +1461,41 @@ void ToggleFavorite() {
     auto it = std::find_if(g_favs.begin(), g_favs.end(), [&](const Favorite& v) { return Key(v.path) == Key(t.path); });
     if (it != g_favs.end()) {
         g_favs.erase(it);
-        S.message = L"Quitado de favoritos";
+        S.message = L"Removed from favorites";
     } else {
         g_favs.push_back({TabTitle(t), t.path});
-        S.message = L"Agregado a favoritos";
+        S.message = L"Added to favorites";
     }
     SaveFavs();
+    HeatRefresh();
     Invalidate();
 }
 
-// ---------------------------------------------------------------- iconos
-// Los iconos "por extensión" se resuelven en el momento (no tocan el disco).
-// Los que dependen del archivo (carpetas, .exe, accesos directos, unidades)
-// se piden a otro hilo y se dibuja un icono genérico hasta que lleguen.
+void FavAdd(const std::wstring& path) {
+    auto same = [&](const Favorite& v) { return Key(v.path) == Key(path); };
+    if (std::find_if(g_favs.begin(), g_favs.end(), same) != g_favs.end()) {
+        S.message = L"Already in favorites";
+    } else {
+        g_favs.push_back({LeafOf(path), path});
+        S.message = L"Added to favorites";
+        SaveFavs();
+        HeatRefresh();
+    }
+    Invalidate();
+}
+
+void FavRemove(const std::wstring& path) {
+    g_favs.erase(std::remove_if(g_favs.begin(), g_favs.end(), [&](const Favorite& v) { return Key(v.path) == Key(path); }), g_favs.end());
+    S.message = L"Removed from favorites";
+    SaveFavs();
+    HeatRefresh();
+    Invalidate();
+}
+
+// ---------------------------------------------------------------- icons
+// "Per extension" icons are resolved on the spot (they don't touch the disk).
+// Those that depend on the file (folders, .exe, shortcuts, drives)
+// are requested from another thread, and a generic icon is drawn until they arrive.
 ComPtr<IImageList> g_imgList;
 int g_imgListSize = 0;
 std::mutex g_im;
@@ -1480,7 +1526,7 @@ int IconForExt(const wchar_t* name, size_t len) {
     std::wstring ext = ExtOf(name, len);
     auto it = g_iconByExt.find(ext);
     if (it != g_iconByExt.end()) return it->second;
-    std::wstring probe = ext.empty() ? L"archivo" : L"archivo" + ext;
+    std::wstring probe = ext.empty() ? L"file" : L"file" + ext;
     int idx = IconByAttrs(probe.c_str(), FILE_ATTRIBUTE_NORMAL);
     g_iconByExt[ext] = idx;
     return idx;
@@ -1490,7 +1536,7 @@ void RequestIcon(const std::wstring& path) {
     std::lock_guard lk(g_im);
     std::wstring k = Key(path);
     if (g_iconByPath.count(k) || g_iconPending.count(k)) return;
-    if (g_iconQueue.size() > 400) {  // lo que quedó atrás ya no está a la vista
+    if (g_iconQueue.size() > 400) {  // what was left behind is no longer in view
         for (const auto& q : g_iconQueue) g_iconPending.erase(Key(q));
         g_iconQueue.clear();
     }
@@ -1518,7 +1564,7 @@ void IconThreadMain() {
         SHFILEINFOW sfi{};
         int idx = -1;
         if (p.empty()) {
-            // "Este equipo": el icono real de la carpeta virtual de unidades
+            // "This PC": the real icon of the virtual drives folder
             PIDLIST_ABSOLUTE pidl = nullptr;
             if (SUCCEEDED(SHGetKnownFolderIDList(FOLDERID_ComputerFolder, 0, nullptr, &pidl))) {
                 if (SHGetFileInfoW(reinterpret_cast<LPCWSTR>(pidl), 0, &sfi, sizeof(sfi),
@@ -1539,19 +1585,19 @@ void IconThreadMain() {
     }
 }
 
-// ---------------------------------------------------------------- dibujo
+// ---------------------------------------------------------------- drawing
 ComPtr<ID2D1Factory> g_d2d;
 ComPtr<IDWriteFactory> g_dw;
 ComPtr<IWICImagingFactory> g_wic;
-ComPtr<ID2D1RenderTarget> g_rt;           // donde se dibuja (la ventana, o un bitmap en el modo de prueba)
-ComPtr<ID2D1HwndRenderTarget> g_hwndRt;   // el de la ventana
-ComPtr<IWICBitmap> g_testBmp;             // el bitmap del modo de prueba
+ComPtr<ID2D1RenderTarget> g_rt;           // where drawing happens (the window, or a bitmap in test mode)
+ComPtr<ID2D1HwndRenderTarget> g_hwndRt;   // the window's
+ComPtr<IWICBitmap> g_testBmp;             // the test mode bitmap
 ComPtr<ID2D1SolidColorBrush> g_brush, g_brushAccent;
 ComPtr<IDWriteRenderingParams> g_textParams;
-// definidas en palette.inl
+// defined in palette.inl
 void TextHighlighted(const std::wstring& s, const std::wstring& patLower, IDWriteTextFormat* fmt, float l, float t,
                      float r, float b, UINT32 color, UINT32 hiColor, float alpha = 1.f);
-void DrawPalette(float W, float H);  // rasterizado "GDI clásico": igual que el EDIT y que File Pilot
+void DrawPalette(float W, float H);  // "classic GDI" rasterization: same as the EDIT and File Pilot
 
 void CreateTextParams() {
     ComPtr<IDWriteRenderingParams> def;
@@ -1575,7 +1621,7 @@ ComPtr<IDWriteTextFormat> MakeFormat(const wchar_t* family, float size, DWRITE_T
                                      DWRITE_FONT_WEIGHT weight = DWRITE_FONT_WEIGHT_NORMAL, bool trim = true) {
     ComPtr<IDWriteTextFormat> f;
     g_dw->CreateTextFormat(family, nullptr, weight, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, size,
-                           L"es-ar", &f);
+                           L"en-us", &f);
     f->SetTextAlignment(align);
     f->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
     f->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
@@ -1588,15 +1634,15 @@ ComPtr<IDWriteTextFormat> MakeFormat(const wchar_t* family, float size, DWRITE_T
     return f;
 }
 
-// Armar un texto es lo más caro de cada cuadro, y casi todos se repiten: se guardan ya armados.
+// Laying out text is the most expensive part of each frame, and most repeat: they're kept ready-made.
 std::unordered_map<uint64_t, ComPtr<IDWriteTextLayout>> g_textCache;
 
 void CreateFormats() {
     g_textCache.clear();
-    // Por defecto, la misma tipografía que File Pilot: Segoe UI clásica a 9 pt (12 DIP).
+    // By default, the same typeface as File Pilot: classic Segoe UI at 9 pt (12 DIP).
     const wchar_t* ui = FontExists(g_cfg.font.c_str()) ? g_cfg.font.c_str() : L"Segoe UI";
     const wchar_t* icons = FontExists(L"Segoe Fluent Icons") ? L"Segoe Fluent Icons" : L"Segoe MDL2 Assets";
-    const float sz = g_cfg.fontSize, smallSz = std::max(8.f, sz - 2);  // ("small" es una macro de Windows)
+    const float sz = g_cfg.fontSize, smallSz = std::max(8.f, sz - 2);  // ("small" is a Windows macro)
     g_fmtName = MakeFormat(ui, sz, DWRITE_TEXT_ALIGNMENT_LEADING);
     g_fmtNameBold = MakeFormat(ui, sz, DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_FONT_WEIGHT_SEMI_BOLD);
     g_fmtRight = MakeFormat(ui, sz, DWRITE_TEXT_ALIGNMENT_TRAILING);
@@ -1611,7 +1657,7 @@ void CreateFormats() {
     g_fmtStatus = MakeFormat(ui, sz, DWRITE_TEXT_ALIGNMENT_LEADING);
     g_fmtStatusR = MakeFormat(ui, sz, DWRITE_TEXT_ALIGNMENT_TRAILING);
     g_fmtCenter = MakeFormat(ui, sz, DWRITE_TEXT_ALIGNMENT_CENTER);
-    // vista previa de texto: monoespaciada, sin recortar con "…"
+    // text preview: monospaced, not trimmed with "…"
     const wchar_t* mono = FontExists(L"Cascadia Mono") ? L"Cascadia Mono" : L"Consolas";
     g_fmtMono = MakeFormat(mono, 12.f, DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_FONT_WEIGHT_NORMAL, false);
     g_fmtMonoR = MakeFormat(mono, 12.f, DWRITE_TEXT_ALIGNMENT_TRAILING, DWRITE_FONT_WEIGHT_NORMAL, false);
@@ -1637,7 +1683,7 @@ bool EnsureTarget() {
     auto hprops = D2D1::HwndRenderTargetProperties(g_hwnd, D2D1::SizeU(rc.right, rc.bottom),
                                                    D2D1_PRESENT_OPTIONS_IMMEDIATELY);
     if (g_test) {
-        // sin ventana visible: se dibuja en un bitmap (que "captura" guarda como PNG)
+        // no visible window: draw to a bitmap (which the capture step saves as a PNG)
         if (FAILED(g_wic->CreateBitmap(std::max<LONG>(1, rc.right), std::max<LONG>(1, rc.bottom), GUID_WICPixelFormat32bppPBGRA,
                                        WICBitmapCacheOnLoad, &g_testBmp)))
             return false;
@@ -1657,7 +1703,7 @@ bool EnsureTarget() {
 }
 
 void EnsureImageList() {
-    int want = g_dpi >= 144 || g_dpi > g_sysDpi ? SHIL_LARGE : SHIL_SMALL;  // con zoom: achicar, no agrandar
+    int want = g_dpi >= 144 || g_dpi > g_sysDpi ? SHIL_LARGE : SHIL_SMALL;  // with zoom: shrink, don't enlarge
     if (g_imgList && g_imgListSize == want) return;
     g_imgList.Reset();
     SHGetImageList(want, IID_PPV_ARGS(&g_imgList));
@@ -1723,11 +1769,11 @@ void Fill(const D2D1_RECT_F& r, UINT32 c, float a = 1.f) {
         g_rt->FillRectangle(r, g_brush.Get());
         return;
     }
-    // con zoom un DIP no es un píxel entero: se alinea para que las líneas finas sigan nítidas
+    // with zoom a DIP isn't a whole pixel: snap so thin lines stay sharp
     const float s = g_dpi / 96.f;
     auto snap = [s](float v) { return std::round(v * s) / s; };
     D2D1_RECT_F q{snap(r.left), snap(r.top), snap(r.right), snap(r.bottom)};
-    if (r.right > r.left && r.right - r.left <= 1.01f) q.right = q.left + 1 / s;  // una línea: siempre 1 píxel
+    if (r.right > r.left && r.right - r.left <= 1.01f) q.right = q.left + 1 / s;  // a line: always 1 pixel
     if (r.bottom > r.top && r.bottom - r.top <= 1.01f) q.bottom = q.top + 1 / s;
     g_rt->FillRectangle(q, g_brush.Get());
 }
@@ -1739,7 +1785,7 @@ void HLine(float x1, float x2, float y, UINT32 c = cBorder) { Fill(D2D1::RectF(x
 
 bool IsHover(HitKind k, int idx) { return g_hover.kind == k && g_hover.idx == idx; }
 
-// Dibuja el icono real del elemento, o uno genérico mientras se resuelve.
+// Draws the item's real icon, or a generic one while it's being resolved.
 void DrawIcon(const std::wstring& fullPath, const Entry* e, const wchar_t* name, size_t nameLen, bool drive, float x,
               float y, float alpha) {
     int idx = -2;
@@ -1786,21 +1832,17 @@ void FormatSize(uint64_t s, wchar_t* buf, size_t n) {
         ++u;
     }
     swprintf(buf, n, v < 10 ? L"%.1f %s" : L"%.0f %s", v, units[u]);
-    for (wchar_t* p = buf; *p; ++p)
-        if (*p == L'.') *p = L',';
 }
 
 std::wstring Thousands(int n) {
     std::wstring s = std::to_wstring(n);
-    for (int i = static_cast<int>(s.size()) - 3; i > 0; i -= 3) s.insert(i, L".");
+    for (int i = static_cast<int>(s.size()) - 3; i > 0; i -= 3) s.insert(i, L",");
     return s;
 }
 
 std::wstring Ms(double v) {
     wchar_t b[32];
     swprintf(b, 32, v < 10 ? L"%.2f ms" : L"%.0f ms", v);
-    for (wchar_t* p = b; *p; ++p)
-        if (*p == L'.') *p = L',';
     return b;
 }
 
@@ -1808,24 +1850,24 @@ std::wstring ErrorText(DWORD code) {
     wchar_t* msg = nullptr;
     FormatMessageW(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS, nullptr,
                    code, 0, reinterpret_cast<wchar_t*>(&msg), 0, nullptr);
-    std::wstring s = msg ? msg : L"error desconocido";
+    std::wstring s = msg ? msg : L"unknown error";
     if (msg) LocalFree(msg);
     while (!s.empty() && (s.back() == L'\n' || s.back() == L'\r' || s.back() == L' ')) s.pop_back();
     return s;
 }
 
-// Editor de vistas (viewedit.inl): lo que el dibujo de la lista necesita saber.
+// View editor (viewedit.inl): what list drawing needs to know.
 struct ViewEditorState {
     bool open = false;
     int pane = 0;
 } g_ve;
 
-// --- pestañas (también es la barra de título: se arrastra la ventana desde acá)
-// Con la vista dividida, cada panel tiene su grupo de pestañas encima.
-// El fondo de la pestaña visible viaja hasta la nueva. Solo se dibuja: el cambio ya ocurrió.
+// --- tabs (also the title bar: the window is dragged from here)
+// In split view, each pane has its own tab group above it.
+// The visible tab's background travels to the new one. Drawing only: the change already happened.
 struct TabPill {
     const Tab* tab = nullptr;
-    float x = 0, from = 0;  // dónde quedó dibujado; distancia a recorrer al empezar
+    float x = 0, from = 0;  // where it was last drawn; distance to travel at the start
     double at = 0;
 } g_pill[2];
 constexpr double kTabPillMs = 120;
@@ -1836,12 +1878,12 @@ void DrawTabGroup(int pane, float x0, float xEnd, bool activeWnd) {
         if (!g_split || g_tabs[i]->pane == pane) idx.push_back(i);
     const int n = static_cast<int>(idx.size());
     if (!n) return;
-    const float avail = xEnd - x0 - 30;  // lugar para el "+"
+    const float avail = xEnd - x0 - 30;  // room for the "+"
     float tw = std::min(kTabMaxW, std::max(36.f, avail / n));
     if (avail / n >= kTabMinW) tw = std::clamp(avail / n, kTabMinW, kTabMaxW);
     const float top = 7, bot = kTabH;
     const int visible = g_split ? g_paneCur[pane] : g_cur;
-    // la pestaña visible va última, para que al moverse pase por encima de la otra
+    // the visible tab goes last, so it passes over the other one when moving
     std::vector<int> order;
     for (int k = 0; k < n; ++k)
         if (idx[k] != visible) order.push_back(k);
@@ -1865,7 +1907,7 @@ void DrawTabGroup(int pane, float x0, float xEnd, bool activeWnd) {
         pillOff = pill.from * left * left * left;
         pill.x = vx + pillOff;
         if (pillOff != 0) {
-            // por debajo de los títulos, para no taparlos al pasar
+            // beneath the titles, so it doesn't cover them as it passes
             SetTimer(g_hwnd, kTimerTabSlide, 15, nullptr);
             Round(D2D1::RectF(pill.x, top, pill.x + tw - 4, bot + 8), 7, cTop);
         }
@@ -1875,7 +1917,7 @@ void DrawTabGroup(int pane, float x0, float xEnd, bool activeWnd) {
         const float x = x0 + k * tw;
         const float off = TabSlide(*g_tabs[i]) * tw;
         if (off != 0) SetTimer(g_hwnd, kTimerTabSlide, 15, nullptr);
-        const D2D1_RECT_F home = D2D1::RectF(x, top, x + tw - 4, bot);  // los clicks van a su lugar final
+        const D2D1_RECT_F home = D2D1::RectF(x, top, x + tw - 4, bot);  // clicks go to its final place
         D2D1_RECT_F r = home;
         r.left += off;
         r.right += off;
@@ -1883,7 +1925,7 @@ void DrawTabGroup(int pane, float x0, float xEnd, bool activeWnd) {
         bool activePane = !g_split || pane == g_act;
         bool hov = IsHover(HitKind::Tab, i) || IsHover(HitKind::TabClose, i);
         if (cur) {
-            // pestaña visible: se funde con la barra de abajo
+            // visible tab: blends into the bar below
             if (pillOff == 0) Round(D2D1::RectF(r.left, r.top, r.right, r.bottom + 8), 7, cTop);
         } else if (hov || i == g_dropTab) {
             Round(D2D1::RectF(r.left, r.top + 2, r.right, r.bottom - 3), 6, i == g_dropTab ? cAccent : 0xFFFFFF,
@@ -1915,22 +1957,22 @@ void DrawTabs(float W) {
     Fill(D2D1::RectF(0, 0, W, kTabH), cTabBar);
     const bool active = g_test ? g_testActive : GetActiveWindow() == g_hwnd;
 
-    // Zona izquierda de ancho fijo, siempre libre para arrastrar, con el botón de la
-    // barra lateral al final. No se mueve cuando la barra se oculta.
+    // Fixed-width left area, always free for dragging, with the sidebar button
+    // at its end. It doesn't move when the sidebar is hidden.
     D2D1_RECT_F tg = D2D1::RectF(kTitleLeft - 36, 7, kTitleLeft - 8, kTabH - 7);
     if (IsHover(HitKind::SideToggle, 0)) Round(tg, 5, 0xFFFFFF, 0.08f);
     Color(active ? cDim : cFaint);
     Glyph(g_sideVisible ? gPaneClose : gPaneOpen, g_fmtIcon.Get(), tg.left, tg.top, tg.right, tg.bottom);
     g_hits.push_back({tg, HitKind::SideToggle, 0});
 
-    // menú general de la app
+    // general app menu
     D2D1_RECT_F mb = D2D1::RectF(10, 7, 38, kTabH - 7);
     if (IsHover(HitKind::AppMenu, 0)) Round(mb, 5, 0xFFFFFF, 0.08f);
     Color(active ? cDim : cFaint);
     Glyph(0xE700, g_fmtIcon.Get(), mb.left, mb.top, mb.right, mb.bottom);
     g_hits.push_back({mb, HitKind::AppMenu, 0});
 
-    // botones de ventana, a la derecha
+    // window buttons, on the right
     const wchar_t capGlyph[3] = {gMin, IsZoomed(g_hwnd) ? gRestore : gMax, gClose};
     const int capCode[3] = {HTMINBUTTON, HTMAXBUTTON, HTCLOSE};
     for (int i = 0; i < 3; ++i) {
@@ -1953,7 +1995,7 @@ void DrawTabs(float W) {
     }
 }
 
-// --- barra de navegación (una por panel)
+// --- navigation bar (one per pane)
 void DrawToolbar(int pane) {
     const PaneX g = PaneGeo(pane);
     const float y0 = kTabH, y1 = kTabH + kToolH;
@@ -1979,7 +2021,7 @@ void DrawToolbar(int pane) {
     }
     x += 8;
 
-    // ruta como "migas de pan"
+    // path as breadcrumbs
     const float crumbL = x, crumbR = g.TR - kPad;
     D2D1_RECT_F bar = D2D1::RectF(crumbL, cy - 15, crumbR, cy + 15);
     Round(bar, 7, cBg);
@@ -1989,7 +2031,7 @@ void DrawToolbar(int pane) {
         float w;
     };
     std::vector<Crumb> crumbs;
-    crumbs.push_back({L"", L"", 30});  // icono de "Este equipo"
+    crumbs.push_back({L"", L"", 30});  // "This PC" icon
     if (!t.path.empty()) {
         std::wstring acc;
         size_t start = 0;
@@ -2009,7 +2051,7 @@ void DrawToolbar(int pane) {
             start = pos + 1;
         }
     }
-    // si no entra, se ocultan los del principio detrás de "…"
+    // if it doesn't fit, the first ones are hidden behind "…"
     const float chevW = 16;
     float total = 0;
     for (const Crumb& c : crumbs) total += c.w + chevW;
@@ -2056,7 +2098,41 @@ void DrawToolbar(int pane) {
     if (cx < bar.right) g_hits.push_back({D2D1::RectF(cx, bar.top, bar.right, bar.bottom), HitKind::PathEmpty, pane});
 }
 
-// --- barra lateral
+// --- sidebar
+std::wstring DiskFreeText(const DriveSpace& d) {
+    wchar_t buf[64];
+    FormatSize(d.freeB, buf, 64);
+    return std::wstring(buf) + L" free";
+}
+
+// The whole row becomes the usage bar, with the free space and the total on top.
+void DrawDiskSpace(const D2D1_RECT_F& r, const DriveSpace& d) {
+    constexpr float kRad = 5, kTextPad = 10;
+    const float w = r.right - r.left;
+    Round(r, kRad, 0xFFFFFF, 0.08f);
+    Round(D2D1::RectF(r.left, r.top, r.left + std::max(kRad * 2, w * d.usage), r.bottom), kRad,
+          d.usage >= 0.9f ? cDiskFull : cDisk, 0.4f);
+    g_diskShown = DiskFreeText(d);
+    wchar_t buf[64];
+    FormatSize(d.totalB, buf, 64);
+    const std::wstring total = std::wstring(L"of ") + buf;
+    Color(cText);
+    Text(g_diskShown, g_fmtSide.Get(), r.left + kTextPad, r.top, r.right - kTextPad, r.bottom);
+    // With a very narrow sidebar only the free space fits.
+    if (MeasureW(g_diskShown, g_fmtSide.Get()) + MeasureW(total, g_fmtRight.Get()) + kTextPad * 3 <= w)
+        Text(total, g_fmtRight.Get(), r.left + kTextPad, r.top, r.right - kTextPad, r.bottom);
+}
+
+// Repaints only if what's shown changed; stops reading once the mouse leaves the drive.
+void DiskTick() {
+    if (!g_diskHover || g_hover.kind != HitKind::Side) {
+        KillTimer(g_hwnd, kTimerDisk);
+        g_diskHover = 0;
+        return;
+    }
+    if (DiskFreeText(DriveSpaceOf(g_diskHover, true)) != g_diskShown) Invalidate();
+}
+
 void DrawSidebar(float H) {
     if (!g_sideVisible) return;
     const float y0 = kTabH + kToolH;
@@ -2071,15 +2147,24 @@ void DrawSidebar(float H) {
         Text(s, g_fmtSection.Get(), kPad + 6, y, kSideW - kPad, y + 20);
         y += 22;
     };
-    // name, ruta, es unidad, uso del disco (0..1, <0 = sin barra)
-    auto item = [&](const std::wstring& name, const std::wstring& path, bool drive, float usage) {
+    // name, path, is drive, disk usage (0..1, <0 = no bar)
+    // disk: drive row under the mouse, showing the space instead of the name.
+    auto item = [&](const std::wstring& name, const std::wstring& path, bool drive, float usage,
+                    const DriveSpace* disk = nullptr) {
         const float rowH = usage >= 0 ? kSideRow + 12 : kSideRow;
         D2D1_RECT_F r = D2D1::RectF(6, y, kSideW - 7, y + rowH);
         int idx = static_cast<int>(g_sidePaths.size());
         bool active = Key(path) == cur;
+        if (disk) {
+            DrawDiskSpace(r, *disk);
+            g_hits.push_back({r, HitKind::Side, idx});
+            g_sidePaths.push_back(path);
+            y += rowH;
+            return;
+        }
         if (active)
             Round(r, 5, cAccent, 0.22f);
-        else if (IsHover(HitKind::Side, idx))
+        else if (IsHover(HitKind::Side, idx) && !g_sideDrag.active)
             Round(r, 5, 0xFFFFFF, 0.05f);
         if (idx == g_dropSide) {
             Color(cAccent, 0.9f);
@@ -2089,8 +2174,8 @@ void DrawSidebar(float H) {
         Color(active ? cText : 0xC9C9D1);
         Text(name, g_fmtSide.Get(), r.left + 34, y, r.right - 6, y + kSideRow);
         if (usage >= 0) {
-            // barra de uso, como File Pilot: azul, roja cuando queda poco lugar.
-            // Mismo margen a ambos lados respecto del borde de la barra lateral.
+            // usage bar, like File Pilot: blue, red when space is low.
+            // Same margin on both sides relative to the sidebar edge.
             const float margin = kSideW - 1 - (r.right - 10);
             const float bx = margin, bw = r.right - 10 - bx, by = y + kSideRow - 1, bh = 6;
             Round(D2D1::RectF(bx, by, bx + bw, by + bh), bh / 2, 0xFFFFFF, 0.10f);
@@ -2100,22 +2185,47 @@ void DrawSidebar(float H) {
         g_sidePaths.push_back(path);
         y += rowH;
     };
-    section(L"FAVORITOS");
+    section(L"FAVORITES");
+    g_favTop = y;
     for (const Favorite& v : g_favs) item(v.name, v.path, false, -1);
+    g_favBottom = y;
     y += 12;
-    section(L"UNIDADES");
-    item(L"Este equipo", L"", false, -1);
+    section(L"DRIVES");
+    item(L"This PC", L"", false, -1);
     DWORD mask = GetLogicalDrives();
+    wchar_t hoverDrive = 0;
     for (int i = 0; i < 26; ++i) {
         if (!(mask & (1u << i))) continue;
         wchar_t letter = static_cast<wchar_t>(L'A' + i);
         std::wstring root = std::wstring(1, letter) + L":\\";
-        item(DriveLabel(letter), root, true, DriveUsage(letter));
+        const int idx = static_cast<int>(g_sidePaths.size());
+        const bool hov = IsHover(HitKind::Side, idx) && !g_sideDrag.active && idx != g_dropSide;
+        const DriveSpace& ds = DriveSpaceOf(letter, hov && letter != g_diskHover);
+        const bool showSpace = hov && ds.usage >= 0;
+        if (showSpace) hoverDrive = letter;
+        item(DriveLabel(letter), root, true, ds.usage, showSpace ? &ds : nullptr);
     }
+    if (hoverDrive != g_diskHover) {
+        g_diskHover = hoverDrive;
+        if (hoverDrive) SetTimer(g_hwnd, kTimerDisk, kDiskTickMs, nullptr);
+        else KillTimer(g_hwnd, kTimerDisk);
+    }
+    g_sideHotFirst = static_cast<int>(g_sidePaths.size());
+    const float bottom = H - kStatus - 6;
+    if (g_cfg.hotCount > 0 && !g_hot.empty() && y + 12 + 22 + kSideRow <= bottom) {
+        y += 12;
+        section(L"RECENTS");
+        int shown = 0;
+        for (const HotItem& h : g_hot) {
+            if (shown++ >= g_cfg.hotCount || y + kSideRow > bottom) break;
+            item(h.name, h.path, false, -1);
+        }
+    }
+    DrawSideDrag();
 }
 
-// --- encabezado de columnas y lista
-int g_colDrag = 0, g_colDragPane = 0;  // columna que se está arrastrando (1 = fecha, 2 = tamaño)
+// --- column header and list
+int g_colDrag = 0, g_colDragPane = 0;  // column being dragged (1 = date, 2 = size)
 float g_colDragX = 0, g_colDragW = 0;
 struct Columns {
     bool showSize, showDate;
@@ -2136,7 +2246,7 @@ Columns Cols(int pane) {
     return c;
 }
 
-// Sangría del árbol para una fila (0 con filtro o búsqueda: ahí la lista es plana).
+// Tree indent for a row (0 with a filter or search: the list is flat there).
 float RowIndent(const Tab& t, int row) { return FlatView(t) ? 0.f : t.rows[row].depth * kIndent; }
 float RowTextX(const Columns& c, const Tab& t, int row) { return c.nameL + kChev + RowIndent(t, row) + 28; }
 
@@ -2149,7 +2259,7 @@ void DrawHeader(int pane) {
     SortBy by = SortBy::Name;
     bool sortAsc = true;
     const bool hasSort = ViewPrimarySort(view, by, sortAsc);
-    // botón de vista (filtro): resaltado si la carpeta tiene vista propia (o heredada)
+    // view button (filter): highlighted if the folder has its own (or inherited) view
     {
         const bool own = &view != &g_viewAll;
         D2D1_RECT_F vb = D2D1::RectF(c.nameL - 4, y0 + 4, c.nameL + 20, y1 - 5);
@@ -2157,7 +2267,7 @@ void DrawHeader(int pane) {
         Color(own ? cAccent : IsHover(HitKind::ViewBtn, pane) ? cDim : cFaint);
         Glyph(0xE71C, g_fmtIconSm.Get(), vb.left, vb.top, vb.right, vb.bottom);
         g_hits.push_back({vb, HitKind::ViewBtn, pane});
-        // plegar / desplegar todos los grupos (solo si la lista tiene grupos)
+        // collapse / expand all groups (only if the list has groups)
         const Tab& pt = PT(pane);
         if (pt.list && !pt.list->groups.empty() && pt.filter.empty() && !pt.recursive) {
             bool allFolded = true;
@@ -2165,7 +2275,7 @@ void DrawHeader(int pane) {
             D2D1_RECT_F fb = D2D1::RectF(c.nameL + 18, y0 + 4, c.nameL + 40, y1 - 5);
             if (IsHover(HitKind::FoldBtn, pane)) Round(fb, 5, 0xFFFFFF, 0.08f);
             Color(IsHover(HitKind::FoldBtn, pane) ? cText : cDim);
-            // dos chevrones: hacia adentro = plegar todo, hacia afuera = desplegar todo
+            // two chevrons: inward = collapse all, outward = expand all
             const float cx = (fb.left + fb.right) / 2, cy = (fb.top + fb.bottom) / 2;
             Glyph(allFolded ? 0xE70D : 0xE70E, g_fmtIconSm.Get(), cx - 8, cy - 9, cx + 8, cy + 1);
             Glyph(allFolded ? 0xE70E : 0xE70D, g_fmtIconSm.Get(), cx - 8, cy - 1, cx + 8, cy + 9);
@@ -2178,13 +2288,13 @@ void DrawHeader(int pane) {
         float l, r;
         bool right;
         bool show;
-    } cols[] = {{L"Nombre", SortBy::Name, c.nameL, c.nameR, false, true},
-                {L"Modificado", SortBy::Date, c.dateL, c.dateL + kDateW, true, c.showDate},
-                {L"Tamaño", SortBy::Size, c.sizeL, c.right, true, c.showSize}};
+    } cols[] = {{L"Name", SortBy::Name, c.nameL, c.nameR, false, true},
+                {L"Modified", SortBy::Date, c.dateL, c.dateL + kDateW, true, c.showDate},
+                {L"Size", SortBy::Size, c.sizeL, c.right, true, c.showSize}};
     int i = 0;
     for (const Col& col : cols) {
         if (col.show) {
-            // "Nombre" empieza después del botón de vista
+            // "Name" starts after the view button
             D2D1_RECT_F r = D2D1::RectF(col.right ? col.l - 6 : col.l + kChev + 26, y0 + 3, col.r + 6, y1 - 4);
             bool active = hasSort && by == col.by;
             int hid = pane * 3 + i;
@@ -2194,7 +2304,7 @@ void DrawHeader(int pane) {
             if (active) {
                 wchar_t g = sortAsc ? gSortUp : gSortDown;
                 float w = MeasureW(col.label, g_fmtHeader.Get());
-                // pegada al título, aunque la columna sea ancha
+                // right next to the title, even if the column is wide
                 if (col.right) Glyph(g, g_fmtIconSm.Get(), tr - w - 18, y0, tr - w - 4, y1);
                 else Glyph(g, g_fmtIconSm.Get(), tl + w + 4, y0, tl + w + 18, y1);
             }
@@ -2203,7 +2313,7 @@ void DrawHeader(int pane) {
         }
         ++i;
     }
-    // bordes para cambiar el ancho: la línea solo aparece con el mouse encima
+    // edges for changing the width: the line only appears with the mouse over it
     auto edge = [&](int which, float colL) {
         const float x = colL - 9;
         const int id = pane * 2 + which;
@@ -2226,14 +2336,14 @@ void DrawList(int pane, float H) {
     const int n = RowCount(t);
     if (t.loading) {
         Color(cDim);
-        Text(L"Cargando…", g_fmtCenter.Get(), L, listTop, R, listTop + 80);
+        Text(L"Loading…", g_fmtCenter.Get(), L, listTop, R, listTop + 80);
     } else if (t.list && t.list->error) {
         Color(cError);
-        Text(L"No se pudo abrir: " + ErrorText(t.list->error), g_fmtCenter.Get(), L + kPad, listTop, R - kPad,
+        Text(L"Couldn't open: " + ErrorText(t.list->error), g_fmtCenter.Get(), L + kPad, listTop, R - kPad,
              listTop + 80);
     } else if (t.list && n == 0) {
         Color(cDim);
-        Text(t.recursive && !t.recDone ? L"Buscando…" : !t.filter.empty() ? L"Nada coincide" : L"Carpeta vacía",
+        Text(t.recursive && !t.recDone ? L"Searching…" : !t.filter.empty() ? L"No matches" : L"Empty folder",
              g_fmtCenter.Get(), L, listTop, R, listTop + 80);
     } else if (t.list) {
         const bool focused = (g_test ? g_testActive && !g_renaming && !g_editing : GetFocus() == g_hwnd) && pane == g_act;
@@ -2247,7 +2357,7 @@ void DrawList(int pane, float H) {
             if (y >= listBot) break;
             const Row& row = t.rows[i];
             if (row.e < 0) {
-                // título de grupo: texto chico y una línea fina hasta el borde
+                // group title: small text and a thin line to the edge
                 const auto& gr = row.l->groups[static_cast<size_t>(-1 - row.e)];
                 size_t end = static_cast<size_t>(-row.e) < row.l->groups.size() ? row.l->groups[-row.e].first : row.l->entries.size();
                 std::wstring cnt = Thousands(static_cast<int>(end - gr.first));
@@ -2289,7 +2399,7 @@ void DrawList(int pane, float H) {
             }
             const float indent = flat ? 0.f : row.depth * kIndent;
             const float chevX = c.nameL + indent;
-            // guías del árbol: una línea tenue por nivel
+            // tree guides: one faint line per level
             for (int d = 1; !flat && d <= row.depth; ++d) {
                 float gx = c.nameL + (d - 1) * kIndent + kChev / 2 + 9;
                 Fill(D2D1::RectF(gx, y, gx + 1, y + kRow), 0xFFFFFF, 0.06f);
@@ -2300,7 +2410,7 @@ void DrawList(int pane, float H) {
                 Glyph(open ? 0xE70D : gChevron, g_fmtIconSm.Get(), chevX, y, chevX + kChev, y + kRow);
             }
             const float iconX = chevX + kChev + 2, textX = chevX + kChev + 28;
-            // sin extensión, si así se pidió (las carpetas se muestran enteras)
+            // without extension, if so requested (folders are shown in full)
             UINT32 shownLen = e.nameLen;
             if (g_hideExt && !e.isDir() && !drives)
                 for (UINT32 k = e.nameLen; k > 1; --k)
@@ -2319,7 +2429,7 @@ void DrawList(int pane, float H) {
                 Color(cText, a);
                 Text(name, shownLen, g_fmtName.Get(), textX, y, c.nameR, y + kRow);
             }
-            // en la lista plana (filtro o búsqueda), dónde está cada cosa
+            // in the flat list (filter or search), where each thing is
             if (flat && row.depth > 0 && row.l->path.size() > t.path.size()) {
                 std::wstring rel = row.l->path.substr(t.path.size());
                 while (!rel.empty() && rel[0] == L'\\') rel.erase(0, 1);
@@ -2351,7 +2461,7 @@ void DrawList(int pane, float H) {
                 }
             }
         }
-        // barra de desplazamiento finita, solo si hace falta
+        // thin scrollbar, only when needed
         const float contentH = n * kRow, viewH = listBot - listTop;
         if (contentH > viewH) {
             const float thumbH = std::max(24.f, viewH * viewH / contentH);
@@ -2377,21 +2487,21 @@ void DrawStatus(int pane, float H) {
     else if (t.list && !t.list->error) {
         int items = n;
         for (const Row& r : t.rows) items -= r.e < 0;
-        // lo que está dentro de los grupos plegados también cuenta
+        // what's inside collapsed groups counts too
         if (!FlatView(t) && !t.list->groups.empty())
             for (size_t gi = 0; gi < t.list->groups.size(); ++gi)
                 if (GroupFolded(t, t.list.get(), gi)) {
                     size_t end = gi + 1 < t.list->groups.size() ? t.list->groups[gi + 1].first : t.list->entries.size();
                     items += static_cast<int>(end - t.list->groups[gi].first);
                 }
-        left = Thousands(items) + (items == 1 ? L" elemento" : L" elementos");
+        left = Thousands(items) + (items == 1 ? L" item" : L" items");
         int s = SelCount(t);
-        if (s > 1) left += L"   ·   " + Thousands(s) + L" seleccionados";
+        if (s > 1) left += L"   ·   " + Thousands(s) + L" selected";
     }
     float lx = g.TL + kPad + 2;
     if (!t.filter.empty() || t.recursive) {
-        // cuadro del filtro, al estilo File Pilot: lupa + texto + cantidad
-        std::wstring label = t.recursive ? L"en subcarpetas:" : L"";
+        // filter box, File Pilot style: magnifier + text + count
+        std::wstring label = t.recursive ? L"in subfolders:" : L"";
         float lw = label.empty() ? 0 : MeasureW(label, g_fmtName.Get()) + 6;
         float tw = MeasureW(t.filter, g_fmtName.Get());
         D2D1_RECT_F box = D2D1::RectF(lx - 4, y0 + 3, lx + 30 + lw + tw + 12, H - 3);
@@ -2407,25 +2517,25 @@ void DrawStatus(int pane, float H) {
         if (activePane) Fill(D2D1::RectF(box.left + 26 + lw + tw + 1, box.top + 5, box.left + 26 + lw + tw + 2, box.bottom - 5), cText);
         lx = box.right + 10;
         if (t.recursive) {
-            left = (t.filter.empty() ? Thousands(n) + L" elementos" : Thousands(n) + L" coincidencias") + L" en " +
-                   Thousands(t.recDirs) + (t.recDirs == 1 ? L" carpeta" : L" carpetas") +
-                   (t.recDone ? L"   ·   Esc vuelve" : L"   ·   buscando…");
+            left = (t.filter.empty() ? Thousands(n) + L" items" : Thousands(n) + L" matches") + L" in " +
+                   Thousands(t.recDirs) + (t.recDirs == 1 ? L" folder" : L" folders") +
+                   (t.recDone ? L"   ·   Esc goes back" : L"   ·   searching…");
         } else {
-            left = Thousands(n) + (n == 1 ? L" coincidencia" : L" coincidencias") + L"   ·   Esc limpia";
+            left = Thousands(n) + (n == 1 ? L" match" : L" matches") + L"   ·   Esc clears";
         }
         if (!S.message.empty() && activePane) left = S.message;
     }
-    if (g_dsBusy && activePane && S.message.empty()) left += L"   ·   calculando tamaños…";
+    if (g_dsBusy && activePane && S.message.empty()) left += L"   ·   calculating sizes…";
     if (S.message.empty() || !activePane) {
-        if (g_hideDirs) left += L"   ·   sin carpetas";
-        if (g_hideFiles) left += L"   ·   sin archivos";
+        if (g_hideDirs) left += L"   ·   no folders";
+        if (g_hideFiles) left += L"   ·   no files";
     }
-    // tiempos a la derecha, solo si entran sin pisar el texto
+    // timings on the right, only if they fit without overlapping the text
     std::wstring right;
     float rw = 0;
     if (activePane && S.show && S.navMs >= 0) {
-        right = L"abrir " + Ms(S.navMs) + L"   ·   ";
-        right += S.fromCache ? L"desde memoria" : L"disco " + Ms(S.enumMs) + L" + orden " + Ms(S.sortMs);
+        right = L"open " + Ms(S.navMs) + L"   ·   ";
+        right += S.fromCache ? L"from memory" : L"disk " + Ms(S.enumMs) + L" + sort " + Ms(S.sortMs);
         rw = MeasureW(right, g_fmtStatusR.Get());
         if (lx + MeasureW(left, g_fmtStatus.Get()) + 24 + rw > g.TR - kPad) right.clear();
     }
@@ -2441,7 +2551,7 @@ void DrawPreview(float W, float H);     // preview.inl
 void DrawViewEditor(float W, float H);  // viewedit.inl
 void DrawInstallPanel(float W, float H);  // install.inl
 
-// Milisegundos desde que arrancó el proceso (incluye la carga del ejecutable).
+// Milliseconds since the process started (includes loading the executable).
 double MsSinceProcessStart() {
     FILETIME created, a, b, c, now;
     GetProcessTimes(GetCurrentProcess(), &created, &a, &b, &c);
@@ -2456,8 +2566,8 @@ void BootMark(const wchar_t* what) { g_bootMarks.push_back({what, MsSinceProcess
 void Render() {
     if (!EnsureTarget()) return;
     EnsureImageList();
-    if (g_iconFolder < 0) g_iconFolder = IconByAttrs(L"carpeta", FILE_ATTRIBUTE_DIRECTORY);
-    if (g_iconFile < 0) g_iconFile = IconByAttrs(L"archivo", FILE_ATTRIBUTE_NORMAL);
+    if (g_iconFolder < 0) g_iconFolder = IconByAttrs(L"folder", FILE_ATTRIBUTE_DIRECTORY);
+    if (g_iconFile < 0) g_iconFile = IconByAttrs(L"file", FILE_ATTRIBUTE_NORMAL);
     g_hits.clear();
     g_crumbPaths.clear();
     D2D1_SIZE_F sz = g_rt->GetSize();
@@ -2474,7 +2584,7 @@ void Render() {
         DrawStatus(p, H);
     }
     if (g_split) {
-        // divisor entre paneles: se arrastra para cambiar el ancho (doble click: mitad y mitad)
+        // divider between panes: drag to change the width (double click: half and half)
         const float x = PaneGeo(1).L;
         Fill(D2D1::RectF(x, kTabH, x + 1, H), cBorder);
         g_hits.push_back({D2D1::RectF(x - 3, kTabH + kToolH, x + 4, H - kStatus), HitKind::Divider, 0});
@@ -2486,7 +2596,7 @@ void Render() {
     if (g_rt->EndDraw() == D2DERR_RECREATE_TARGET) ReleaseTarget();
     if (g_firstFrameMs == 0) g_firstFrameMs = MsSinceProcessStart();
 
-    // Tiempo desde la tecla/click hasta el cuadro terminado. Se muestra en el siguiente cuadro.
+    // Time from key/click to finished frame. Shown on the next frame.
     if (S.navPending && !T().loading) {
         S.navMs = NowMs() - S.navStart;
         S.navPending = false;
@@ -2494,7 +2604,7 @@ void Render() {
     }
 }
 
-// ---------------------------------------------------------------- barra de ruta editable
+// ---------------------------------------------------------------- editable path bar
 HFONT g_editFont = nullptr;
 HBRUSH g_editBrush = nullptr;
 HWND g_renameEdit = nullptr;
@@ -2507,8 +2617,8 @@ void LayoutEdit() {
     (void)rc;
     const PaneX g = PaneGeo(g_act);
     int left = px(g.TL + kPad + 3 * 32 + 8 + 10), right = px(g.TR - kPad - 8);
-    // como en renombrar: el EDIT dibuja el texto pegado arriba, asÃ­ que se le da la altura justa del
-    // texto y se lo centra en la barra (igual que las migas, que DirectWrite centra verticalmente)
+    // as in rename: the EDIT draws text flush to the top, so it gets exactly the height of the
+    // text and centered in the bar (like the breadcrumbs, which DirectWrite centers vertically)
     HDC dc = GetDC(g_hwnd);
     HGDIOBJ old = SelectObject(dc, g_editFont);
     TEXTMETRICW tm{};
@@ -2516,7 +2626,7 @@ void LayoutEdit() {
     SelectObject(dc, old);
     ReleaseDC(g_hwnd, dc);
     int h = tm.tmHeight + 2;
-    int y = MulDiv(static_cast<int>(std::lround((kTabH + kToolH / 2) * 100)), g_dpi, 9600) - h / 2 + px(1);  // +1: DirectWrite deja el interlineado arriba
+    int y = MulDiv(static_cast<int>(std::lround((kTabH + kToolH / 2) * 100)), g_dpi, 9600) - h / 2 + px(1);  // +1: DirectWrite leaves the line spacing on top
     MoveWindow(g_edit, left, y, std::max(10, right - left), h, TRUE);
 }
 
@@ -2559,7 +2669,7 @@ void CommitPathEdit() {
     while (!t.empty() && iswspace(t.back())) t.pop_back();
     while (!t.empty() && iswspace(t.front())) t.erase(t.begin());
     if (t.size() >= 2 && t.front() == L'"' && t.back() == L'"') t = t.substr(1, t.size() - 2);
-    if (t.empty() || _wcsicmp(t.c_str(), L"Este equipo") == 0) {
+    if (t.empty() || _wcsicmp(t.c_str(), L"This PC") == 0) {
         Navigate(T(), L"", true);
         return;
     }
@@ -2572,7 +2682,7 @@ void CommitPathEdit() {
     std::wstring p = Normalize(full);
     DWORD a = GetFileAttributesW(ToExtendedPath(p).c_str());
     if (a == INVALID_FILE_ATTRIBUTES) {
-        S.message = L"No existe: " + p;
+        S.message = L"Not found: " + p;
         MessageBeep(MB_ICONWARNING);
         Invalidate();
         return;
@@ -2595,30 +2705,43 @@ LRESULT CALLBACK EditProc(HWND h, UINT m, WPARAM w, LPARAM l, UINT_PTR, DWORD_PT
         HidePathEdit();
         return 0;
     }
-    if (m == WM_CHAR && (w == VK_RETURN || w == VK_ESCAPE)) return 0;  // sin pitido
+    if (m == WM_CHAR && (w == VK_RETURN || w == VK_ESCAPE)) return 0;  // no beep
     if (m == WM_KILLFOCUS) HidePathEdit();
     return DefSubclassProc(h, m, w, l);
 }
 
-// ---------------------------------------------------------------- renombrar en la lista (F2)
-std::wstring g_renameOld;  // nombre original
-std::wstring g_renameDir;  // carpeta del elemento (en el árbol puede no ser la de la pestaña)
+// ---------------------------------------------------------------- renaming in the list (F2)
+std::wstring g_renameOld;  // original name
+std::wstring g_renameDir;  // the item's folder (in the tree it may not be the tab's)
 
-void LayoutRename() {
-    if (!g_renaming) return;
-    Tab& t = T();
-    if (t.sel < 0 || t.sel >= Count()) return;
-    Columns c = Cols(g_act);
-    float y = ListTop() + t.sel * kRow - t.scroll;
-    auto px = [](float dip) { return MulDiv(static_cast<int>(std::lround(dip)), g_dpi, 96); };
-    // El EDIT dibuja el texto pegado arriba: se le da la altura justa del texto y se centra en la fila.
+// The EDIT draws text flush to the top: it gets exactly the text's height and is centered in the row.
+int RenameEditH() {
     HDC dc = GetDC(g_hwnd);
     HGDIOBJ old = SelectObject(dc, g_editFont);
     TEXTMETRICW tm{};
     GetTextMetricsW(dc, &tm);
     SelectObject(dc, old);
     ReleaseDC(g_hwnd, dc);
-    int editH = tm.tmHeight + 2;
+    return tm.tmHeight + 2;
+}
+
+void LayoutRename() {
+    if (!g_renaming) return;
+    auto px = [](float dip) { return MulDiv(static_cast<int>(std::lround(dip)), g_dpi, 96); };
+    const int editH = RenameEditH();
+    if (g_favRename >= 0) {
+        for (const Hit& h : g_hits) {
+            if (h.kind != HitKind::Side || h.idx != g_favRename) continue;
+            const int left = px(h.r.left + 32), right = px(h.r.right - 4);
+            SetWindowPos(g_renameEdit, nullptr, left, px(h.r.top) + (px(kSideRow) - editH) / 2, std::max(40, right - left), editH, SWP_NOZORDER | SWP_SHOWWINDOW);
+            break;
+        }
+        return;
+    }
+    Tab& t = T();
+    if (t.sel < 0 || t.sel >= Count()) return;
+    Columns c = Cols(g_act);
+    float y = ListTop() + t.sel * kRow - t.scroll;
     int rowTop = px(y), rowH = px(kRow);
     int top = rowTop + (rowH - editH) / 2;
     int left = px(RowTextX(c, t, t.sel) - 2), right = px(c.nameR);
@@ -2630,14 +2753,14 @@ void LayoutRename() {
 void BeginRename() {
     Tab& t = T();
     if (g_renaming || !t.list || t.list->error || t.sel < 0 || t.sel >= Count()) return;
-    if (RowDir(t, t.sel).empty()) return;  // unidades
+    if (RowDir(t, t.sel).empty()) return;  // drives
     g_renameOld = SelectedName(t);
     g_renameDir = RowDir(t, t.sel);
     g_renaming = true;
     SetWindowTextW(g_renameEdit, g_renameOld.c_str());
     LayoutRename();
     SetFocus(g_renameEdit);
-    // como el Explorador: queda seleccionado el nombre sin la extensión
+    // like File Explorer: the name is selected without the extension
     int selEnd = static_cast<int>(g_renameOld.size());
     if (!EntryAt(t, t.sel).isDir()) {
         size_t dot = g_renameOld.find_last_of(L'.');
@@ -2647,47 +2770,74 @@ void BeginRename() {
     Invalidate();
 }
 
+void BeginFavRename(int idx) {
+    if (g_renaming || idx < 0 || idx >= static_cast<int>(g_favs.size())) return;
+    g_favRename = idx;
+    g_renameOld = g_favs[idx].name;
+    g_renaming = true;
+    SetWindowTextW(g_renameEdit, g_renameOld.c_str());
+    LayoutRename();
+    SetFocus(g_renameEdit);
+    SendMessageW(g_renameEdit, EM_SETSEL, 0, -1);
+    Invalidate();
+}
+
 void CancelRename() {
     if (!g_renaming) return;
     g_renaming = false;
+    g_favRename = -1;
     ShowWindow(g_renameEdit, SW_HIDE);
     if (GetFocus() == g_renameEdit) SetFocus(g_hwnd);
     Invalidate();
 }
 
-// follow: el cursor sigue al nombre nuevo cuando se recarga la lista.
+// follow: the cursor follows the new name when the list reloads.
 void CommitRename(bool follow = true) {
     if (!g_renaming) return;
     wchar_t buf[1024];
     GetWindowTextW(g_renameEdit, buf, 1024);
-    std::wstring nuevo = buf;
-    while (!nuevo.empty() && (nuevo.back() == L' ' || nuevo.back() == L'.')) nuevo.pop_back();
-    std::wstring viejo = g_renameOld, dir = g_renameDir;
+    std::wstring newName = buf;
+    while (!newName.empty() && (newName.back() == L' ' || newName.back() == L'.')) newName.pop_back();
+    if (g_favRename >= 0) {  // a favorite is just a label: the folder isn't touched
+        const int i = g_favRename;
+        CancelRename();
+        std::erase(newName, L'|');
+        if (!newName.empty() && i < static_cast<int>(g_favs.size())) {
+            g_favs[i].name = newName;
+            SaveFavs();
+        }
+        return;
+    }
+    std::wstring oldName = g_renameOld, dir = g_renameDir;
     Tab& t = T();
     CancelRename();
-    if (nuevo.empty() || nuevo == viejo) return;
-    if (nuevo.find_first_of(L"\\/:*?\"<>|") != std::wstring::npos) {
-        S.message = L"El nombre no puede contener \\ / : * ? \" < > |";
+    if (newName.empty() || newName == oldName) return;
+    if (newName.find_first_of(L"\\/:*?\"<>|") != std::wstring::npos) {
+        S.message = L"Names can't contain \\ / : * ? \" < > |";
         MessageBeep(MB_ICONWARNING);
         Invalidate();
         return;
     }
-    std::wstring from = ToExtendedPath(Join(dir, viejo.c_str()));
-    std::wstring to = ToExtendedPath(Join(dir, nuevo.c_str()));
+    std::wstring from = ToExtendedPath(Join(dir, oldName.c_str()));
+    std::wstring to = ToExtendedPath(Join(dir, newName.c_str()));
     if (!MoveFileExW(from.c_str(), to.c_str(), 0)) {
-        S.message = L"No se pudo renombrar: " + ErrorText(GetLastError());
+        S.message = L"Couldn't rename: " + ErrorText(GetLastError());
         MessageBeep(MB_ICONWARNING);
         Invalidate();
         return;
     }
-    UndoRecordRename(Join(dir, viejo.c_str()), Join(dir, nuevo.c_str()));
-    if (follow) t.pendingSelect = Key(dir) == Key(t.path) ? nuevo : Join(dir, nuevo.c_str());
-    TreeFollow(t, Join(dir, viejo.c_str()), Join(dir, nuevo.c_str()));
+    UndoRecordRename(Join(dir, oldName.c_str()), Join(dir, newName.c_str()));
+    if (follow) t.pendingSelect = Key(dir) == Key(t.path) ? newName : Join(dir, newName.c_str());
+    TreeFollow(t, Join(dir, oldName.c_str()), Join(dir, newName.c_str()));
     Enqueue(dir, JobKind::Revalidate);
 }
 
-// Tab / Shift+Tab mientras se renombra: guarda y pasa a renombrar el siguiente / el anterior.
+// Tab / Shift+Tab while renaming: saves and moves on to renaming the next / previous item.
 void RenameStep(int delta) {
+    if (g_favRename >= 0) {
+        CommitRename();
+        return;
+    }
     Tab& t = T();
     int next = t.sel + delta;
     CommitRename(false);
@@ -2714,7 +2864,7 @@ LRESULT CALLBACK RenameProc(HWND h, UINT m, WPARAM w, LPARAM l, UINT_PTR, DWORD_
     return DefSubclassProc(h, m, w, l);
 }
 
-// Nombre libre en una carpeta: "base ext", "base (2) ext", ...
+// Free name in a folder: "base ext", "base (2) ext", ...
 std::wstring FreeName(const std::wstring& dir, const std::wstring& base, const std::wstring& ext) {
     std::wstring name = base + ext;
     for (int i = 2; GetFileAttributesW(ToExtendedPath(Join(dir, name.c_str())).c_str()) != INVALID_FILE_ATTRIBUTES; ++i)
@@ -2722,11 +2872,11 @@ std::wstring FreeName(const std::wstring& dir, const std::wstring& base, const s
     return name;
 }
 
-// Carpeta o archivo nuevo con nombre único, y renombrado inmediato.
+// New folder or file with a unique name, and immediate rename.
 void NewItem(bool folder) {
     Tab& t = T();
     if (t.path.empty() || !t.list || t.list->error) return;
-    std::wstring name = folder ? FreeName(t.path, L"Nueva carpeta", L"") : FreeName(t.path, L"Nuevo archivo", L".txt");
+    std::wstring name = folder ? FreeName(t.path, L"New folder", L"") : FreeName(t.path, L"New file", L".txt");
     std::wstring full = ToExtendedPath(Join(t.path, name.c_str()));
     bool ok;
     if (folder) {
@@ -2737,7 +2887,7 @@ void NewItem(bool folder) {
         if (ok) CloseHandle(h);
     }
     if (!ok) {
-        S.message = std::wstring(folder ? L"No se pudo crear la carpeta: " : L"No se pudo crear el archivo: ") +
+        S.message = std::wstring(folder ? L"Couldn't create the folder: " : L"Couldn't create the file: ") +
                     ErrorText(GetLastError());
         Invalidate();
         return;
@@ -2761,6 +2911,7 @@ RECT ScreenRect(const D2D1_RECT_F& r);
 #include "menu.inl"
 #include "dragdrop.inl"
 #include "boxselect.inl"
+#include "sidebar.inl"
 void RunCommand(Cmd cmd);
 void SetFoldersFirst(int mode);
 void ViewEditorOpen(int pane);
@@ -2775,14 +2926,14 @@ void PreviewReleaseBitmap() { g_pv.d2d.Reset(); }
 #include "install.inl"
 #include "testmode.inl"
 
-// ---------------------------------------------------------------- sesión (pestañas, ventana, paneles)
+// ---------------------------------------------------------------- session (tabs, window, panes)
 std::wstring SessionFile() {
     std::wstring f = FavFile();
-    return f.empty() ? L"" : f.substr(0, f.find_last_of(L'\\') + 1) + L"sesion.txt";
+    return f.empty() ? L"" : f.substr(0, f.find_last_of(L'\\') + 1) + L"session.txt";
 }
 std::wstring RecentsFile() {
     std::wstring f = FavFile();
-    return f.empty() ? L"" : f.substr(0, f.find_last_of(L'\\') + 1) + L"recientes.txt";
+    return f.empty() ? L"" : f.substr(0, f.find_last_of(L'\\') + 1) + L"recents.txt";
 }
 
 void SaveSession() {
@@ -2791,17 +2942,17 @@ void SaveSession() {
     WINDOWPLACEMENT wp{sizeof(wp)};
     GetWindowPlacement(g_hwnd, &wp);
     std::ofstream out(f, std::ios::binary);
-    out << "# Sesion de Jolt. Se reescribe sola; se puede borrar sin problema.\n";
+    out << "# Jolt session. Rewritten automatically; safe to delete.\n";
     const RECT& r = wp.rcNormalPosition;
-    out << "ventana=" << r.left << ',' << r.top << ',' << r.right << ',' << r.bottom << ','
+    out << "window=" << r.left << ',' << r.top << ',' << r.right << ',' << r.bottom << ','
         << (IsZoomed(g_hwnd) || g_showMaxOnce ? 1 : 0) << '\n';
     out << "sidebar=" << (g_sideVisible ? 1 : 0) << '\n';
-    out << "previa=" << (g_preview ? 1 : 0) << '\n';
-    out << "ver=" << (g_hideDirs ? 1 : 0) << ',' << (g_hideFiles ? 1 : 0) << ',' << (g_hideExt ? 1 : 0) << '\n';
-    out << "orden=" << g_sortBy.load() << ',' << (g_sortAsc.load() ? 1 : 0) << '\n';
-    out << "dividida=" << (g_split ? 1 : 0) << ',' << static_cast<int>(g_splitRatio * 1000) << '\n';
+    out << "preview=" << (g_preview ? 1 : 0) << '\n';
+    out << "show=" << (g_hideDirs ? 1 : 0) << ',' << (g_hideFiles ? 1 : 0) << ',' << (g_hideExt ? 1 : 0) << '\n';
+    out << "sort=" << g_sortBy.load() << ',' << (g_sortAsc.load() ? 1 : 0) << '\n';
+    out << "split=" << (g_split ? 1 : 0) << ',' << static_cast<int>(g_splitRatio * 1000) << '\n';
     g_paneCur[g_act] = g_cur;
-    out << "activa=" << g_cur << '\n';
+    out << "active=" << g_cur << '\n';
     out << "visible=" << g_paneCur[0] << ',' << g_paneCur[1] << '\n';
     for (auto& t : g_tabs) out << (t->pane ? "tab2=" : "tab=") << Utf8(t->path) << '\n';
     std::wstring rf = RecentsFile();
@@ -2809,10 +2960,11 @@ void SaveSession() {
         std::ofstream ro(rf, std::ios::binary);
         for (const std::wstring& p : g_recents) ro << Utf8(p) << '\n';
     }
+    HeatSave();
 }
 
 struct Session {
-    std::vector<std::pair<std::wstring, int>> tabs;  // ruta, panel
+    std::vector<std::pair<std::wstring, int>> tabs;  // path, pane
     int active = 0, visible[2] = {-1, -1};
     bool hasWindow = false;
     RECT rc{};
@@ -2835,27 +2987,27 @@ Session LoadSession() {
         std::string k = line.substr(0, eq), v = line.substr(eq + 1);
         if (k == "tab") s.tabs.push_back({Wide(v), 0});
         else if (k == "tab2") s.tabs.push_back({Wide(v), 1});
-        else if (k == "activa") s.active = atoi(v.c_str());
+        else if (k == "active") s.active = atoi(v.c_str());
         else if (k == "visible") sscanf_s(v.c_str(), "%d,%d", &s.visible[0], &s.visible[1]);
         else if (k == "sidebar") s.sidebar = v != "0";
-        else if (k == "previa") s.preview = v != "0";
-        else if (k == "ver") {
+        else if (k == "preview") s.preview = v != "0";
+        else if (k == "show") {
             int a = 0, b = 0, c = 0;
             sscanf_s(v.c_str(), "%d,%d,%d", &a, &b, &c);
             g_hideDirs = a != 0;
             g_hideFiles = b != 0 && !g_hideDirs;
             g_hideExt = c != 0;
         }
-        else if (k == "dividida") {
+        else if (k == "split") {
             int on = 0, ratio = 500;
             sscanf_s(v.c_str(), "%d,%d", &on, &ratio);
             s.split = on != 0;
             s.ratio = std::clamp(ratio / 1000.f, 0.15f, 0.85f);
-        } else if (k == "orden") {
+        } else if (k == "sort") {
             s.sortBy = atoi(v.c_str());
             size_t c = v.find(',');
             s.sortAsc = c == std::string::npos || v.substr(c + 1) != "0";
-        } else if (k == "ventana") {
+        } else if (k == "window") {
             int a[5] = {};
             if (sscanf_s(v.c_str(), "%d,%d,%d,%d,%d", &a[0], &a[1], &a[2], &a[3], &a[4]) == 5) {
                 s.rc = {a[0], a[1], a[2], a[3]};
@@ -2869,18 +3021,19 @@ Session LoadSession() {
         if (!line.empty() && line.back() == '\r') line.pop_back();
         if (!line.empty() && g_recents.size() < 300) g_recents.push_back(Wide(line));
     }
+    HeatLoad();
     return s;
 }
 
 constexpr UINT_PTR kTimerSession = 3;
-void TouchSession() { SetTimer(g_hwnd, kTimerSession, 2000, nullptr); }  // guarda un rato después del último cambio
+void TouchSession() { SetTimer(g_hwnd, kTimerSession, 2000, nullptr); }  // saves a while after the last change
 
-// Recarga todo lo que vive en %APPDATA%\Jolt (config, favoritos, menú) tras un cambio en disco.
+// Reloads everything in %APPDATA%\Jolt (config, favorites, menu) after a change on disk.
 constexpr UINT_PTR kTimerConfig = 4;
-// Firma (fecha y tamaño) de los archivos que el usuario edita; sesion.txt y recientes.txt no cuentan.
+// Signature (date and size) of the files the user edits; session.txt and recents.txt don't count.
 std::wstring ConfigSignature() {
     std::wstring sig;
-    for (const wchar_t* n : {L"config.txt", L"favoritos.txt", L"menu.txt", L"vistas.txt"}) {
+    for (const wchar_t* n : {L"config.txt", L"favorites.txt", L"menu.txt", L"views.txt"}) {
         WIN32_FILE_ATTRIBUTE_DATA d{};
         if (GetFileAttributesExW((ConfigDir() + L"\\" + n).c_str(), GetFileExInfoStandard, &d))
             sig += std::to_wstring(d.ftLastWriteTime.dwLowDateTime) + L"." + std::to_wstring(d.nFileSizeLow) + L";";
@@ -2896,13 +3049,14 @@ void BgApplyConfig();  // background.inl
 
 void ReloadConfig() {
     std::wstring sig = ConfigSignature();
-    if (sig == g_configSig) return;  // cambió otra cosa de la carpeta (la sesión, los recientes)
+    if (sig == g_configSig) return;  // something else in the folder changed (the session, the recents)
     g_configSig = sig;
     const UINT oldDpi = g_dpi;
     LoadConfig();
     ApplyDpi();
     if (g_dpi != oldDpi) ReleaseTarget();
     LoadFavs();
+    HeatRefresh();
     LoadMenuCfg();
     LoadViews();
     SyncGlobalSort();
@@ -2913,11 +3067,11 @@ void ReloadConfig() {
     BgApplyConfig();
     LayoutEdit();
     LayoutRename();
-    S.message = L"Configuración recargada";
+    S.message = L"Config reloaded";
     Invalidate();
 }
 
-// Zoom de toda la interfaz; se guarda en config.txt.
+// Zoom of the whole interface; saved in config.txt.
 void SetUiZoom(int px) {
     px = std::clamp(px, kUiPxMin, kUiPxMax);
     const int pct = (px * 100 + 6) / 12;
@@ -2930,43 +3084,43 @@ void SetUiZoom(int px) {
         EnsureVisible(T());
         LayoutEdit();
         LayoutRename();
-        ConfigSetValue(L"general", L"escala", std::to_wstring(pct));
+        ConfigSetValue(L"general", L"scale", std::to_wstring(pct));
         RefreshConfigSig();
     }
-    S.message = L"Interfaz al " + std::to_wstring(pct) + L" %";
+    S.message = L"Interface at " + std::to_wstring(pct) + L"%";
     Invalidate();
 }
 
-// Espacio entre filas; se guarda en config.txt.
+// Row spacing; saved in config.txt.
 void SetRowHeight(float h) {
     h = std::clamp(h, 18.f, 60.f);
     if (h != kRow) {
         const float ratio = h / kRow;
         kRow = h;
         for (auto& tp : g_tabs) {
-            tp->scroll *= ratio;  // que se siga viendo lo mismo
+            tp->scroll *= ratio;  // keep showing the same thing
             ClampScroll(*tp);
         }
         EnsureVisible(T());
         LayoutRename();
-        ConfigSetValue(L"general", L"fila", std::to_wstring(static_cast<int>(h)));
+        ConfigSetValue(L"general", L"row_height", std::to_wstring(static_cast<int>(h)));
         RefreshConfigSig();
     }
-    S.message = L"Filas de " + std::to_wstring(static_cast<int>(kRow)) + L" px";
+    S.message = L"Row height " + std::to_wstring(static_cast<int>(kRow)) + L" px";
     Invalidate();
 }
 
-// Pliega o despliega todos los grupos, solo por esta visita: la vista no cambia.
+// Collapses or expands all groups, for this visit only: the view doesn't change.
 void FoldAllGroups(Tab& t, bool folded) {
     if (!t.list || t.list->groups.empty()) {
-        S.message = L"Esta carpeta no tiene grupos";
+        S.message = L"This folder has no groups";
         Invalidate();
         return;
     }
     Place p = SavePlace(t);
     for (auto& g : t.list->groups) t.fold[g.second] = folded;
     Rebuild(t, &p, L"");
-    if (!folded) t.scroll = 0;  // al desplegar todo, desde arriba
+    if (!folded) t.scroll = 0;  // when expanding everything, start from the top
     EnsureVisible(t);
     Invalidate();
 }
@@ -2980,7 +3134,7 @@ void ToggleSidebar() {
     TouchSession();
 }
 
-// Revisa en segundo plano las carpetas visibles y sus subcarpetas desplegadas.
+// Checks the visible folders and their expanded subfolders in the background.
 void RevalidateVisible() {
     for (int p = 0; p < PaneCount(); ++p) {
         Tab& t = PT(p);
@@ -2990,34 +3144,34 @@ void RevalidateVisible() {
     }
 }
 
-// Ejecuta un comando de la tabla de atajos.
+// Runs a command from the shortcut table.
 void RunCommand(Cmd cmd) {
     Tab& t = T();
     switch (cmd) {
         case Cmd::None: break;
-        case Cmd::Subir:
+        case Cmd::Up:
             if (t.recursive) StopRecursive(t, true);
             else if (!Collapse()) GoUp();
             break;
-        case Cmd::Entrar:
+        case Cmd::Enter:
             if (t.sel >= 0 && t.sel < Count() && EntryAt(t, t.sel).isDir()) OpenSelected(false);
             break;
-        case Cmd::Abrir: OpenSelected(false); break;
-        case Cmd::AbrirPestana: OpenSelected(true); break;
-        case Cmd::Atras: GoBack(); break;
-        case Cmd::Adelante: GoForward(); break;
-        case Cmd::Renombrar: BeginRename(); break;
-        case Cmd::Eliminar: DeleteSelection(); break;
-        case Cmd::CarpetaNueva: NewItem(true); break;
-        case Cmd::ArchivoNuevo: NewItem(false); break;
-        case Cmd::Copiar:
+        case Cmd::Open: OpenSelected(false); break;
+        case Cmd::OpenTab: OpenSelected(true); break;
+        case Cmd::Back: GoBack(); break;
+        case Cmd::Forward: GoForward(); break;
+        case Cmd::Rename: BeginRename(); break;
+        case Cmd::Delete: DeleteSelection(); break;
+        case Cmd::NewFolder: NewItem(true); break;
+        case Cmd::NewFile: NewItem(false); break;
+        case Cmd::Copy:
             if (ClipboardSetFiles(SelectedFullPaths(t), false)) {
                 g_ignoreClipUpdate = true;
                 g_cutKeys.clear();
                 Invalidate();
             }
             break;
-        case Cmd::Cortar: {
+        case Cmd::Cut: {
             auto paths = SelectedFullPaths(t);
             if (ClipboardSetFiles(paths, true)) {
                 g_ignoreClipUpdate = true;
@@ -3027,29 +3181,29 @@ void RunCommand(Cmd cmd) {
             }
             break;
         }
-        case Cmd::Pegar:
+        case Cmd::Paste:
             if (ClipboardPaste(t.path) && !g_cutKeys.empty()) {
                 g_cutKeys.clear();
                 Invalidate();
             }
             break;
-        case Cmd::SeleccionarTodo:
+        case Cmd::SelectAll:
             SelectAll(t);
             Invalidate();
             break;
-        case Cmd::Favorito: ToggleFavorite(); break;
-        case Cmd::PestanaNueva: NewTab(t.path); break;
-        case Cmd::CerrarPestana: CloseTab(g_cur); break;
-        case Cmd::PestanaSiguiente: CycleTab(1); break;
-        case Cmd::PestanaAnterior: CycleTab(-1); break;
-        case Cmd::Ruta: ShowPathEdit(); break;
-        case Cmd::BarraLateral: ToggleSidebar(); break;
-        case Cmd::Recargar: RevalidateVisible(); break;
-        case Cmd::Tiempos:
+        case Cmd::Favorite: ToggleFavorite(); break;
+        case Cmd::NewTab: NewTab(t.path); break;
+        case Cmd::CloseTab: CloseTab(g_cur); break;
+        case Cmd::NextTab: CycleTab(1); break;
+        case Cmd::PreviousTab: CycleTab(-1); break;
+        case Cmd::Path: ShowPathEdit(); break;
+        case Cmd::Sidebar: ToggleSidebar(); break;
+        case Cmd::Reload: RevalidateVisible(); break;
+        case Cmd::Timings:
             S.show = !S.show;
             Invalidate();
             break;
-        case Cmd::MenuContextual: {
+        case Cmd::ContextMenu: {
             int r = Count() > 0 ? t.sel : -1;
             float y = r >= 0 ? ListTop() + r * kRow - t.scroll + kRow / 2 : ListTop() + 40;
             float x = PaneGeo(g_act).L + 60;
@@ -3057,79 +3211,79 @@ void RunCommand(Cmd cmd) {
             OpenShellMenu(POINT{sr.left, sr.top}, r);
             break;
         }
-        case Cmd::MenuApp: {
+        case Cmd::AppMenu: {
             RECT r = ScreenRect(D2D1::RectF(6, 7, 38, kTabH - 3));
             OpenAppMenu(r);
             break;
         }
-        case Cmd::Paleta: PaletteOpen(0); break;
-        case Cmd::IrA: PaletteOpen(1); break;
-        case Cmd::BuscarSubcarpetas:
+        case Cmd::Palette: PaletteOpen(0); break;
+        case Cmd::GoTo: PaletteOpen(1); break;
+        case Cmd::SearchSubfolders:
             if (t.recursive) StopRecursive(t, true);
             else StartRecursive(t);
             break;
-        case Cmd::Desplegar: SetExpanded(t, t.sel, !IsExpanded(t, t.sel)); break;
-        case Cmd::Plegar: Collapse(); break;
-        case Cmd::IrAUbicacion: GoToLocation(); break;
-        case Cmd::VistaPrevia: PreviewToggle(); break;
-        case Cmd::Dividir: SetSplit(!g_split); break;
-        case Cmd::OtroPanel: ActivatePane(1 - g_act); break;
-        case Cmd::CopiarAlOtro: TransferToOther(false); break;
-        case Cmd::MoverAlOtro: TransferToOther(true); break;
-        case Cmd::CopiarRuta: CopyPathText(); break;
-        case Cmd::Duplicar: Duplicate(); break;
-        case Cmd::Instalacion: InstPanelOpen(); break;
-        case Cmd::Salir: BgQuit(); break;
-        case Cmd::Deshacer: UndoStep(true); break;
-        case Cmd::Rehacer: UndoStep(false); break;
-        case Cmd::Propiedades: Properties(); break;
-        case Cmd::TamanoCarpetas: ComputeFolderSizes(); break;
-        case Cmd::VerCarpetas:
+        case Cmd::Expand: SetExpanded(t, t.sel, !IsExpanded(t, t.sel)); break;
+        case Cmd::Collapse: Collapse(); break;
+        case Cmd::GoToLocation: GoToLocation(); break;
+        case Cmd::Preview: PreviewToggle(); break;
+        case Cmd::Split: SetSplit(!g_split); break;
+        case Cmd::OtherPane: ActivatePane(1 - g_act); break;
+        case Cmd::CopyToOther: TransferToOther(false); break;
+        case Cmd::MoveToOther: TransferToOther(true); break;
+        case Cmd::CopyPath: CopyPathText(); break;
+        case Cmd::Duplicate: Duplicate(); break;
+        case Cmd::Install: InstPanelOpen(); break;
+        case Cmd::Quit: BgQuit(); break;
+        case Cmd::Undo: UndoStep(true); break;
+        case Cmd::Redo: UndoStep(false); break;
+        case Cmd::Properties: Properties(); break;
+        case Cmd::FolderSizes: ComputeFolderSizes(); break;
+        case Cmd::ShowFolders:
             g_hideDirs = !g_hideDirs;
-            if (g_hideDirs) g_hideFiles = false;  // nunca las dos cosas a la vez: la lista quedaría vacía
-            S.message = g_hideDirs ? L"Sin carpetas: solo archivos" : L"Carpetas visibles";
+            if (g_hideDirs) g_hideFiles = false;  // never both at once: the list would be empty
+            S.message = g_hideDirs ? L"No folders: files only" : L"Folders visible";
             ResortAll();
             break;
-        case Cmd::VerArchivos:
+        case Cmd::ShowFiles:
             g_hideFiles = !g_hideFiles;
             if (g_hideFiles) g_hideDirs = false;
-            S.message = g_hideFiles ? L"Sin archivos: solo carpetas" : L"Archivos visibles";
+            S.message = g_hideFiles ? L"No files: folders only" : L"Files visible";
             ResortAll();
             break;
-        case Cmd::VerOcultos:
+        case Cmd::ShowHidden:
             g_cfg.showHidden = !g_cfg.showHidden;
-            ConfigSetValue(L"general", L"ocultos", g_cfg.showHidden ? L"si" : L"no");
+            ConfigSetValue(L"general", L"show_hidden", g_cfg.showHidden ? L"yes" : L"no");
             RefreshConfigSig();
-            S.message = g_cfg.showHidden ? L"Mostrando los archivos ocultos" : L"Escondiendo los archivos ocultos";
+            S.message = g_cfg.showHidden ? L"Showing hidden files" : L"Hiding hidden files";
             ResortAll();
             break;
-        case Cmd::VerExtensiones:
+        case Cmd::ShowExtensions:
             g_hideExt = !g_hideExt;
-            S.message = g_hideExt ? L"Extensiones ocultas" : L"Extensiones visibles";
+            S.message = g_hideExt ? L"Extensions hidden" : L"Extensions visible";
             TouchSession();
             Invalidate();
             break;
-        case Cmd::ReabrirPestana: ReopenTab(); break;
-        case Cmd::CerrarOtras: CloseOtherTabs(); break;
+        case Cmd::ReopenTab: ReopenTab(); break;
+        case Cmd::CloseOthers: CloseOtherTabs(); break;
         case Cmd::Terminal: OpenTerminal(); break;
-        case Cmd::AbrirExplorador: OpenInExplorer(); break;
-        case Cmd::UbicacionReal: GoToRealLocation(); break;
-        case Cmd::PlegarGrupos: FoldAllGroups(t, true); break;
-        case Cmd::DesplegarGrupos: FoldAllGroups(t, false); break;
-        case Cmd::AgruparDia: SetGroup(GbDay); break;
-        case Cmd::AgruparTipo: SetGroup(GbType); break;
-        case Cmd::SinGrupos: SetGroup(-1); break;
-        case Cmd::OrdenarTipo: SetSortField(SfExt, true); break;
-        case Cmd::AumentarInterfaz: SetUiZoom(g_uiPx + 1); break;
-        case Cmd::ReducirInterfaz: SetUiZoom(g_uiPx - 1); break;
-        case Cmd::RestablecerInterfaz: SetUiZoom(12); break;
-        case Cmd::FilaMas: SetRowHeight(kRow + 1); break;
-        case Cmd::FilaMenos: SetRowHeight(kRow - 1); break;
-        case Cmd::VaciarPapelera: EmptyRecycleBin(); break;
+        case Cmd::OpenExplorer: OpenInExplorer(); break;
+        case Cmd::RealLocation: GoToRealLocation(); break;
+        case Cmd::CollapseGroups: FoldAllGroups(t, true); break;
+        case Cmd::ExpandGroups: FoldAllGroups(t, false); break;
+        case Cmd::GroupByDay: SetGroup(GbDay); break;
+        case Cmd::GroupByType: SetGroup(GbType); break;
+        case Cmd::NoGroups: SetGroup(-1); break;
+        case Cmd::SortByType: SetSortField(SfExt, true); break;
+        case Cmd::ZoomIn: SetUiZoom(g_uiPx + 1); break;
+        case Cmd::ZoomOut: SetUiZoom(g_uiPx - 1); break;
+        case Cmd::ZoomReset: SetUiZoom(12); break;
+        case Cmd::RowsTaller: SetRowHeight(kRow + 1); break;
+        case Cmd::RowsShorter: SetRowHeight(kRow - 1); break;
+        case Cmd::EmptyRecycleBin: EmptyRecycleBin(); break;
     }
 }
 
-// ---------------------------------------------------------------- ventana
+// ---------------------------------------------------------------- window
 float DipX(LPARAM l) { return GET_X_LPARAM(l) * 96.f / g_dpi; }
 
 RECT ScreenRect(const D2D1_RECT_F& r) {
@@ -3141,8 +3295,8 @@ RECT ScreenRect(const D2D1_RECT_F& r) {
 }
 float DipY(LPARAM l) { return GET_Y_LPARAM(l) * 96.f / g_dpi; }
 
-// Fila bajo el punto en un panel (sin importar cuál está activo), o -1.
-// Fila bajo el punto, incluyendo los títulos de grupo, o -1.
+// Row under the point in a pane (regardless of which is active), or -1.
+// Row under the point, including group titles, or -1.
 int RawRowIn(int pane, float x, float y) {
     if (pane < 0 || pane >= PaneCount()) return -1;
     PaneX g = PaneGeo(pane);
@@ -3160,7 +3314,7 @@ int HeaderRowIn(int pane, float x, float y) {
     return r >= 0 && IsHeader(PT(pane), r) ? r : -1;
 }
 
-// Click en el título de un grupo: lo pliega o lo despliega.
+// Click on a group title: collapses or expands it.
 void ToggleGroup(Tab& t, int row) {
     const Row& r = t.rows[row];
     const Listing* l = r.l;
@@ -3170,9 +3324,9 @@ void ToggleGroup(Tab& t, int row) {
     Place p = SavePlace(t);
     const float scroll = t.scroll;
     Rebuild(t, &p, L"");
-    t.scroll = scroll;  // el tÃ­tulo queda donde estaba (no se sigue al cursor)
+    t.scroll = scroll;  // the title stays where it was (the cursor isn't followed)
     if (opening) {
-        // que se vea el grupo entero, empezando por su tÃ­tulo
+        // show the whole group, starting from its title
         int h = -1, e = RowCount(t);
         for (int i = 0; i < RowCount(t); ++i)
             if (t.rows[i].l == l && t.rows[i].e == -1 - gi) {
@@ -3193,17 +3347,17 @@ void ToggleGroup(Tab& t, int row) {
     ClampScroll(t);
     Invalidate();
 }
-// Fila bajo el punto en el panel activo.
+// Row under the point in the active pane.
 int HitRow(float x, float y) { return HitRowIn(g_act, x, y); }
 
 Hit HitAt(float x, float y) {
-    // los últimos agregados (más específicos) tienen prioridad
+    // the last ones added (most specific) take priority
     for (auto it = g_hits.rbegin(); it != g_hits.rend(); ++it)
         if (x >= it->r.left && x < it->r.right && y >= it->r.top && y < it->r.bottom) return *it;
     return {{}, HitKind::None, -1};
 }
 
-// ¿El punto está sobre el chevrón (desplegar) de una fila de carpeta?
+// Is the point over the chevron (expand) of a folder row?
 bool OnChevron(int row, float x) {
     Tab& t = T();
     if (row < 0 || row >= Count() || FlatView(t) || !EntryAt(t, row).isDir()) return false;
@@ -3212,11 +3366,11 @@ bool OnChevron(int row, float x) {
     return x >= cx - 4 && x < cx + kChev + 2;
 }
 
-bool g_divDrag = false;  // arrastrando el divisor de la vista dividida
-bool g_eatSysChar = false;  // la tecla con Alt ya se usó: su WM_SYSCHAR no debe sonar
-int g_tabWheelAcc = 0;      // Ctrl+rueda en ruedas de alta resolución: se acumula hasta completar un paso
+bool g_divDrag = false;  // dragging the split view divider
+bool g_eatSysChar = false;  // the Alt key combo was already used: its WM_SYSCHAR must not beep
+int g_tabWheelAcc = 0;      // Ctrl+wheel on high-resolution wheels: accumulates until a full step
 
-// Ancho nuevo de una columna (1 = fecha, 2 = tamaño), siempre dejándole lugar al nombre.
+// New width of a column (1 = date, 2 = size), always leaving room for the name.
 void SetColWidth(int which, float w, int pane) {
     const PaneX g = PaneGeo(pane);
     const float room = g.R - g.L - 350;
@@ -3227,7 +3381,7 @@ void SetColWidth(int which, float w, int pane) {
 }
 
 void SaveColWidth(int which) {
-    ConfigSetValue(L"columnas", which == 1 ? L"ancho_modificado" : L"ancho_tamano",
+    ConfigSetValue(L"columns", which == 1 ? L"modified_width" : L"size_width",
                    std::to_wstring(std::lround(which == 1 ? kDateW : kSizeW)));
     RefreshConfigSig();
 }
@@ -3240,10 +3394,30 @@ void ColDragEnd() {
     Invalidate();
 }
 
-// Doble click en el borde: el ancho justo para lo que hay en la carpeta.
+void SetPreviewW(float w) {
+    if (!g_preview) return;
+    g_previewW = std::round(w);
+    g_previewW = PreviewW();  // what is saved is the width really shown
+    LayoutEdit();
+    Invalidate();
+}
+
+void SavePreviewW() {
+    ConfigSetValue(L"general", L"preview_width", std::to_wstring(std::lround(g_previewW)));
+    RefreshConfigSig();
+}
+
+void PreviewDragEnd() {
+    if (!g_pvDrag) return;
+    g_pvDrag = false;
+    SavePreviewW();
+    Invalidate();
+}
+
+// Double click on the edge: exactly the width needed for the folder's contents.
 void FitColumn(int which, int pane) {
     Tab& t = PT(pane);
-    float w = MeasureW(which == 1 ? L"Modificado" : L"Tamaño", g_fmtRight.Get()) + 16;
+    float w = MeasureW(which == 1 ? L"Modified" : L"Size", g_fmtRight.Get()) + 16;
     wchar_t buf[64];
     const int n = std::min(RowCount(t), 3000);
     for (int i = 0; i < n; ++i) {
@@ -3348,13 +3522,13 @@ void OnClick(float x, float y, bool middle) {
         MoveCursor(r, KeyDown(VK_SHIFT), KeyDown(VK_CONTROL));
         if (middle) OpenSelected(true);
     } else if (y >= ListTop() && y < ListBottom() && PaneAt(x, y) == g_act && Count() > 0) {
-        SelectOnly(T(), T().sel);  // click en el vacío: queda solo el cursor
+        SelectOnly(T(), T().sel);  // click on empty space: only the cursor remains
         std::fill(T().selMask.begin(), T().selMask.end(), uint8_t{0});
         Invalidate();
     }
 }
 
-// Grosor del marco invisible que Windows deja alrededor de una ventana sin barra de título.
+// Thickness of the invisible frame Windows leaves around a window without a title bar.
 void FrameMetrics(HWND hwnd, int& fx, int& fy) {
     UINT dpi = GetDpiForWindow(hwnd);
     int pad = GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
@@ -3365,7 +3539,7 @@ void FrameMetrics(HWND hwnd, int& fx, int& fy) {
 bool IsCapButton(WPARAM ht) { return ht == HTMINBUTTON || ht == HTMAXBUTTON || ht == HTCLOSE; }
 
 LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
-    // con el panel de instalación abierto, nada llega a lo de atrás
+    // with the install panel open, nothing reaches what's behind it
     if (g_inst.open) {
         if (msg == WM_KEYDOWN) {
             if (wp == VK_ESCAPE) InstPanelClose();
@@ -3383,7 +3557,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return 0;
         }
     }
-    // con la paleta abierta, el teclado es de la paleta
+    // with the palette open, the keyboard belongs to the palette
     if (g_pal.open) {
         if (msg == WM_KEYDOWN || (msg == WM_SYSKEYDOWN && (g_pal.capture >= 0 || wp != VK_F4))) {
             PaletteKey(wp);
@@ -3411,7 +3585,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         }
         if (msg == WM_LBUTTONDBLCLK) return 0;
     }
-    // con un menú emergente abierto, el teclado es del menú
+    // with a popup menu open, the keyboard belongs to the menu
     if (g_popup.open()) {
         if (msg == WM_KEYDOWN) {
             PopupKey(wp);
@@ -3419,7 +3593,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         }
         if (msg == WM_CHAR || msg == WM_SYSKEYDOWN) return 0;
     }
-    // con el editor de vistas abierto, el mouse y el teclado de la lista son del editor
+    // with the view editor open, the list's mouse and keyboard belong to the editor
     if (g_ve.open) {
         if (msg == WM_KEYDOWN) {
             if (wp == VK_ESCAPE) ViewEditorClose();
@@ -3452,7 +3626,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         }
     }
     switch (msg) {
-        // --- barra de título propia: el área cliente llega hasta arriba de todo
+        // --- custom title bar: the client area reaches all the way to the top
         case WM_NCCALCSIZE: {
             if (!wp) break;
             RECT& r = reinterpret_cast<NCCALCSIZE_PARAMS*>(lp)->rgrc[0];
@@ -3461,7 +3635,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             r.left += fx;
             r.right -= fx;
             r.bottom -= fy;
-            if (IsZoomed(hwnd)) r.top += fy;  // maximizada, el marco queda fuera de la pantalla
+            if (IsZoomed(hwnd)) r.top += fy;  // when maximized, the frame ends up off screen
             return 0;
         }
         case WM_NCHITTEST: {
@@ -3504,7 +3678,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case WM_NCLBUTTONDOWN:
             if (IsCapButton(wp)) {
                 g_capPressed = static_cast<int>(wp);
-                return 0;  // que Windows no dibuje su propio botón
+                return 0;  // so Windows doesn't draw its own button
             }
             break;
         case WM_NCLBUTTONUP: {
@@ -3544,7 +3718,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return 1;
         case WM_SIZE:
             if (g_hwndRt) g_hwndRt->Resize(D2D1::SizeU(LOWORD(lp), HIWORD(lp)));
-            if (g_test) ReleaseTarget();  // el bitmap se rehace con el tamaño nuevo
+            if (g_test) ReleaseTarget();  // the bitmap is rebuilt at the new size
             for (auto& t : g_tabs) ClampScroll(*t);
             LayoutEdit();
             LayoutRename();
@@ -3574,13 +3748,13 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             auto* hold = reinterpret_cast<std::shared_ptr<Job>*>(lp);
             ApplyJob(*hold);
             delete hold;
-            LayoutRename();  // la lista pudo moverse debajo del cuadro de renombrar
+            LayoutRename();  // the list may have moved under the rename box
             return 0;
         }
         case WM_APP_DIRSIZE:
             g_dsNotify = false;
             if (g_dsFinished.exchange(false) && static_cast<SortBy>(g_sortBy.load()) == SortBy::Size) ResortAll();
-            if (!g_dsBusy && S.message.rfind(L"Calculando el tamaño", 0) == 0) S.message = L"Tamaños calculados";
+            if (!g_dsBusy && S.message.rfind(L"Calculating the size", 0) == 0) S.message = L"Sizes calculated";
             Invalidate();
             return 0;
         case WM_APP_PREVIEW:
@@ -3600,7 +3774,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (r->gen != g_ixGen) return 0;
             g_ixRes = std::move(*r);
             if (g_pal.open && g_pal.mode == 1) {
-                // conservar lo elegido si ya se había movido
+                // keep the selection if it had already moved
                 std::wstring keep = g_pal.sel > 0 && g_pal.sel < static_cast<int>(g_pal.hits.size()) ? g_pal.all[g_pal.hits[g_pal.sel].first].path : L"\x01";
                 PaletteFilter();
                 for (int i = 0; i < static_cast<int>(g_pal.hits.size()); ++i)
@@ -3611,7 +3785,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return 0;
         }
         case WM_APP_CHANGED:
-            SetTimer(hwnd, kTimerRevalidate, 80, nullptr);  // agrupa ráfagas de cambios
+            SetTimer(hwnd, kTimerRevalidate, 80, nullptr);  // batches bursts of changes
             return 0;
         case WM_APP_ICON:
             g_iconDirty = false;
@@ -3622,24 +3796,26 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (wp == kTimerRevalidate) RevalidateVisible();
             if (wp == kTimerPreview) PreviewLoad();
             if (wp == kTimerTest) {
-                if (g_testBlocking) SetTimer(hwnd, kTimerTest, 30, nullptr);  // un paso todavía está esperando
+                if (g_testBlocking) SetTimer(hwnd, kTimerTest, 30, nullptr);  // a step is still waiting
                 else TestRunStep();
             }
             if (wp == kTimerTestKill) {
-                TestLog(L"se cortó por tiempo");
+                TestLog(L"timed out");
                 ExitProcess(1);
             }
             if (wp == kTimerPrefetch) Prefetch();
             if (wp == kTimerBox) BoxTick();
+            if (wp == kTimerHeat) HeatCommit();
+            if (wp == kTimerDisk) DiskTick();
             if (wp == kTimerTabSlide) Invalidate();
             if (wp == kTimerSession) SaveSession();
             if (wp == kTimerConfig) ReloadConfig();
             return 0;
         case WM_APP_CONFIG:
-            SetTimer(hwnd, kTimerConfig, 250, nullptr);  // los editores guardan en varias escrituras
+            SetTimer(hwnd, kTimerConfig, 250, nullptr);  // editors save in several writes
             return 0;
         case WM_CLIPBOARDUPDATE:
-            // si el portapapeles cambió desde afuera, lo "cortado" deja de estarlo
+            // if the clipboard changed from outside, what was "cut" no longer is
             if (g_ignoreClipUpdate) g_ignoreClipUpdate = false;
             else if (!g_cutKeys.empty()) {
                 g_cutKeys.clear();
@@ -3648,13 +3824,17 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return 0;
         case WM_KEYDOWN:
         case WM_SYSKEYDOWN: {
-            if (g_box.active) {  // mientras se dibuja el recuadro, el teclado no cambia la lista
+            if (g_sideDrag.press) {
+                if (wp == VK_ESCAPE) SideDragCancel();
+                return 0;
+            }
+            if (g_box.active) {  // while the box is being drawn, the keyboard doesn't change the list
                 if (wp == VK_ESCAPE) BoxCancel();
                 return 0;
             }
             const bool ctrl = KeyDown(VK_CONTROL), shift = KeyDown(VK_SHIFT),
                        alt = KeyDown(VK_MENU);
-            // con filtro activo, Retroceso y Esc son del filtro (y Espacio se escribe)
+            // with an active filter, Backspace and Esc belong to the filter (and Space is typed)
             if (!T().filter.empty() && msg == WM_KEYDOWN && !ctrl && !alt) {
                 if (wp == VK_BACK) {
                     FilterBackspace();
@@ -3666,13 +3846,13 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 }
                 if (wp == VK_SPACE && !shift) return 0;
             }
-            // en la búsqueda en subcarpetas sin texto, Esc y Retroceso vuelven a la carpeta
+            // in the subfolder search with no text, Esc and Backspace return to the folder
             if (T().recursive && T().filter.empty() && msg == WM_KEYDOWN && !ctrl && !alt &&
                 (wp == VK_ESCAPE || wp == VK_BACK)) {
                 StopRecursive(T(), true);
                 return 0;
             }
-            // primero los atajos configurables (config.txt)
+            // configurable shortcuts first (config.txt)
             const UINT mods = (ctrl ? ModCtrl : 0) | (shift ? ModShift : 0) | (alt ? ModAlt : 0);
             Cmd cmd = FindCommand(mods, static_cast<UINT>(wp));
             if (cmd != Cmd::None) {
@@ -3680,7 +3860,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 RunCommand(cmd);
                 return 0;
             }
-            // Alt+1..8: esa pestaña del panel; Alt+9: la última
+            // Alt+1..8: that tab of the pane; Alt+9: the last one
             if (alt && !ctrl && !shift && wp >= '1' && wp <= '9') {
                 const std::vector<int> idx = ActiveTabs();
                 const size_t i = wp == '9' ? idx.size() - 1 : static_cast<size_t>(wp - '1');
@@ -3688,8 +3868,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 g_eatSysChar = true;
                 return 0;
             }
-            if (msg == WM_SYSKEYDOWN) break;  // Alt+F4, Alt+Espacio, etc. siguen siendo del sistema
-            // teclas fijas: cursor y selección
+            if (msg == WM_SYSKEYDOWN) break;  // Alt+F4, Alt+Space, etc. still belong to the system
+            // fixed keys: cursor and selection
             const int page = std::max(1, static_cast<int>(ListHeight() / kRow) - 1);
             switch (wp) {
                 case VK_UP: MoveCursor(T().sel - 1, shift); break;
@@ -3700,7 +3880,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 case VK_END: MoveCursor(Count() - 1, shift); break;
                 case VK_SPACE: if (ctrl) MoveCursor(T().sel, false, true); break;
                 case VK_ESCAPE:
-                    // (sin buffer de tipeo)
+                    // (no typing buffer)
                     S.message.clear();
                     g_cutKeys.clear();
                     if (Count() > 0) SelectOnly(T(), T().sel);
@@ -3722,7 +3902,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             break;
         case WM_CHAR:
             if (wp >= 32 && !KeyDown(VK_CONTROL) && !KeyDown(VK_MENU) && T().list && !T().list->error) {
-                // una letra sin modificadores que sea un atajo configurado no filtra
+                // a letter without modifiers that is a configured shortcut doesn't filter
                 SHORT vks = VkKeyScanW(static_cast<wchar_t>(wp));
                 UINT vk = LOBYTE(vks), kmods = (HIBYTE(vks) & 1) ? ModShift : 0;
                 bool spaceInFilter = wp == L' ' && !T().filter.empty();
@@ -3732,7 +3912,16 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case WM_LBUTTONDOWN: {
             SetFocus(hwnd);
             float x = DipX(lp), y = DipY(lp);
+            if (HitAt(x, y).kind == HitKind::PreviewEdge) {
+                g_pvDrag = true;
+                g_pvDragX = x;
+                g_pvDragW = PreviewW();
+                SetCapture(hwnd);
+                Invalidate();
+                return 0;
+            }
             if (HitAt(x, y).kind != HitKind::Divider) ActivatePane(PaneAt(x, y));
+            if (SideDragStart(HitAt(x, y), x, y)) return 0;
             int r = HitRow(x, y);
             if (r >= 0 && OnChevron(r, x)) {
                 OnClick(x, y, false);
@@ -3744,14 +3933,14 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             const bool box = BoxCanStart(r, x, y, mods);
             if (box) g_boxBefore = T().selMask;
             if (r >= 0 && !mods && IsSel(T(), r)) {
-                // ya estaba seleccionado: no se toca la selección hasta soltar (puede ser un arrastre)
+                // already selected: the selection isn't touched until release (it may be a drag)
                 T().sel = T().anchor = r;
                 Invalidate();
                 PressBegin(r, pt, true);
                 g_press.box = box;
                 return 0;
             }
-            if (!(r < 0 && mods && box)) OnClick(x, y, false);  // Ctrl o Shift en el vacío no pierden la selección
+            if (!(r < 0 && mods && box)) OnClick(x, y, false);  // Ctrl or Shift on empty space don't lose the selection
             if (box || (r >= 0 && !mods)) {
                 PressBegin(r, pt, false);
                 g_press.box = box;
@@ -3759,8 +3948,18 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return 0;
         }
         case WM_LBUTTONUP:
+            if (g_sideDrag.press) {
+                SideDragMove(DipX(lp), DipY(lp));
+                SideDragEnd();
+                return 0;
+            }
             if (g_colDrag) {
                 ColDragEnd();
+                ReleaseCapture();
+                return 0;
+            }
+            if (g_pvDrag) {
+                PreviewDragEnd();
                 ReleaseCapture();
                 return 0;
             }
@@ -3778,9 +3977,11 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return 0;
         case WM_CAPTURECHANGED:
             g_press = {};
+            g_sideDrag = {};
             BoxEnd();
             g_divDrag = false;
             ColDragEnd();
+            PreviewDragEnd();
             return 0;
         case WM_MBUTTONDOWN:
             SetFocus(hwnd);
@@ -3791,17 +3992,17 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             SetFocus(hwnd);
             ActivatePane(PaneAt(DipX(lp), DipY(lp)));
             int r = HitRow(DipX(lp), DipY(lp));
-            if (r >= 0 && !IsSel(T(), r)) SetSel(r);  // sobre algo ya seleccionado, el menú actúa sobre todo
+            if (r >= 0 && !IsSel(T(), r)) SetSel(r);  // over something already selected, the menu acts on all of it
             else if (r >= 0) { T().sel = r; Invalidate(); }
             return 0;
         }
         case WM_RBUTTONUP: {
             float x = DipX(lp), y = DipY(lp);
-            if (PaneAt(x, y) == g_act && y >= ListTop() && y < ListBottom()) {
-                POINT pt{GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
-                ClientToScreen(hwnd, &pt);
-                OpenShellMenu(pt, HitRow(x, y));
-            }
+            POINT pt{GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
+            ClientToScreen(hwnd, &pt);
+            const Hit side = HitAt(x, y);
+            if (side.kind == HitKind::Side) OpenSideMenu(side.idx, pt);
+            else if (PaneAt(x, y) == g_act && y >= ListTop() && y < ListBottom()) OpenShellMenu(pt, HitRow(x, y));
             return 0;
         }
         case WM_LBUTTONDBLCLK: {
@@ -3809,6 +4010,11 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             Hit dh = HitAt(DipX(lp), DipY(lp));
             if (dh.kind == HitKind::ColEdge) {
                 FitColumn(dh.idx % 2 + 1, dh.idx / 2);
+                return 0;
+            }
+            if (dh.kind == HitKind::PreviewEdge) {
+                SetPreviewW(kPreviewDefaultW);
+                SavePreviewW();
                 return 0;
             }
             if (dh.kind == HitKind::Divider) {
@@ -3819,12 +4025,12 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 return 0;
             }
             if (dh.kind != HitKind::None) {
-                OnClick(DipX(lp), DipY(lp), false);  // dos clicks seguidos en un botón = dos acciones
+                OnClick(DipX(lp), DipY(lp), false);  // two clicks in a row on a button = two actions
                 return 0;
             }
             int r = HitRow(DipX(lp), DipY(lp));
-            // el segundo click rápido llega como doble click: en un título de grupo o un chevrón cuenta
-            // como otro click normal (plegar y desplegar al instante, sin esperar)
+            // the second quick click arrives as a double click: on a group title or a chevron it counts
+            // as another normal click (collapse and expand instantly, without waiting)
             if (HeaderRowIn(g_act, DipX(lp), DipY(lp)) >= 0 || (r >= 0 && OnChevron(r, DipX(lp)))) {
                 OnClick(DipX(lp), DipY(lp), false);
                 return 0;
@@ -3844,15 +4050,15 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             ScreenToClient(hwnd, &pt);
             const float x = pt.x * 96.f / g_dpi, y = pt.y * 96.f / g_dpi;
             const int delta = GET_WHEEL_DELTA_WPARAM(wp);
-            // Ctrl+rueda: pestañas del panel que está debajo (arriba = siguiente, abajo = anterior).
-            // Ctrl viene en el propio mensaje de la rueda, así que no depende del foco.
+            // Ctrl+wheel: tabs of the pane underneath (up = next, down = previous).
+            // Ctrl comes in the wheel message itself, so it doesn't depend on focus.
             if ((GET_KEYSTATE_WPARAM(wp) & MK_CONTROL) || (g_test && KeyDown(VK_CONTROL))) {
                 if ((g_tabWheelAcc > 0) != (delta > 0)) g_tabWheelAcc = 0;
                 g_tabWheelAcc += delta;
                 const int steps = g_tabWheelAcc / WHEEL_DELTA;
                 g_tabWheelAcc -= steps * WHEEL_DELTA;
                 if (steps) ActivatePane(PaneAt(x, y));
-                // con Shift, en vez de cambiar de pestaña, mueve la activa
+                // with Shift, instead of switching tabs, moves the active one
                 const bool moveTab = (GET_KEYSTATE_WPARAM(wp) & MK_SHIFT) || (g_test && KeyDown(VK_SHIFT));
                 for (int i = 0; i < std::abs(steps); ++i) {
                     if (moveTab) MoveTab(steps > 0 ? 1 : -1);
@@ -3866,7 +4072,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             }
             int pane = PaneAt(x, y);
             if (pane < 0) return 0;
-            Tab& wt = PT(pane);  // la rueda mueve el panel que está debajo, sin activarlo
+            Tab& wt = PT(pane);  // the wheel scrolls the pane underneath, without activating it
             wt.scroll -= delta / 120.f * 3 * kRow;
             ClampScroll(wt);
             LayoutRename();
@@ -3881,9 +4087,18 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         }
         case WM_MOUSEMOVE: {
             float x = DipX(lp), y = DipY(lp);
+            if (g_sideDrag.press) {
+                if (wp & MK_LBUTTON) SideDragMove(x, y);
+                else SideDragCancel();
+                return 0;
+            }
             if (g_colDrag) {
-                // las columnas están ancladas a la derecha: el borde izquierdo sigue al mouse
+                // columns are anchored to the right: the left edge follows the mouse
                 SetColWidth(g_colDrag, g_colDragW + g_colDragX - x, g_colDragPane);
+                return 0;
+            }
+            if (g_pvDrag) {
+                SetPreviewW(g_pvDragW + g_pvDragX - x);  // anchored to the right: the edge follows the mouse
                 return 0;
             }
             if (g_divDrag) {
@@ -3904,7 +4119,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                     PressEnd(false);
                 } else if (PressMoved(pt) && g_press.box) {
                     const POINT pressed = g_press.pt;
-                    g_press = {};  // la captura sigue: ahora es del recuadro
+                    g_press = {};  // capture continues: it now belongs to the box
                     BoxBegin(pressed, x, y);
                     return 0;
                 } else if (PressMoved(pt)) {
@@ -3931,8 +4146,9 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 g_hover = h;
                 Invalidate();
             }
+            // In test mode the real mouse isn't over the window: it would report leaving right away.
             TRACKMOUSEEVENT tme{sizeof(tme), TME_LEAVE, hwnd, 0};
-            TrackMouseEvent(&tme);
+            if (!g_test) TrackMouseEvent(&tme);
             return 0;
         }
         case WM_MOUSELEAVE:
@@ -3948,7 +4164,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 GetCursorPos(&pt);
                 ScreenToClient(hwnd, &pt);
                 Hit h = HitAt(pt.x * 96.f / g_dpi, pt.y * 96.f / g_dpi);
-                const bool sizeWE = h.kind == HitKind::Divider || h.kind == HitKind::ColEdge;
+                const bool sizeWE = h.kind == HitKind::Divider || h.kind == HitKind::ColEdge || h.kind == HitKind::PreviewEdge;
                 bool link = h.kind != HitKind::None && h.kind != HitKind::PathEmpty && !sizeWE;
                 if (h.kind == HitKind::None && HeaderRowIn(std::max(0, PaneAt(pt.x * 96.f / g_dpi, pt.y * 96.f / g_dpi)), pt.x * 96.f / g_dpi, pt.y * 96.f / g_dpi) >= 0)
                     link = true;
@@ -3967,12 +4183,12 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         }
         case WM_CLOSE:
             if (g_cfg.background && !g_quitting) {
-                BgHide();  // la X esconde: ☰ → Salir cierra de verdad
+                BgHide();  // the X hides: ☰ → Quit really closes
                 return 0;
             }
-            if (g_test) break;  // las pruebas no guardan nada
+            if (g_test) break;  // tests don't save anything
             SaveSession();
-            if (g_dsAny) SaveDirSizes();  // lo ya calculado, aunque quede algo a medias
+            if (g_dsAny) SaveDirSizes();  // what's already calculated, even if something is half done
             break;
         case WM_QUERYENDSESSION:
             return TRUE;
@@ -4011,7 +4227,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             PostQuitMessage(0);
             return 0;
     }
-    if (g_taskbarCreated && msg == g_taskbarCreated) {  // el Explorador se reinició: la bandeja se perdió
+    if (g_taskbarCreated && msg == g_taskbarCreated) {  // File Explorer restarted: the tray was lost
         g_trayOn = false;
         BgApplyConfig();
         return 0;
@@ -4019,7 +4235,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     return DefWindowProcW(hwnd, msg, wp, lp);
 }
 
-// La carpeta de la línea de comandos. En una unidad llega como "C:\\" y Windows lee esa barra como comilla escapada.
+// The folder from the command line. For a drive it arrives as "C:\\" and Windows reads that backslash as an escaped quote.
 std::wstring ArgPath() {
     if (g_test) return L"";
     int argc = 0;
@@ -4027,7 +4243,7 @@ std::wstring ArgPath() {
     std::wstring p;
     for (int i = 1; argv && i < argc && p.empty(); ++i) {
         std::wstring a = argv[i];
-        if (a.rfind(L"--", 0) == 0 || a.rfind(L"::", 0) == 0) continue;  // "::{...}": carpeta virtual del shell, sin ruta
+        if (a.rfind(L"--", 0) == 0 || a.rfind(L"::", 0) == 0) continue;  // "::{...}": virtual shell folder, no path
         while (!a.empty() && a.back() == L'"') a.pop_back();
         if (a.size() == 2 && a[1] == L':') a += L'\\';
         wchar_t full[4096];
@@ -4046,7 +4262,7 @@ bool HasArg(const wchar_t* flag) {
     return found;
 }
 
-// Carpeta de la primera pestaña cuando no hay nada guardado: la del usuario.
+// Folder of the first tab when nothing is saved: the user's.
 std::wstring DefaultPath() {
     wchar_t* p = nullptr;
     std::wstring r = L"C:\\";
@@ -4055,7 +4271,7 @@ std::wstring DefaultPath() {
     return r;
 }
 
-// ¿Existe y es una carpeta?
+// Does it exist and is it a folder?
 bool FolderExists(const std::wstring& p) {
     DWORD a = GetFileAttributesW(ToExtendedPath(p).c_str());
     return a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_DIRECTORY);
@@ -4063,16 +4279,18 @@ bool FolderExists(const std::wstring& p) {
 
 }  // namespace
 
+#include "migrate.inl"
+
 int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdLine, int show) {
-    if (cmdLine && wcsstr(cmdLine, L"--indexar-mft")) {  // ayudante elevado del índice (ver indexer.inl)
+    if (cmdLine && wcsstr(cmdLine, L"--index-mft")) {  // elevated index helper (see indexer.inl)
         IdxElevatedMain();
         return 0;
     }
-    if (HasArg(L"--salir")) {
+    if (HasArg(L"--quit") || HasArg(L"--salir")) {
         BgSendQuit();
         return 0;
     }
-    if (HasArg(L"--desinstalar")) {
+    if (HasArg(L"--uninstall") || HasArg(L"--desinstalar")) {
         InstUninstallMain();
         return 0;
     }
@@ -4081,41 +4299,42 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdLine, int show) {
         int argc = 0;
         wchar_t** argv = CommandLineToArgvW(GetCommandLineW(), &argc);
         for (int i = 1; argv && i + 1 < argc; ++i) {
-            if (wcscmp(argv[i], L"--prueba") == 0) testScript = argv[i + 1];
-            if (wcscmp(argv[i], L"--prueba-escritorio") == 0) deskScript = argv[i + 1];
-            if (wcscmp(argv[i], L"--salida") == 0) g_testOut = argv[i + 1];
+            if (wcscmp(argv[i], L"--test") == 0) testScript = argv[i + 1];
+            if (wcscmp(argv[i], L"--test-desktop") == 0) deskScript = argv[i + 1];
+            if (wcscmp(argv[i], L"--output") == 0) g_testOut = argv[i + 1];
         }
         if (argv) LocalFree(argv);
     }
-    // en un escritorio de Windows aparte: las ventanas del sistema que se abran (propiedades, conflictos
-    // al copiar...) quedan ahí, invisibles para el usuario
+    // on a separate Windows desktop: any system windows that open (properties, copy conflicts...)
+    // stay there, invisible to the user
     if (!deskScript.empty()) return TestOnHiddenDesktop(deskScript, g_testOut);
     if (!testScript.empty()) {
         g_test = true;
         TestPrepareData();
         if (!TestLoadScript(testScript)) {
-            TestLog(L"no se pudo leer el guion: " + testScript);
+            TestLog(L"couldn't read the script: " + testScript);
             return 1;
         }
     }
-    const bool hidden = !g_test && HasArg(L"--oculto");
-    if (!g_test && BgHandOff(hidden ? L"" : ArgPath(), HasArg(L"--alternar"))) return 0;
-    BootMark(L"inicio");
+    const bool hidden = !g_test && (HasArg(L"--hidden") || HasArg(L"--oculto"));
+    if (!g_test && BgHandOff(hidden ? L"" : ArgPath(), HasArg(L"--toggle") || HasArg(L"--alternar"))) return 0;
+    BootMark(L"start");
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
-    SetErrorMode(SEM_FAILCRITICALERRORS);  // nada de cuadros "inserte un disco"
-    OleInitialize(nullptr);  // COM de apartamento + arrastrar y soltar
+    SetErrorMode(SEM_FAILCRITICALERRORS);  // no "insert a disk" dialogs
+    OleInitialize(nullptr);  // apartment COM + drag and drop
     D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, g_d2d.GetAddressOf());
     DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory),
                         reinterpret_cast<IUnknown**>(g_dw.GetAddressOf()));
     CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&g_wic));
-    BootMark(L"com y fabricas");
+    BootMark(L"COM and factories");
     CreateTextParams();
+    MigrateOldData();
     LoadConfig();
     CreateFormats();
     LoadFavs();
     g_configSig = ConfigSignature();
 
-    BootMark(L"configuracion");
+    BootMark(L"config");
     WNDCLASSEXW wc{sizeof(wc)};
     wc.style = CS_DBLCLKS;
     wc.lpfnWndProc = WndProc;
@@ -4123,7 +4342,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdLine, int show) {
     wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
     wc.hIcon = (HICON)LoadImageW(inst, MAKEINTRESOURCEW(1), IMAGE_ICON, GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CYICON), 0);
     wc.hIconSm = (HICON)LoadImageW(inst, MAKEINTRESOURCEW(1), IMAGE_ICON, GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), 0);
-    wc.lpszClassName = g_test ? L"JoltPrueba" : kWindowClass;  // una prueba no se confunde con el Jolt abierto
+    wc.lpszClassName = g_test ? L"JoltTest" : kWindowClass;  // a test isn't mistaken for the open Jolt
     RegisterClassExW(&wc);
     RegisterPopupClass(inst);
     RegisterEditorClass(inst);
@@ -4138,11 +4357,11 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdLine, int show) {
     DwmSetWindowAttribute(g_hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark, sizeof(dark));
     COLORREF border = RGB(0x2B, 0x2B, 0x31);
     DwmSetWindowAttribute(g_hwnd, DWMWA_BORDER_COLOR, &border, sizeof(border));
-    BOOL noFade = TRUE;  // sin esto, Windows funde la ventana al esconderla
+    BOOL noFade = TRUE;  // without this, Windows fades the window when hiding it
     DwmSetWindowAttribute(g_hwnd, DWMWA_TRANSITIONS_FORCEDISABLED, &noFade, sizeof(noFade));
-    // aplica WM_NCCALCSIZE: la barra de título de Windows desaparece y la dibujamos nosotros
-    SetWindowPos(g_hwnd, nullptr, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
-    if (g_test)  // pruebas: fuera de la pantalla y sin mostrarse nunca
+    // applies WM_NCCALCSIZE: the Windows title bar disappears and we draw our own
+    SetWindowPos(g_hwnd, nullptr, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+    if (g_test)  // tests: off screen and never shown
         SetWindowPos(g_hwnd, nullptr, -20000, -20000, MulDiv(1100, g_dpi, 96), MulDiv(700, g_dpi, 96), SWP_NOZORDER | SWP_NOACTIVATE);
 
     g_editBrush = CreateSolidBrush(RGB(0x1A, 0x1A, 0x1E));
@@ -4158,21 +4377,21 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdLine, int show) {
     std::thread(IconThreadMain).detach();
     std::thread(ConfigWatcherMain).detach();
     if (!g_test) {
-        std::thread(LoadDirSizes).detach();  // tamaños de carpetas de sesiones anteriores
-        IdxStart();                          // índice de los discos para Ctrl+P
+        std::thread(LoadDirSizes).detach();  // folder sizes from previous sessions
+        IdxStart();                          // disk index for Ctrl+P
     } else {
-        IdxStartReadOnly();  // en las pruebas, el índice se usa pero no se toca
+        IdxStartReadOnly();  // in tests, the index is used but not modified
     }
 
-    BootMark(L"ventana e hilos");
+    BootMark(L"window and threads");
     InitDragDrop();
     AddClipboardFormatListener(g_hwnd);
-    BootMark(L"arrastre");
+    BootMark(L"drag and drop");
 
-    // sesión anterior: ventana, barra lateral, orden y pestañas
+    // previous session: window, sidebar, sort and tabs
     Session ses = LoadSession();
-    BootMark(L"sesion");
-    // vistas; la primera vez, la general sale del orden que había (sesión) y de carpetas_primero (config)
+    BootMark(L"session");
+    // views; the first time, the general one comes from the old sort (session) and folders_first (config)
     if (!LoadViews()) {
         g_viewAll.steps.clear();
         const int ff = g_foldersFirst.load();
@@ -4195,8 +4414,8 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdLine, int show) {
     } else if (!g_test && !hidden) {
         ShowWindow(g_hwnd, show);
     }
-    BootMark(L"vistas y posicion");
-    // pestañas: se saltean las carpetas que ya no existen (y se corrigen los índices guardados)
+    BootMark(L"views and position");
+    // tabs: folders that no longer exist are skipped (and the saved indexes corrected)
     std::vector<int> newIdx(ses.tabs.size(), -1);
     bool both[2] = {false, false};
     for (auto& [p, pane] : ses.tabs) both[pane] = both[pane] || FolderExists(p);
@@ -4230,16 +4449,17 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdLine, int show) {
         SelectTab(act);
         if (!arg.empty()) NewTab(arg);
     }
-    BootMark(L"pestanas");
+    BootMark(L"tabs");
     g_taskbarCreated = RegisterWindowMessageW(L"TaskbarCreated");
     BgApplyConfig();
-    if (hidden) Render();  // el primer cuadro es el más caro: que quede hecho antes de mostrarse
+    if (hidden) Render();  // the first frame is the most expensive: get it done before showing
     if (!g_test && !hidden && (HasArg(L"--panel") || InstShouldOffer())) InstPanelOpen();
-    S.navPending = false;  // el arranque no es una navegación; no se mide
+    S.navPending = false;  // startup isn't a navigation; not measured
+    g_heatReady = true;
     S.navMs = -1;
     if (g_test) {
-        SetTimer(g_hwnd, kTimerTest, 400, nullptr);        // primer paso del guion
-        SetTimer(g_hwnd, kTimerTestKill, 180000, nullptr); // por las dudas, nunca más de 3 minutos
+        SetTimer(g_hwnd, kTimerTest, 400, nullptr);        // first script step
+        SetTimer(g_hwnd, kTimerTestKill, 180000, nullptr); // just in case, never more than 3 minutes
     }
 
     MSG m;
@@ -4251,6 +4471,6 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdLine, int show) {
         if (g_instance) CloseHandle(g_instance);
         ShellExecuteW(nullptr, nullptr, g_relaunch.c_str(), g_relaunchArgs.c_str(), nullptr, SW_SHOWNORMAL);
     }
-    // Salida directa: los hilos de fondo no necesitan limpieza ordenada.
+    // Direct exit: background threads don't need an orderly cleanup.
     ExitProcess(0);
 }

@@ -1,29 +1,29 @@
-// Índice global de los discos, para que Ctrl+P encuentre cualquier carpeta o archivo al instante
-// (la idea de Everything). Por cada disco fijo se guarda un árbol compacto: un nodo por elemento con
-// el índice de su carpeta padre y su nombre en un bloque común.
-//  - Si Jolt corre como administrador y el disco es NTFS, se lee la tabla del disco (MFT) entera:
-//    segundos para millones de archivos. Si no, se recorre con NtQueryDirectoryFile en segundo plano.
-//  - Se guarda en %LOCALAPPDATA%\Jolt\indice-X.bin: al arrancar está disponible enseguida y se
-//    vuelve a armar en segundo plano (con prioridad baja de disco) para ponerse al día.
-//  - Lo que se crea mientras Jolt está abierto se agrega solo (vigilancia de cada disco); lo que se
-//    borra se descarta al mostrar los resultados.
-//  - La búsqueda difusa corre en varios hilos y se corta si se sigue escribiendo.
-// Se incluye desde app.cpp antes de palette.inl.
+// Global drive index, so Ctrl+P can find any folder or file instantly
+// (the Everything idea). Each fixed drive stores a compact tree: one node per item with
+// the index of its parent folder and its name in a shared block.
+//  - If Jolt runs as administrator and the drive is NTFS, the whole disk table (MFT) is read:
+//    seconds for millions of files. Otherwise it's walked with NtQueryDirectoryFile in the background.
+//  - Saved to %LOCALAPPDATA%\Jolt\index-X.bin: it's available right at startup and gets
+//    rebuilt in the background (at low disk priority) to catch up.
+//  - What's created while Jolt is open is added automatically (each drive is watched); what's
+//    deleted is dropped when showing results.
+//  - Fuzzy search runs on several threads and stops if typing continues.
+// Included from app.cpp before palette.inl.
 
 constexpr UINT WM_APP_IDX = WM_APP + 8;
 
 struct IdxNode {
-    uint32_t parent;  // UINT32_MAX = raíz
+    uint32_t parent;  // UINT32_MAX = root
     uint32_t nameOff;
     uint16_t nameLen;
     uint8_t dir;
     uint8_t depth;
 };
-// Mientras se arma vive en los vectores. Ya guardado, se lee directo del archivo: Windows trae a memoria solo
-// lo que se usa y lo puede soltar cuando quiera, así que no ocupa memoria propia de Jolt.
+// While being built it lives in the vectors. Once saved, it's read straight from the file: Windows brings in only
+// what's used and can release it at any time, so it takes up none of Jolt's own memory.
 struct IdxVolume {
     wchar_t letter = 0;
-    std::vector<IdxNode> nodes;  // nodes[0] = la raíz ("C:")
+    std::vector<IdxNode> nodes;  // nodes[0] = the root ("C:")
     std::vector<wchar_t> names;
     const IdxNode* node = nullptr;
     const wchar_t* name = nullptr;
@@ -43,20 +43,20 @@ struct IdxVolume {
 
 std::mutex g_ixm;
 std::vector<std::shared_ptr<const IdxVolume>> g_ixVols;
-std::vector<std::wstring> g_ixAdded;  // creados en esta sesión (rutas completas)
+std::vector<std::wstring> g_ixAdded;  // created this session (full paths)
 std::atomic<uint64_t> g_ixCount{0};
 std::atomic<int> g_ixBuilding{0};
-std::atomic<uint64_t> g_ixGen{0};  // búsqueda vigente
+std::atomic<uint64_t> g_ixGen{0};  // current search
 
 struct IdxResult {
     uint64_t gen = 0;
     std::wstring query;
-    std::vector<std::pair<std::wstring, bool>> hits;  // ruta, es carpeta
+    std::vector<std::pair<std::wstring, bool>> hits;  // path, is folder
 };
-IdxResult g_ixRes;          // último resultado (hilo de la ventana)
-std::wstring g_ixAsked;     // última búsqueda pedida
+IdxResult g_ixRes;          // last result (window thread)
+std::wstring g_ixAsked;     // last search requested
 
-// Aviso en la barra de estado (desde cualquier hilo).
+// Status bar notice (from any thread).
 constexpr UINT WM_APP_IDXMSG = WM_APP + 9;
 void IdxStatus(const std::wstring& s) {
     auto* p = new std::wstring(s);
@@ -88,7 +88,7 @@ void IdxAddNode(IdxVolume& v, uint32_t parent, const wchar_t* name, size_t len, 
     v.nodes.push_back(n);
 }
 
-// Recorrido normal (sin permisos especiales).
+// Normal walk (no special permissions).
 std::shared_ptr<IdxVolume> IdxWalk(wchar_t letter) {
     auto v = std::make_shared<IdxVolume>();
     v->letter = letter;
@@ -113,13 +113,13 @@ std::shared_ptr<IdxVolume> IdxWalk(wchar_t letter) {
     return v;
 }
 
-// Lectura directa de la tabla del disco (NTFS, solo como administrador).
+// Direct read of the disk table (NTFS, administrator only).
 std::shared_ptr<IdxVolume> IdxMft(wchar_t letter) {
     wchar_t root[4] = {letter, L':', L'\\', 0}, fs[32] = {};
     if (!GetVolumeInformationW(root, nullptr, 0, nullptr, nullptr, nullptr, fs, 32) || wcscmp(fs, L"NTFS") != 0) return nullptr;
     wchar_t dev[8] = {L'\\', L'\\', L'.', L'\\', letter, L':', 0};
     HANDLE h = CreateFileW(dev, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr);
-    if (h == INVALID_HANDLE_VALUE) return nullptr;  // sin permisos: se recorre normalmente
+    if (h == INVALID_HANDLE_VALUE) return nullptr;  // no permission: walk it normally
     struct Raw {
         uint64_t frn, parent;
         uint32_t nameOff;
@@ -153,13 +153,13 @@ std::shared_ptr<IdxVolume> IdxMft(wchar_t letter) {
     std::unordered_map<uint64_t, uint32_t> byFrn;
     byFrn.reserve(raws.size());
     for (size_t i = 0; i < raws.size(); ++i) byFrn[raws[i].frn] = static_cast<uint32_t>(i);
-    // en orden de padres a hijos (para calcular la profundidad y que el padre exista antes)
+    // parents before children (to compute depth and make sure the parent exists first)
     auto v = std::make_shared<IdxVolume>();
     v->letter = letter;
     wchar_t rootName[3] = {letter, L':', 0};
     IdxAddNode(*v, UINT32_MAX, rootName, 2, true);
     std::vector<uint32_t> nodeOf(raws.size(), UINT32_MAX);
-    // la raíz del disco es su propio padre
+    // the drive root is its own parent
     for (size_t i = 0; i < raws.size(); ++i) {
         auto it = byFrn.find(raws[i].parent);
         if (it != byFrn.end() && it->second == i) nodeOf[i] = 0;
@@ -167,7 +167,7 @@ std::shared_ptr<IdxVolume> IdxMft(wchar_t letter) {
     std::vector<uint32_t> chain;
     for (size_t i = 0; i < raws.size(); ++i) {
         if (nodeOf[i] != UINT32_MAX) continue;
-        // subir hasta un ancestro ya ubicado (o la raíz) y después bajar agregando, así el padre siempre existe
+        // climb to an already placed ancestor (or the root), then descend adding nodes, so the parent always exists
         chain.clear();
         uint32_t cur = static_cast<uint32_t>(i), parentNode = 0;
         for (int guard = 0; guard < 512; ++guard) {
@@ -186,7 +186,7 @@ std::shared_ptr<IdxVolume> IdxMft(wchar_t letter) {
                 parentNode = nodeOf[chain[k]];
                 continue;
             }
-            if (parentNode == 0 && r.nameLen > 0 && names[r.nameOff] == L'$') {  // archivos internos de NTFS
+            if (parentNode == 0 && r.nameLen > 0 && names[r.nameOff] == L'$') {  // NTFS internal files
                 nodeOf[chain[k]] = 0;
                 continue;
             }
@@ -199,10 +199,10 @@ std::shared_ptr<IdxVolume> IdxMft(wchar_t letter) {
     return v;
 }
 
-std::wstring IdxFile(wchar_t letter) { return LocalDataDir() + L"\\indice-" + std::wstring(1, letter) + L".bin"; }
+std::wstring IdxFile(wchar_t letter) { return LocalDataDir() + L"\\index-" + std::wstring(1, letter) + L".bin"; }
 
-// Un índice nuevo se escribe aparte (".nuevo"): el que está en uso no se puede pisar mientras esté mapeado.
-std::wstring IdxNewFile(wchar_t letter) { return IdxFile(letter) + L".nuevo"; }
+// A new index is written separately (".new"): the one in use can't be overwritten while it's mapped.
+std::wstring IdxNewFile(wchar_t letter) { return IdxFile(letter) + L".new"; }
 
 void IdxSave(const IdxVolume& v) {
     std::wstring f = IdxNewFile(v.letter), tmp = IdxFile(v.letter) + L".tmp";
@@ -225,7 +225,7 @@ std::shared_ptr<IdxVolume> IdxLoad(wchar_t letter) {
     CloseHandle(h);
     if (!m) return nullptr;
     const void* view = MapViewOfFile(m, FILE_MAP_READ, 0, 0, 0);
-    CloseHandle(m);  // la vista mantiene vivo el mapeo
+    CloseHandle(m);  // the view keeps the mapping alive
     if (!view) return nullptr;
     const auto* head = static_cast<const uint32_t*>(view);
     const uint64_t want = 12 + static_cast<uint64_t>(head[1]) * sizeof(IdxNode) + static_cast<uint64_t>(head[2]) * sizeof(wchar_t);
@@ -242,8 +242,8 @@ std::shared_ptr<IdxVolume> IdxLoad(wchar_t letter) {
     return v;
 }
 
-// Pasa a usar el índice nuevo: suelta el mapeo anterior (una búsqueda en curso lo retiene un momento),
-// reemplaza el archivo y lo mapea. Un índice que todavía vive en memoria sigue visible hasta entonces.
+// Switches to the new index: releases the previous mapping (a running search holds it for a moment),
+// replaces the file and maps it. An index still living in memory stays visible until then.
 bool IdxPromote(wchar_t letter) {
     const std::wstring fresh = IdxNewFile(letter);
     if (GetFileAttributesW(fresh.c_str()) == INVALID_FILE_ATTRIBUTES) return false;
@@ -264,7 +264,7 @@ bool IdxPromote(wchar_t letter) {
     return moved;
 }
 
-// Vigila un disco entero: lo que se crea se agrega a la lista de esta sesión.
+// Watches a whole drive: whatever is created is added to this session's list.
 void IdxWatch(wchar_t letter) {
     wchar_t root[4] = {letter, L':', L'\\', 0};
     HANDLE d = CreateFileW(root, FILE_LIST_DIRECTORY, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
@@ -274,7 +274,7 @@ void IdxWatch(wchar_t letter) {
     DWORD got = 0;
     while (ReadDirectoryChangesW(d, buf.data(), static_cast<DWORD>(buf.size()), TRUE,
                                  FILE_NOTIFY_CHANGE_FILE_NAME | FILE_NOTIFY_CHANGE_DIR_NAME, &got, nullptr, nullptr)) {
-        if (!got) continue;  // se desbordó: se pierde esa tanda (el próximo armado la recupera)
+        if (!got) continue;  // overflowed: that batch is lost (the next build recovers it)
         std::lock_guard lk(g_ixm);
         for (BYTE* p = buf.data();;) {
             auto* fni = reinterpret_cast<FILE_NOTIFY_INFORMATION*>(p);
@@ -289,7 +289,7 @@ void IdxWatch(wchar_t letter) {
     CloseHandle(d);
 }
 
-// Horas desde que se guardó el índice de un disco (o mucho si no hay).
+// Hours since a drive's index was saved (or a large number if there's none).
 double IdxAgeHours(wchar_t letter) {
     WIN32_FILE_ATTRIBUTE_DATA d{};
     if (!GetFileAttributesExW(IdxFile(letter).c_str(), GetFileExInfoStandard, &d)) return 1e9;
@@ -308,13 +308,13 @@ std::vector<wchar_t> IdxLetters() {
     return letters;
 }
 
-// Modo "jolt.exe --indexar-mft": lo lanza Jolt como administrador; lee la MFT de cada disco, guarda y sale.
+// "jolt.exe --index-mft" mode: Jolt launches it as administrator; reads each drive's MFT, saves and exits.
 void IdxElevatedMain() {
     for (wchar_t c : IdxLetters())
         if (auto v = IdxMft(c)) IdxSave(*v);
 }
 
-// Pide permiso de administrador una vez y reindexa leyendo la tabla de cada disco (segundos).
+// Asks for administrator permission once and reindexes by reading each drive's table (seconds).
 void IdxReindexElevated() {
     wchar_t exe[MAX_PATH];
     GetModuleFileNameW(nullptr, exe, MAX_PATH);
@@ -323,17 +323,17 @@ void IdxReindexElevated() {
     sei.hwnd = g_hwnd;
     sei.lpVerb = L"runas";
     sei.lpFile = exe;
-    sei.lpParameters = L"--indexar-mft";
+    sei.lpParameters = L"--index-mft";
     sei.nShow = SW_HIDE;
     if (!ShellExecuteExW(&sei) || !sei.hProcess) {
-        IdxStatus(L"Reindexado cancelado (hace falta el permiso de administrador)");
+        IdxStatus(L"Reindex cancelled (administrator permission is required)");
         return;
     }
     g_ixBuilding = 1;
-    IdxStatus(L"Reindexando los discos…");
+    IdxStatus(L"Reindexing the drives…");
     HANDLE proc = sei.hProcess;
     std::thread([proc] {
-        // cada disco se usa apenas su índice queda escrito, y se avisa cómo va
+        // each drive is used as soon as its index is written, and progress is reported
         const double t0 = NowMs();
         const std::vector<wchar_t> letters = IdxLetters();
         std::vector<bool> done(letters.size(), false);
@@ -345,7 +345,7 @@ void IdxReindexElevated() {
                     wchar_t b[64];
                     swprintf(b, 64, L"%c: %.0f s", letters[i], (NowMs() - t0) / 1000.0);
                     progress += (progress.empty() ? L"" : L"   ·   ") + std::wstring(b);
-                    IdxStatus(L"Reindexando…   " + progress);
+                    IdxStatus(L"Reindexing…   " + progress);
                 }
             }
         };
@@ -357,25 +357,25 @@ void IdxReindexElevated() {
         for (bool d : done) ok += d;
         wchar_t b[160];
         if (ok == 0)
-            swprintf(b, 160, L"No se pudo reindexar: no se pudo leer la tabla de los discos");
+            swprintf(b, 160, L"Couldn't reindex: couldn't read the drives' tables");
         else
-            swprintf(b, 160, L"Índice listo: %s elementos en %.0f s%s", Thousands(static_cast<int>(std::min<uint64_t>(g_ixCount, INT_MAX))).c_str(),
-                     (NowMs() - t0) / 1000.0, ok < static_cast<int>(letters.size()) ? L" (algún disco no se pudo leer)" : L"");
+            swprintf(b, 160, L"Index ready: %s items in %.0f s%s", Thousands(static_cast<int>(std::min<uint64_t>(g_ixCount, INT_MAX))).c_str(),
+                     (NowMs() - t0) / 1000.0, ok < static_cast<int>(letters.size()) ? L" (some drives couldn't be read)" : L"");
         IdxStatus(b);
     }).detach();
 }
 
 void IdxBuilder() {
-    SetThreadPriority(GetCurrentThread(), THREAD_MODE_BACKGROUND_BEGIN);  // disco y CPU en segundo plano
+    SetThreadPriority(GetCurrentThread(), THREAD_MODE_BACKGROUND_BEGIN);  // disk and CPU in the background
     const std::vector<wchar_t> letters = IdxLetters();
     for (wchar_t c : letters) {
-        IdxPromote(c);  // uno que quedó sin estrenar porque Jolt se cerró antes
-        if (auto v = IdxLoad(c)) IdxPublish(v);  // lo de la vez anterior, ya mismo
+        IdxPromote(c);  // one left unused because Jolt closed first
+        if (auto v = IdxLoad(c)) IdxPublish(v);  // last run's index, right away
     }
     for (wchar_t c : letters) std::thread(IdxWatch, c).detach();
     for (;;) {
         for (wchar_t c : letters) {
-            // un índice de menos de 12 horas alcanza (lo nuevo se suma en vivo; lo borrado se descarta al mostrar)
+            // an index under 12 hours old is good enough (new items join live; deleted ones are dropped when shown)
             if (IdxAgeHours(c) < 12) continue;
             g_ixBuilding = 1;
             auto v = IdxMft(c);
@@ -383,14 +383,14 @@ void IdxBuilder() {
             IdxPublish(v);
             IdxSave(*v);
             v.reset();
-            IdxPromote(c);  // de los vectores pasa al archivo
+            IdxPromote(c);  // moves from the vectors to the file
             std::lock_guard lk(g_ixm);
             const std::wstring pre = std::wstring(1, c) + L":";
             g_ixAdded.erase(std::remove_if(g_ixAdded.begin(), g_ixAdded.end(), [&](const std::wstring& p) { return p.rfind(pre, 0) == 0; }),
                             g_ixAdded.end());
         }
         g_ixBuilding = 0;
-        Sleep(30 * 60 * 1000);  // cada media hora se revisa si algún índice quedó viejo
+        Sleep(30 * 60 * 1000);  // every half hour, check whether any index has gone stale
     }
 }
 
@@ -407,7 +407,7 @@ std::wstring IdxPath(const IdxVolume& v, uint32_t i) {
     return p;
 }
 
-// Busca en un hilo aparte y avisa a la ventana con los mejores resultados.
+// Searches on a separate thread and notifies the window with the best results.
 void IdxSearch(std::wstring query, uint64_t gen) {
     std::vector<std::shared_ptr<const IdxVolume>> vols;
     std::vector<std::wstring> added;
@@ -419,8 +419,8 @@ void IdxSearch(std::wstring query, uint64_t gen) {
     const std::wstring pat = Lower(query);
     struct Hit {
         int key;
-        uint32_t vol, node;  // vol = UINT32_MAX: de "added"
-        bool operator<(const Hit& o) const { return key > o.key; }  // montículo de mínimos
+        uint32_t vol, node;  // vol = UINT32_MAX: from "added"
+        bool operator<(const Hit& o) const { return key > o.key; }  // min-heap
     };
     const size_t kTop = 80;
     unsigned nth = std::max(1u, std::min(8u, std::thread::hardware_concurrency()));
@@ -455,7 +455,7 @@ void IdxSearch(std::wstring query, uint64_t gen) {
     if (g_ixGen != gen) return;
     std::vector<Hit> all;
     for (auto& p : part) all.insert(all.end(), p.begin(), p.end());
-    // lo creado en esta sesión
+    // what was created this session
     int sc;
     for (uint32_t i = 0; i < added.size(); ++i) {
         std::wstring leaf = LeafOf(added[i]);
@@ -469,7 +469,7 @@ void IdxSearch(std::wstring query, uint64_t gen) {
     for (const Hit& h : all) {
         if (res->hits.size() >= 40) break;
         std::wstring p = h.vol == UINT32_MAX ? added[h.node] : IdxPath(*vols[h.vol], h.node);
-        DWORD a = GetFileAttributesW(ToExtendedPath(p).c_str());  // lo borrado no se muestra
+        DWORD a = GetFileAttributesW(ToExtendedPath(p).c_str());  // deleted items aren't shown
         if (a == INVALID_FILE_ATTRIBUTES || !seen.insert(Key(p)).second) continue;
         res->hits.push_back({p, (a & FILE_ATTRIBUTE_DIRECTORY) != 0});
     }

@@ -1,6 +1,6 @@
 #pragma once
-// Headers precompilados: todo lo del sistema se procesa una sola vez (ver build.bat).
-// Acá van solo cosas que no cambian; nada de código nuestro.
+// Precompiled headers: all system headers are processed only once (see build.bat).
+// Only things that don't change go here; none of our own code.
 #include <windows.h>
 #include <windowsx.h>
 #include <winternl.h>

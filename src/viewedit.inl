@@ -1,7 +1,7 @@
-// Editor de vistas: el panel que abre el botón de filtro del encabezado. Muestra las reglas de la
-// vista como filas (estilo Notion): cada parte se cambia con un desplegable, los valores se escriben
-// en el lugar, se reordenan arrastrando y se aplican al instante. Arriba se elige si se edita la vista
-// de todas las carpetas o la de esta carpeta. Se incluye desde app.cpp después de palette.inl.
+// View editor: the panel opened by the filter button in the header. Shows the view's rules
+// as rows (Notion style): each part is changed with a dropdown, values are typed
+// in place, rows are reordered by dragging and changes apply instantly. The top chooses whether to edit the view
+// of all folders or of this folder. Included from app.cpp after palette.inl.
 
 enum class VeK { ScopeAll, ScopeFolder, Sub, Label, Cell1, Cell2, Text, Delete, Handle, Add, Remove };
 struct VeHit {
@@ -10,22 +10,22 @@ struct VeHit {
     int step;
 };
 struct VeData {
-    bool editAll = false;  // editando la vista general (si no, la de la carpeta)
-    std::wstring folder;   // carpeta del panel al abrir
+    bool editAll = false;  // editing the general view (otherwise the folder's)
+    std::wstring folder;   // the pane's folder on open
     std::vector<VeHit> hits;
     int hover = -1;
     D2D1_RECT_F panel{};
-    std::vector<float> rowTops;  // para arrastrar
+    std::vector<float> rowTops;  // for dragging
     int drag = -1, dropAt = -1;
     float dragY = 0, pressY = 0;
     bool dragging = false;
-    int editStep = -1;  // paso cuyo valor se está escribiendo
+    int editStep = -1;  // step whose value is being typed
     HWND edit = nullptr;
 } g_ved;
 
 constexpr float kVeW = 620.f, kVeTop = 44.f, kVeRow = 34.f;
 
-// La vista que se está editando; nullptr = la carpeta todavía no tiene vista propia.
+// The view being edited; nullptr = the folder has no view of its own yet.
 View* VeTarget() {
     if (g_ved.editAll) return &g_viewAll;
     View* v = ViewFor(g_ved.folder);
@@ -58,37 +58,37 @@ void ViewEditorOpen(int pane) {
 }
 
 std::wstring FolderTitle(const std::wstring& p) {
-    if (p.empty()) return L"Este equipo";
+    if (p.empty()) return L"This PC";
     if (IsDriveRoot(p)) return DriveLabel(p[0]);
     return LeafOf(p);
 }
 
-// Textos de cada parte de una regla.
-const wchar_t* kVeSortField[] = {L"Nombre", L"Fecha", L"Tamaño", L"Tipo de archivo"};
-const wchar_t* kVeGroup[] = {L"Por día", L"Por mes", L"Por tipo", L"Por extensión"};
-const wchar_t* kVeFolders[] = {L"Mezcladas con los archivos", L"Primero", L"Al final", L"Primero al ordenar por nombre"};
-const wchar_t* kVeFold[] = {L"Plegados", L"Plegados menos hoy", L"Plegados menos el primero"};
-const wchar_t* kVeCond[] = {L"Nombre contiene", L"Extensión es", L"Más nuevos que", L"Más viejos que",
-                            L"Más grandes que", L"Más chicos que", L"Carpetas", L"Archivos", L"Ocultos"};
-const wchar_t* kVeUnit[] = {L"", L"", L"días", L"días", L"MB", L"MB", L"", L"", L""};
+// Text for each part of a rule.
+const wchar_t* kVeSortField[] = {L"Name", L"Date", L"Size", L"File type"};
+const wchar_t* kVeGroup[] = {L"By day", L"By month", L"By type", L"By extension"};
+const wchar_t* kVeFolders[] = {L"Mixed with files", L"First", L"Last", L"First when sorting by name"};
+const wchar_t* kVeFold[] = {L"Collapsed", L"Collapsed except today", L"Collapsed except the first"};
+const wchar_t* kVeCond[] = {L"Name contains", L"Extension is", L"Newer than", L"Older than",
+                            L"Larger than", L"Smaller than", L"Folders", L"Files", L"Hidden"};
+const wchar_t* kVeUnit[] = {L"", L"", L"days", L"days", L"MB", L"MB", L"", L"", L""};
 
 std::wstring VeDirText(const Step& s) {
     bool asc = s.b != 0;
     switch (s.a) {
-        case SfDate: return asc ? L"Más viejo primero" : L"Más nuevo primero";
-        case SfSize: return asc ? L"Más chico primero" : L"Más grande primero";
+        case SfDate: return asc ? L"Oldest first" : L"Newest first";
+        case SfSize: return asc ? L"Smallest first" : L"Largest first";
         default: return asc ? L"A → Z" : L"Z → A";
     }
 }
 
 std::wstring VeLabel(const Step& s) {
     switch (s.kind) {
-        case StepKind::Sort: return L"Ordenar por";
-        case StepKind::Group: return L"Agrupar";
-        case StepKind::Folders: return L"Carpetas";
-        case StepKind::Fold: return L"Grupos";
-        case StepKind::Show: return L"Mostrar solo";
-        default: return L"Ocultar";
+        case StepKind::Sort: return L"Sort by";
+        case StepKind::Group: return L"Group";
+        case StepKind::Folders: return L"Folders";
+        case StepKind::Fold: return L"Groups";
+        case StepKind::Show: return L"Show only";
+        default: return L"Hide";
     }
 }
 
@@ -102,7 +102,7 @@ std::wstring VeCell1(const Step& s) {
     }
 }
 
-// Un "botón" redondeado con desplegable.
+// A rounded "button" with a dropdown.
 float VePill(const std::wstring& text, float x, float y, VeK k, int step, bool dropdown = true) {
     float w = MeasureW(text, g_fmtName.Get()) + (dropdown ? 34 : 20);
     D2D1_RECT_F r = D2D1::RectF(x, y + 5, x + w, y + kVeRow - 5);
@@ -136,7 +136,7 @@ void DrawViewEditor(float W, float H) {
     Color(cBorder);
     g_rt->DrawRoundedRectangle(D2D1::RoundedRect(g_ved.panel, 10, 10), g_brush.Get(), 1.f);
 
-    // alcance: todas las carpetas / esta carpeta (o la carpeta de la que hereda)
+    // scope: all folders / this folder (or the folder it inherits from)
     float x = px + 14, y = py + 6;
     Color(cDim);
     Glyph(0xE71C, g_fmtIconSm.Get(), x, y, x + 14, y + kVeRow);
@@ -154,14 +154,14 @@ void DrawViewEditor(float W, float H) {
         g_ved.hits.push_back({r, k, -1});
         x = r.right + 6;
     };
-    chip(L"Todas las carpetas", g_ved.editAll, VeK::ScopeAll);
+    chip(L"All folders", g_ved.editAll, VeK::ScopeAll);
     if (!g_ved.folder.empty()) {
         View* eff = ViewFor(g_ved.folder);
-        std::wstring label = L"Solo «" + FolderTitle(g_ved.folder) + L"»";
-        if (eff != &g_viewAll && Key(eff->path) != Key(g_ved.folder)) label = L"«" + FolderTitle(eff->path) + L"» y subcarpetas";
+        std::wstring label = L"Only “" + FolderTitle(g_ved.folder) + L"”";
+        if (eff != &g_viewAll && Key(eff->path) != Key(g_ved.folder)) label = L"“" + FolderTitle(eff->path) + L"” and subfolders";
         chip(label, !g_ved.editAll, VeK::ScopeFolder);
         if (folderView) {
-            // casilla: también para las subcarpetas
+            // checkbox: also for subfolders
             float cx = x + 8;
             D2D1_RECT_F box = D2D1::RectF(cx, y + kVeRow / 2 - 7, cx + 14, y + kVeRow / 2 + 7);
             Color(v->sub ? cAccent : cDim);
@@ -172,13 +172,13 @@ void DrawViewEditor(float W, float H) {
                 Glyph(0xE73E, g_fmtIconSm.Get(), box.left, box.top, box.right, box.bottom);
             }
             Color(cDim);
-            Text(std::wstring(L"y sus subcarpetas"), g_fmtName.Get(), cx + 20, y, px + pw - 10, y + kVeRow);
-            g_ved.hits.push_back({D2D1::RectF(cx - 4, y + 4, cx + 20 + MeasureW(L"y sus subcarpetas", g_fmtName.Get()), y + kVeRow - 4), VeK::Sub, -1});
+            Text(std::wstring(L"and its subfolders"), g_fmtName.Get(), cx + 20, y, px + pw - 10, y + kVeRow);
+            g_ved.hits.push_back({D2D1::RectF(cx - 4, y + 4, cx + 20 + MeasureW(L"and its subfolders", g_fmtName.Get()), y + kVeRow - 4), VeK::Sub, -1});
         }
     }
     HLine(px + 10, px + pw - 10, py + kVeTop);
 
-    // reglas
+    // rules
     y = py + kVeTop + 3;
     g_ved.rowTops.assign(n + 1, 0);
     for (int i = 0; i < n; ++i) {
@@ -186,7 +186,7 @@ void DrawViewEditor(float W, float H) {
         g_ved.rowTops[i] = y;
         const bool dragged = g_ved.dragging && i == g_ved.drag;
         if (dragged) Round(D2D1::RectF(px + 6, y + 2, px + pw - 6, y + kVeRow - 2), 6, cAccent, 0.12f);
-        // agarradera: seis puntitos
+        // handle: six little dots
         D2D1_RECT_F hr = D2D1::RectF(px + 8, y + 6, px + 24, y + kVeRow - 6);
         int hidx = static_cast<int>(g_ved.hits.size());
         for (int dy = 0; dy < 3; ++dy)
@@ -205,8 +205,8 @@ void DrawViewEditor(float W, float H) {
         cx = VePill(VeCell1(s), cx, y, VeK::Cell1, i);
         if (s.kind == StepKind::Sort) cx = VePill(VeDirText(s), cx, y, VeK::Cell2, i);
         if ((s.kind == StepKind::Show || s.kind == StepKind::Hide) && s.a <= CSmaller) {
-            // valor escrito
-            std::wstring val = s.text.empty() ? (s.a == CExt ? L"pdf, docx" : s.a == CName ? L"texto" : L"0") : s.text;
+            // typed value
+            std::wstring val = s.text.empty() ? (s.a == CExt ? L"pdf, docx" : s.a == CName ? L"text" : L"0") : s.text;
             float w = std::max(80.f, MeasureW(val, g_fmtName.Get()) + 24);
             D2D1_RECT_F r = D2D1::RectF(cx, y + 5, std::min(cx + w, px + pw - 80), y + kVeRow - 5);
             int idx = static_cast<int>(g_ved.hits.size());
@@ -224,7 +224,7 @@ void DrawViewEditor(float W, float H) {
                 Text(kVeUnit[s.a], wcslen(kVeUnit[s.a]), g_fmtName.Get(), cx, y, cx + 60, y + kVeRow);
             }
         }
-        // quitar
+        // remove
         D2D1_RECT_F xr = D2D1::RectF(px + pw - 34, y + 7, px + pw - 12, y + kVeRow - 7);
         int xidx = static_cast<int>(g_ved.hits.size());
         if (g_ved.hover == xidx) Round(xr, 4, 0xFFFFFF, 0.10f);
@@ -234,24 +234,24 @@ void DrawViewEditor(float W, float H) {
         y += kVeRow;
     }
     g_ved.rowTops[n] = y;
-    // indicador de dónde cae la regla que se arrastra
+    // indicator of where the dragged rule will land
     if (g_ved.dragging && g_ved.dropAt >= 0) {
         float ly = g_ved.rowTops[g_ved.dropAt];
         Fill(D2D1::RectF(px + 10, ly - 1, px + pw - 10, ly + 1), cAccent);
     }
-    // agregar
+    // add
     {
         D2D1_RECT_F r = D2D1::RectF(px + 8, y + 4, px + 160, y + kVeRow - 4);
         int idx = static_cast<int>(g_ved.hits.size());
         if (g_ved.hover == idx) Round(r, 5, 0xFFFFFF, 0.07f);
         Color(g_ved.hover == idx ? cText : cDim);
         Glyph(gAdd, g_fmtIconSm.Get(), r.left + 6, r.top, r.left + 22, r.bottom);
-        Text(L"Agregar regla", 13, g_fmtName.Get(), r.left + 28, r.top, r.right, r.bottom);
+        Text(L"Add rule", 8, g_fmtName.Get(), r.left + 28, r.top, r.right, r.bottom);
         g_ved.hits.push_back({r, VeK::Add, -1});
         y += kVeRow;
     }
     if (folderView) {
-        std::wstring t = L"Quitar la vista de «" + FolderTitle(v->path) + L"»";
+        std::wstring t = L"Remove the view of “" + FolderTitle(v->path) + L"”";
         float w = MeasureW(t, g_fmtName.Get()) + 16;
         D2D1_RECT_F r = D2D1::RectF(px + 8, y + 4, px + 8 + w, y + kVeRow - 4);
         int idx = static_cast<int>(g_ved.hits.size());
@@ -262,10 +262,10 @@ void DrawViewEditor(float W, float H) {
         y += kVeRow;
     }
     Color(cFaint);
-    Text(L"Primero los grupos, después las carpetas, después el orden (el de más arriba manda).", g_fmtStatus.Get(),
+    Text(L"Groups first, then folders, then sorting (the topmost one wins).", g_fmtStatus.Get(),
          px + 14, y, px + pw - 10, y + 26);
     if (g_ved.editStep >= 0 && g_ved.edit) {
-        // el cuadro de texto sigue a su celda
+        // the text box follows its cell
         for (const VeHit& h : g_ved.hits)
             if (h.k == VeK::Text && h.step == g_ved.editStep) {
                 RECT sr = ScreenRect(h.r);
@@ -286,7 +286,7 @@ int VeHitAt(float x, float y) {
     return -1;
 }
 
-// Asegura que exista la vista que se edita (al elegir "esta carpeta" se parte de la que se ve ahora).
+// Makes sure the edited view exists (choosing "this folder" starts from the one shown now).
 View* VeEnsureTarget() {
     if (View* v = VeTarget()) return v;
     View nv = *ViewFor(g_ved.folder);
@@ -301,7 +301,7 @@ void VeChanged() {
     Invalidate();
 }
 
-// Abre un desplegable debajo de una celda.
+// Opens a dropdown below a cell.
 void VeDropdown(const D2D1_RECT_F& r, std::vector<MenuItem> items, std::function<void(UINT)> onSelect) {
     RECT sr = ScreenRect(r);
     sr.top = sr.bottom + MulDiv(2, g_dpi, 96);
@@ -367,7 +367,7 @@ void VeBeginText(int step) {
     SetWindowTextW(g_ved.edit, v->steps[step].text.c_str());
     g_ved.editStep = step;
     Invalidate();
-    UpdateWindow(g_hwnd);  // ubica el cuadro sobre su celda
+    UpdateWindow(g_hwnd);  // places the box over its cell
     SetFocus(g_ved.edit);
     SendMessageW(g_ved.edit, EM_SETSEL, 0, -1);
 }
@@ -425,8 +425,8 @@ void VeClick(float x, float y) {
             return;
         case VeK::Add: {
             std::vector<MenuItem> items;
-            const wchar_t* kinds[] = {L"Ordenar por…", L"Agrupar…", L"Carpetas primero o al final…", L"Mostrar solo…", L"Ocultar…",
-                                      L"Grupos plegados al entrar…"};
+            const wchar_t* kinds[] = {L"Sort by…", L"Group…", L"Folders first or last…", L"Show only…", L"Hide…",
+                                      L"Groups collapsed on entry…"};
             for (int i = 0; i < 6; ++i) {
                 MenuItem m;
                 m.text = kinds[i];
@@ -452,7 +452,7 @@ void VeClick(float x, float y) {
         }
         default: break;
     }
-    // desplegables de una regla
+    // a rule's dropdowns
     const View& shown = v ? *v : *ViewFor(g_ved.folder);
     if (h.step < 0 || h.step >= static_cast<int>(shown.steps.size())) return;
     const Step s = shown.steps[h.step];
@@ -463,7 +463,7 @@ void VeClick(float x, float y) {
         VeChanged();
     };
     if (h.k == VeK::Label) {
-        const wchar_t* names[] = {L"Mostrar solo", L"Ocultar"};
+        const wchar_t* names[] = {L"Show only", L"Hide"};
         VeDropdown(h.r, VeItems(names, 2, s.kind == StepKind::Show ? 0 : 1), [apply](UINT id) {
             apply([id](Step& st) { st.kind = id == 1 ? StepKind::Show : StepKind::Hide; });
         });
@@ -472,7 +472,7 @@ void VeClick(float x, float y) {
             VeDropdown(h.r, VeItems(kVeSortField, SfCount, s.a), [apply](UINT id) {
                 apply([id](Step& st) {
                     st.a = static_cast<int>(id - 1);
-                    st.b = st.a == SfName || st.a == SfExt ? 1 : 0;  // fecha y tamaño: lo más nuevo/grande primero
+                    st.b = st.a == SfName || st.a == SfExt ? 1 : 0;  // date and size: newest/largest first
                 });
             });
         else if (s.kind == StepKind::Group)

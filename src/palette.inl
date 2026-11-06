@@ -1,26 +1,26 @@
-// Paleta de comandos (Ctrl+K): se dibuja sobre la ventana principal, sin ventana aparte.
-// Se incluye desde app.cpp después de dragdrop.inl.
+// Command palette (Ctrl+K): drawn over the main window, with no separate window.
+// Included from app.cpp after dragdrop.inl.
 
 struct PalItem {
     std::wstring title, detail, shortcut;
     std::function<void()> run;
-    Cmd cmd = Cmd::None;  // si es un comando con atajo configurable
-    std::wstring path;    // Ir a: la carpeta o archivo
-    bool pinned = false;  // siempre visible y arriba (la ruta escrita)
-    int bonus = 0;        // Ir a: los recientes y lugares conocidos van antes que lo del índice
+    Cmd cmd = Cmd::None;  // if it's a command with a configurable shortcut
+    std::wstring path;    // Go to: the folder or file
+    bool pinned = false;  // always visible, at the top (the typed path)
+    int bonus = 0;        // Go to: recents and known places rank above index results
 };
 
 struct Palette {
     bool open = false;
-    int mode = 0;        // 0 = comandos (Ctrl+K), 1 = Ir a (Ctrl+P)
+    int mode = 0;        // 0 = commands (Ctrl+K), 1 = Go to (Ctrl+P)
     std::wstring text;
-    std::wstring match;  // lo que se busca (en Ir a con una ruta escrita: lo que sigue a la última barra)
+    std::wstring match;  // what's being searched for (in Go to with a typed path: whatever follows the last slash)
     std::vector<PalItem> all;
-    std::vector<std::pair<int, int>> hits;  // (índice en all, puntaje) ya ordenados
+    std::vector<std::pair<int, int>> hits;  // (index into all, score), already sorted
     int sel = 0;
-    int first = 0;  // primera fila visible (desplazamiento)
-    int capture = -1;       // índice (en hits) del comando cuyo atajo se está capturando
-    int hoverShortcut = -1; // fila visible cuyo atajo está bajo el mouse
+    int first = 0;  // first visible row (scroll offset)
+    int capture = -1;       // index (into hits) of the command whose shortcut is being captured
+    int hoverShortcut = -1; // visible row whose shortcut is under the mouse
     D2D1_RECT_F panel{};
     std::vector<D2D1_RECT_F> rowRects, shortcutRects;
 } g_pal;
@@ -28,7 +28,7 @@ struct Palette {
 constexpr float kPalW = 600.f, kPalInputH = 40.f, kPalRow = 30.f;
 constexpr int kPalMaxRows = 12;
 
-// Texto legible de una tecla: "Ctrl+Shift+N"
+// Readable text for a key: "Ctrl+Shift+N"
 std::wstring KeyText(UINT mods, UINT vk) {
     std::wstring s;
     if (mods & ModCtrl) s += L"Ctrl+";
@@ -36,7 +36,9 @@ std::wstring KeyText(UINT mods, UINT vk) {
     if (mods & ModAlt) s += L"Alt+";
     if ((vk >= 'A' && vk <= 'Z') || (vk >= '0' && vk <= '9')) return s + static_cast<wchar_t>(vk);
     if (vk >= VK_F1 && vk <= VK_F24) return s + L"F" + std::to_wstring(vk - VK_F1 + 1);
-    for (const KeyName& k : kKeyNames)  // el primer nombre de cada tecla es el castellano
+    if (vk == VK_PRIOR) return s + L"PageUp";
+    if (vk == VK_NEXT) return s + L"PageDown";
+    for (const KeyName& k : kKeyNames)  // the first name listed for each key is the one displayed
         if (k.vk == vk) {
             std::wstring n = k.name;
             n[0] = towupper(n[0]);
@@ -76,7 +78,7 @@ void PaletteFilter() {
     g_pal.first = 0;
 }
 
-// Mantiene la fila seleccionada a la vista.
+// Keeps the selected row in view.
 void PaletteEnsureVisible() {
     if (g_pal.sel < g_pal.first) g_pal.first = g_pal.sel;
     if (g_pal.sel >= g_pal.first + kPalMaxRows) g_pal.first = g_pal.sel - kPalMaxRows + 1;
@@ -103,22 +105,22 @@ void PaletteBuild() {
     auto add = [&](std::wstring title, std::wstring detail, std::wstring shortcut, std::function<void()> run) {
         g_pal.all.push_back({std::move(title), std::move(detail), std::move(shortcut), std::move(run)});
     };
-    // comandos con atajo
+    // commands with shortcuts
     for (const CmdDef& c : kCommands) {
-        if (c.cmd == Cmd::Paleta) continue;
+        if (c.cmd == Cmd::Palette) continue;
         std::wstring title = c.help;
         title[0] = towupper(title[0]);
         Cmd cmd = c.cmd;
         add(title, c.name, ShortcutFor(c.cmd), [cmd] { RunCommand(cmd); });
         g_pal.all.back().cmd = cmd;
     }
-    // orden
-    add(L"Ordenar por nombre", L"orden", L"", [] { SetSortExplicit(SortBy::Name, true); });
-    add(L"Ordenar por fecha, lo más nuevo primero", L"orden", L"", [] { SetSortExplicit(SortBy::Date, false); });
-    add(L"Ordenar por fecha, lo más viejo primero", L"orden", L"", [] { SetSortExplicit(SortBy::Date, true); });
-    add(L"Ordenar por tamaño, lo más grande primero", L"orden", L"", [] { SetSortExplicit(SortBy::Size, false); });
-    add(L"Ordenar por tamaño, lo más chico primero", L"orden", L"", [] { SetSortExplicit(SortBy::Size, true); });
-    add(L"Invertir el orden", L"orden", L"", [] {
+    // sort
+    add(L"Sort by name", L"sort", L"", [] { SetSortExplicit(SortBy::Name, true); });
+    add(L"Sort by date, newest first", L"sort", L"", [] { SetSortExplicit(SortBy::Date, false); });
+    add(L"Sort by date, oldest first", L"sort", L"", [] { SetSortExplicit(SortBy::Date, true); });
+    add(L"Sort by size, largest first", L"sort", L"", [] { SetSortExplicit(SortBy::Size, false); });
+    add(L"Sort by size, smallest first", L"sort", L"", [] { SetSortExplicit(SortBy::Size, true); });
+    add(L"Reverse the sort order", L"sort", L"", [] {
         SortBy by;
         bool asc;
         if (ViewPrimarySort(CurView(), by, asc)) SetSortExplicit(by, !asc);
@@ -127,33 +129,33 @@ void PaletteBuild() {
     {
         const Step* f = FirstStep(CurView(), StepKind::Folders);
         int mode = !f ? 0 : f->a == FmFirst ? 1 : f->a == FmFirstByName ? 2 : 0;
-        const wchar_t* ffNames[3] = {L"mezcladas con los archivos", L"siempre primero", L"primero solo al ordenar por nombre"};
-        add(std::wstring(L"Carpetas: ") + ffNames[mode] + L"  →  cambiar", L"orden carpetas primero", L"",
+        const wchar_t* ffNames[3] = {L"mixed with files", L"always first", L"first only when sorting by name"};
+        add(std::wstring(L"Folders: ") + ffNames[mode] + L"  →  change", L"sort folders first", L"",
             [mode] { SetFoldersFirst((mode + 1) % 3); });
     }
-    add(L"Vista de esta carpeta: ordenar, agrupar, filtrar…", L"vista filtro agrupar reglas", L"", [] { ViewEditorOpen(g_act); });
-    // favoritos y pestañas
+    add(L"View for this folder: sort, group, filter…", L"view filter group rules", L"", [] { ViewEditorOpen(g_act); });
+    // favorites and tabs
     for (size_t i = 0; i < g_favs.size(); ++i) {
         std::wstring p = g_favs[i].path;
-        add(L"Ir a: " + g_favs[i].name, p, i < 9 ? L"Ctrl+" + std::to_wstring(i + 1) : L"", [p] { Navigate(T(), p, true); });
+        add(L"Go to: " + g_favs[i].name, p, i < 9 ? L"Ctrl+" + std::to_wstring(i + 1) : L"", [p] { Navigate(T(), p, true); });
     }
     for (size_t i = 0; i < g_tabs.size(); ++i) {
         int idx = static_cast<int>(i);
-        add(L"Pestaña: " + TabTitle(*g_tabs[i]), g_tabs[i]->path.empty() ? L"Este equipo" : g_tabs[i]->path, L"",
+        add(L"Tab: " + TabTitle(*g_tabs[i]), g_tabs[i]->path.empty() ? L"This PC" : g_tabs[i]->path, L"",
             [idx] { SelectTab(idx); });
     }
-    add(L"Ir a: Este equipo", L"unidades", L"", [] { Navigate(T(), L"", true); });
+    add(L"Go to: This PC", L"drives", L"", [] { Navigate(T(), L"", true); });
     // app
-    add(L"Reindexar los discos ya (rápido, pide permiso de administrador)", L"índice everything mft buscar disco", L"",
+    add(L"Reindex the drives now (fast, asks for admin permission)", L"index everything mft search drive", L"",
         [] { IdxReindexElevated(); });
-    add(L"Editar config.txt", L"configuración", L"", [] {
+    add(L"Edit config.txt", L"settings", L"", [] {
         std::wstring f = ConfigFile();
         if (!f.empty()) ShellExecuteW(nullptr, L"open", f.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
     });
-    add(L"Abrir la carpeta de configuración", L"configuración", L"", [] { NewTab(ConfigDir()); });
-    add(L"Editor del menú contextual", L"menú", L"", [] { OpenMenuEditor(); });
-    add(L"Acerca de Jolt", L"", L"", [] {
-        MessageBoxW(g_hwnd, L"Jolt — explorador de archivos.\n\nC++ · Win32 · Direct2D.", L"Acerca de Jolt",
+    add(L"Open the config folder", L"settings", L"", [] { NewTab(ConfigDir()); });
+    add(L"Context menu editor", L"menu", L"", [] { OpenMenuEditor(); });
+    add(L"About Jolt", L"", L"", [] {
+        MessageBoxW(g_hwnd, L"Jolt — file explorer.\n\nC++ · Win32 · Direct2D.", L"About Jolt",
                     MB_OK | MB_ICONINFORMATION);
     });
 }
@@ -171,11 +173,11 @@ void PaletteOpen(int mode = 0) {
     Invalidate();
 }
 
-// ---- Ir a (Ctrl+P): recientes, favoritos, lugares del sistema, unidades, o una ruta escrita
+// ---- Go to (Ctrl+P): recents, favorites, system places, drives, or a typed path
 void GotoOpen(const std::wstring& p, bool newTab) {
     DWORD a = p.empty() ? FILE_ATTRIBUTE_DIRECTORY : GetFileAttributesW(ToExtendedPath(p).c_str());
     if (a == INVALID_FILE_ATTRIBUTES) {
-        S.message = L"Ya no existe: " + p;
+        S.message = L"No longer exists: " + p;
         Invalidate();
         return;
     }
@@ -192,7 +194,7 @@ void GotoOpen(const std::wstring& p, bool newTab) {
 }
 
 std::wstring PlaceTitle(const std::wstring& p) {
-    if (p.empty()) return L"Este equipo";
+    if (p.empty()) return L"This PC";
     if (IsDriveRoot(p)) return DriveLabel(p[0]);
     return LeafOf(p);
 }
@@ -204,7 +206,7 @@ void GotoBuild() {
         if (!seen.insert(Key(path)).second) return;
         PalItem it;
         it.title = title;
-        it.detail = path.empty() ? L"unidades" : path;
+        it.detail = path.empty() ? L"drives" : path;
         it.path = path;
         it.pinned = pinned;
         it.bonus = bonus;
@@ -212,7 +214,7 @@ void GotoBuild() {
         g_pal.all.push_back(std::move(it));
     };
     std::wstring text = Trim(g_pal.text);
-    // una ruta escrita: la carpeta y su contenido, filtrado por lo que sigue a la última barra
+    // a typed path: the folder and its contents, filtered by whatever follows the last slash
     if (text.find_first_of(L"\\/:") != std::wstring::npos || (!text.empty() && (text[0] == L'%' || text[0] == L'~'))) {
         std::wstring t = text;
         for (wchar_t& c : t)
@@ -232,9 +234,9 @@ void GotoBuild() {
         if (a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_DIRECTORY)) {
             std::wstring whole = Normalize(t);
             DWORD wa = GetFileAttributesW(ToExtendedPath(whole).c_str());
-            // lo escrito tal cual, si existe; la carpeta, solo mientras no se escribió nada después de la barra
-            if (wa != INVALID_FILE_ATTRIBUTES && Key(whole) != Key(dir)) add(L"Ir a " + whole, whole, true);
-            if (g_pal.match.empty()) add(L"Ir a " + dir, dir, true);
+            // the typed text as is, if it exists; the folder, only while nothing is typed after the slash
+            if (wa != INVALID_FILE_ATTRIBUTES && Key(whole) != Key(dir)) add(L"Go to " + whole, whole, true);
+            if (g_pal.match.empty()) add(L"Go to " + dir, dir, true);
             std::shared_ptr<const Listing> l;
             auto it = g_cache.find(Key(dir));
             if (it != g_cache.end()) {
@@ -260,31 +262,31 @@ void GotoBuild() {
     struct K {
         const wchar_t* name;
         const KNOWNFOLDERID* id;
-    } known[] = {{L"Escritorio", &FOLDERID_Desktop},       {L"Descargas", &FOLDERID_Downloads},
-                 {L"Documentos", &FOLDERID_Documents},     {L"Imágenes", &FOLDERID_Pictures},
-                 {L"Música", &FOLDERID_Music},             {L"Videos", &FOLDERID_Videos},
-                 {L"Usuario", &FOLDERID_Profile},          {L"OneDrive", &FOLDERID_SkyDrive},
+    } known[] = {{L"Desktop", &FOLDERID_Desktop},          {L"Downloads", &FOLDERID_Downloads},
+                 {L"Documents", &FOLDERID_Documents},      {L"Pictures", &FOLDERID_Pictures},
+                 {L"Music", &FOLDERID_Music},              {L"Videos", &FOLDERID_Videos},
+                 {L"User", &FOLDERID_Profile},             {L"OneDrive", &FOLDERID_SkyDrive},
                  {L"AppData", &FOLDERID_RoamingAppData},   {L"AppData Local", &FOLDERID_LocalAppData},
-                 {L"Archivos de programa", &FOLDERID_ProgramFiles},
-                 {L"Archivos de programa (x86)", &FOLDERID_ProgramFilesX86},
-                 {L"Inicio (programas al arrancar)", &FOLDERID_Startup},
-                 {L"Menú Inicio", &FOLDERID_Programs},     {L"Enviar a", &FOLDERID_SendTo},
-                 {L"Fuentes", &FOLDERID_Fonts},            {L"Windows", &FOLDERID_Windows},
+                 {L"Program Files", &FOLDERID_ProgramFiles},
+                 {L"Program Files (x86)", &FOLDERID_ProgramFilesX86},
+                 {L"Startup (programs at boot)", &FOLDERID_Startup},
+                 {L"Start Menu", &FOLDERID_Programs},      {L"Send To", &FOLDERID_SendTo},
+                 {L"Fonts", &FOLDERID_Fonts},              {L"Windows", &FOLDERID_Windows},
                  {L"System32", &FOLDERID_System}};
     for (const K& k : known) {
         std::wstring p = Known(*k.id);
         if (!p.empty()) add(k.name, Normalize(p));
     }
     wchar_t tmp[MAX_PATH];
-    if (GetTempPathW(MAX_PATH, tmp)) add(L"Temporales", Normalize(tmp));
-    add(L"Este equipo", L"");
+    if (GetTempPathW(MAX_PATH, tmp)) add(L"Temp", Normalize(tmp));
+    add(L"This PC", L"");
     DWORD mask = GetLogicalDrives();
     for (int i = 0; i < 26; ++i)
         if (mask & (1u << i)) {
             std::wstring root = std::wstring(1, static_cast<wchar_t>(L'A' + i)) + L":\\";
             add(DriveLabel(root[0]), root);
         }
-    // todo el disco (índice global): llega un momento después y se suma a la lista
+    // the whole drive (global index): arrives a moment later and joins the list
     IdxRequest(text);
     if (text.size() >= 2 && g_ixRes.query == text)
         for (auto& [p, dir] : g_ixRes.hits) add(PlaceTitle(p), p, false, 0);
@@ -297,14 +299,14 @@ void PaletteRun(int hit) {
     if (run) run();
 }
 
-// Nombre del comando (config) para un Cmd.
+// Command name (config) for a Cmd.
 const wchar_t* CmdName(Cmd cmd) {
     for (const CmdDef& c : kCommands)
         if (c.cmd == cmd) return c.name;
     return L"";
 }
 
-// Aplica una tecla capturada al comando: reemplaza su primer atajo, conserva los demás, y lo escribe en config.txt.
+// Applies a captured key to the command: replaces its first shortcut, keeps the rest, and writes it to config.txt.
 void PaletteAssignKey(Cmd cmd, UINT mods, UINT vk, bool remove) {
     std::vector<KeyBind> mine;
     for (const KeyBind& k : g_cfg.keys)
@@ -319,7 +321,7 @@ void PaletteAssignKey(Cmd cmd, UINT mods, UINT vk, bool remove) {
         specs += (specs.empty() ? L"" : L", ") + KeyText(mine[i].mods, mine[i].vk);
     }
     ConfigWriteShortcut(CmdName(cmd), specs, mods, remove ? 0 : vk);
-    // reflejar ya mismo en memoria (el archivo también dispara la recarga)
+    // reflect it in memory right away (the file also triggers a reload)
     if (!remove)
         g_cfg.keys.erase(std::remove_if(g_cfg.keys.begin(), g_cfg.keys.end(),
                                         [&](const KeyBind& k) { return k.mods == mods && k.vk == vk; }),
@@ -327,7 +329,7 @@ void PaletteAssignKey(Cmd cmd, UINT mods, UINT vk, bool remove) {
     g_cfg.keys.erase(std::remove_if(g_cfg.keys.begin(), g_cfg.keys.end(), [&](const KeyBind& k) { return k.cmd == cmd; }),
                      g_cfg.keys.end());
     for (const KeyBind& k : mine) g_cfg.keys.push_back(k);
-    // reconstruir la paleta conservando texto, selección y desplazamiento
+    // rebuild the palette, keeping text, selection and scroll
     std::wstring text = g_pal.text;
     int sel = g_pal.sel, first = g_pal.first;
     PaletteBuild();
@@ -335,7 +337,7 @@ void PaletteAssignKey(Cmd cmd, UINT mods, UINT vk, bool remove) {
     PaletteFilter();
     g_pal.sel = std::min(sel, std::max(0, static_cast<int>(g_pal.hits.size()) - 1));
     g_pal.first = first;
-    S.message = remove ? L"Atajo quitado" : L"Atajo guardado: " + KeyText(mods, vk);
+    S.message = remove ? L"Shortcut removed" : L"Shortcut saved: " + KeyText(mods, vk);
 }
 
 bool PaletteCaptureKey(WPARAM vk) {
@@ -356,9 +358,9 @@ bool PaletteCaptureKey(WPARAM vk) {
         Invalidate();
         return true;
     }
-    // las teclas de cursor sin modificadores son fijas
+    // cursor keys without modifiers are fixed
     if (mods == 0 && (vk == VK_UP || vk == VK_DOWN || vk == VK_PRIOR || vk == VK_NEXT || vk == VK_HOME || vk == VK_END)) {
-        S.message = L"Esa tecla es fija; probá con Ctrl, Shift o Alt";
+        S.message = L"That key is fixed; try Ctrl, Shift or Alt";
         Invalidate();
         return true;
     }
@@ -376,7 +378,7 @@ void PaletteKey(WPARAM vk) {
             if (g_pal.mode == 1 && KeyDown(VK_CONTROL) && g_pal.sel < n) {
                 std::wstring p = g_pal.all[g_pal.hits[g_pal.sel].first].path;
                 PaletteClose();
-                GotoOpen(p, true);  // Ctrl+Enter: en una pestaña nueva
+                GotoOpen(p, true);  // Ctrl+Enter: in a new tab
                 return;
             }
             PaletteRun(g_pal.sel);
@@ -406,7 +408,7 @@ void PaletteChar(wchar_t c) {
     Invalidate();
 }
 
-// Dibuja un texto resaltando las posiciones coincidentes.
+// Draws text with the matching positions highlighted.
 void TextHighlighted(const std::wstring& s, const std::wstring& patLower, IDWriteTextFormat* fmt, float l, float t,
                      float r, float b, UINT32 color, UINT32 hiColor, float alpha) {
     std::vector<int> pos;
@@ -436,19 +438,19 @@ void DrawPalette(float W, float H) {
     const int rows = std::min(kPalMaxRows, total - g_pal.first);
     const float ph = kPalInputH + rows * kPalRow + (rows ? 8 : 0);
     g_pal.panel = D2D1::RectF(px, py, px + pw, py + ph);
-    // sombra suave y panel
+    // soft shadow and panel
     for (int i = 4; i >= 1; --i) Round(D2D1::RectF(px - i, py - i + 2, px + pw + i, py + ph + i + 2), 10.f + i, 0x000000, 0.10f);
     Round(g_pal.panel, 10, cTop);
     Color(cBorder);
     g_rt->DrawRoundedRectangle(D2D1::RoundedRect(g_pal.panel, 10, 10), g_brush.Get(), 1.f);
-    // entrada
+    // input
     Color(cDim);
-    Glyph(0xE721, g_fmtIcon.Get(), px + 10, py, px + 34, py + kPalInputH);  // lupa
+    Glyph(0xE721, g_fmtIcon.Get(), px + 10, py, px + 34, py + kPalInputH);  // magnifier
     std::wstring shown = g_pal.text;
     float tw = MeasureW(shown, g_fmtName.Get());
     if (shown.empty()) {
         Color(cFaint);
-        Text(g_pal.mode == 1 ? L"Ir a…  recientes, favoritos, lugares, unidades o una ruta" : L"Escribí un comando…",
+        Text(g_pal.mode == 1 ? L"Go to…  recents, favorites, places, drives or a path" : L"Type a command…",
              g_fmtName.Get(), px + 38, py, px + pw - 12, py + kPalInputH);
     } else {
         Color(cText);
@@ -456,9 +458,9 @@ void DrawPalette(float W, float H) {
     }
     Fill(D2D1::RectF(px + 38 + tw + 1, py + 12, px + 38 + tw + 2, py + kPalInputH - 12), cText);  // caret
     if (g_pal.mode == 1 && (g_ixCount > 0 || g_ixBuilding)) {
-        // estado del índice de los discos
-        std::wstring st = g_ixBuilding && g_ixCount == 0 ? L"indexando los discos…"
-                          : Thousands(static_cast<int>(std::min<uint64_t>(g_ixCount, INT_MAX))) + (g_ixBuilding ? L" en el índice · actualizando" : L" en el índice");
+        // drive index status
+        std::wstring st = g_ixBuilding && g_ixCount == 0 ? L"indexing the drives…"
+                          : Thousands(static_cast<int>(std::min<uint64_t>(g_ixCount, INT_MAX))) + (g_ixBuilding ? L" in the index · updating" : L" in the index");
         Color(cFaint);
         Text(st, g_fmtRight.Get(), px + 38 + tw + 20, py, px + pw - 14, py + kPalInputH);
     }
@@ -475,10 +477,10 @@ void DrawPalette(float W, float H) {
         if (hi == g_pal.sel) Round(r, 6, cAccent, 0.22f);
         float right = r.right - 10;
         if (it.cmd != Cmd::None) {
-            // celda del atajo: clickeable para cambiarlo
+            // shortcut cell: click it to change the shortcut
             const bool capturing = hi == g_pal.capture;
-            std::wstring label = capturing ? L"Presioná una tecla…  (Esc cancela, Supr quita)"
-                                 : it.shortcut.empty() ? L"sin atajo" : it.shortcut;
+            std::wstring label = capturing ? L"Press a key…  (Esc cancels, Del removes)"
+                                 : it.shortcut.empty() ? L"no shortcut" : it.shortcut;
             float w = MeasureW(label, g_fmtRight.Get()) + 16;
             D2D1_RECT_F cell = D2D1::RectF(right - w, y + 4, right + 2, y + kPalRow - 4);
             g_pal.shortcutRects[i] = cell;
@@ -508,7 +510,7 @@ void DrawPalette(float W, float H) {
         y += kPalRow;
     }
     if (total > kPalMaxRows) {
-        // barra de desplazamiento finita
+        // thin scrollbar
         const float top = py + kPalInputH + 4, viewH = kPalMaxRows * kPalRow;
         const float thumbH = std::max(20.f, viewH * kPalMaxRows / total);
         const float thumbY = top + (viewH - thumbH) * (static_cast<float>(g_pal.first) / (total - kPalMaxRows));
@@ -532,7 +534,7 @@ void PaletteHover(float x, float y) {
     }
 }
 
-// Devuelve true si el click fue consumido por la paleta.
+// Returns true if the click was consumed by the palette.
 bool PaletteClick(float x, float y) {
     if (!g_pal.open) return false;
     int sc = PaletteShortcutAt(x, y);

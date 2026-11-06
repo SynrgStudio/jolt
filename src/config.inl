@@ -1,16 +1,16 @@
-// Configuración: %APPDATA%\Jolt\config.txt. Se genera con los valores por defecto la primera vez
-// y se recarga sola cuando se guarda. Se incluye desde app.cpp después de la sección de favoritos.
+// Settings: %APPDATA%\Jolt\config.txt. Generated with the default values the first time
+// and reloaded automatically when saved. Included from app.cpp after the favorites section.
 
 enum class Cmd {
-    None, Subir, Entrar, Abrir, AbrirPestana, Atras, Adelante, Renombrar, Eliminar, CarpetaNueva, Copiar, Cortar,
-    Pegar, SeleccionarTodo, Favorito, PestanaNueva, CerrarPestana, PestanaSiguiente, PestanaAnterior, Ruta,
-    BarraLateral, Recargar, Tiempos, MenuContextual, MenuApp, Paleta, IrA, BuscarSubcarpetas, Desplegar, Plegar,
-    IrAUbicacion, VistaPrevia, Dividir, OtroPanel, CopiarAlOtro, MoverAlOtro, CopiarRuta, ArchivoNuevo, Duplicar,
-    Propiedades, TamanoCarpetas, VerCarpetas, VerArchivos, VerOcultos, VerExtensiones, ReabrirPestana, CerrarOtras,
-    Terminal, AbrirExplorador, UbicacionReal, PlegarGrupos, DesplegarGrupos, AgruparDia, AgruparTipo, SinGrupos,
-    OrdenarTipo, AumentarInterfaz, ReducirInterfaz, RestablecerInterfaz, FilaMas, FilaMenos, VaciarPapelera,
-    Deshacer, Rehacer,
-    Instalacion, Salir
+    None, Up, Enter, Open, OpenTab, Back, Forward, Rename, Delete, NewFolder, Copy, Cut,
+    Paste, SelectAll, Favorite, NewTab, CloseTab, NextTab, PreviousTab, Path,
+    Sidebar, Reload, Timings, ContextMenu, AppMenu, Palette, GoTo, SearchSubfolders, Expand, Collapse,
+    GoToLocation, Preview, Split, OtherPane, CopyToOther, MoveToOther, CopyPath, NewFile, Duplicate,
+    Properties, FolderSizes, ShowFolders, ShowFiles, ShowHidden, ShowExtensions, ReopenTab, CloseOthers,
+    Terminal, OpenExplorer, RealLocation, CollapseGroups, ExpandGroups, GroupByDay, GroupByType, NoGroups,
+    SortByType, ZoomIn, ZoomOut, ZoomReset, RowsTaller, RowsShorter, EmptyRecycleBin,
+    Undo, Redo,
+    Install, Quit
 };
 enum : UINT { ModCtrl = 1, ModShift = 2, ModAlt = 4 };
 
@@ -19,11 +19,14 @@ struct KeyBind {
     Cmd cmd;
 };
 
+constexpr int kHotCountMax = 30;
+
 struct Config {
     std::wstring font = L"Segoe UI";
     float fontSize = 12;
     bool showHidden = true;
     bool background = true, tray = true, openDrives = false;
+    int hotCount = 10;  // folders in Recents (0: no section)
     std::wstring globalKey = L"Win+J";
     bool colDate = true, colSize = true;
     std::vector<KeyBind> keys;
@@ -36,71 +39,71 @@ struct CmdDef {
     const wchar_t* help;
 };
 const CmdDef kCommands[] = {
-    {L"subir", Cmd::Subir, L"Retroceso, Izquierda, Alt+Arriba", L"ir a la carpeta superior"},
-    {L"entrar", Cmd::Entrar, L"Derecha", L"entrar en la carpeta resaltada (no abre archivos)"},
-    {L"abrir", Cmd::Abrir, L"Enter", L"abrir lo resaltado (carpeta o archivo)"},
-    {L"abrir_pestana", Cmd::AbrirPestana, L"Ctrl+Enter", L"abrir la carpeta resaltada en una pestaña nueva"},
-    {L"atras", Cmd::Atras, L"Alt+Izquierda", L"volver"},
-    {L"adelante", Cmd::Adelante, L"Alt+Derecha", L"adelante"},
-    {L"renombrar", Cmd::Renombrar, L"F2", L"renombrar"},
-    {L"eliminar", Cmd::Eliminar, L"Supr, Shift+Supr", L"a la papelera (con Shift, definitivo)"},
-    {L"carpeta_nueva", Cmd::CarpetaNueva, L"Ctrl+Shift+N", L"carpeta nueva"},
-    {L"copiar", Cmd::Copiar, L"Ctrl+C", L"copiar"},
-    {L"cortar", Cmd::Cortar, L"Ctrl+X", L"cortar"},
-    {L"pegar", Cmd::Pegar, L"Ctrl+V", L"pegar"},
-    {L"seleccionar_todo", Cmd::SeleccionarTodo, L"Ctrl+A", L"seleccionar todo"},
-    {L"favorito", Cmd::Favorito, L"Ctrl+D", L"agregar o quitar la carpeta actual de favoritos"},
-    {L"pestana_nueva", Cmd::PestanaNueva, L"Ctrl+T", L"pestaña nueva"},
-    {L"cerrar_pestana", Cmd::CerrarPestana, L"Ctrl+W", L"cerrar pestaña"},
-    {L"pestana_siguiente", Cmd::PestanaSiguiente, L"Ctrl+Tab", L"pestaña siguiente"},
-    {L"pestana_anterior", Cmd::PestanaAnterior, L"Ctrl+Shift+Tab", L"pestaña anterior"},
-    {L"ruta", Cmd::Ruta, L"Ctrl+L", L"escribir una ruta"},
-    {L"barra_lateral", Cmd::BarraLateral, L"Ctrl+B", L"mostrar u ocultar la barra lateral"},
-    {L"recargar", Cmd::Recargar, L"Ctrl+R", L"recargar la carpeta"},
-    {L"tiempos", Cmd::Tiempos, L"F12", L"mostrar u ocultar los tiempos"},
-    {L"menu_contextual", Cmd::MenuContextual, L"Shift+F10, Menu", L"menú contextual"},
-    {L"menu_app", Cmd::MenuApp, L"Alt+M", L"menú de Jolt"},
-    {L"paleta", Cmd::Paleta, L"Ctrl+K", L"paleta de comandos"},
-    {L"ir_a", Cmd::IrA, L"Ctrl+P", L"ir a una carpeta reciente, favorita, del sistema o a una ruta"},
-    {L"buscar_subcarpetas", Cmd::BuscarSubcarpetas, L"Ctrl+Shift+F", L"buscar en esta carpeta y todas sus subcarpetas"},
-    {L"desplegar", Cmd::Desplegar, L"Shift+Derecha", L"desplegar o plegar la carpeta resaltada (árbol)"},
-    {L"plegar", Cmd::Plegar, L"Shift+Izquierda", L"plegar la carpeta (o volver a la de arriba en el árbol)"},
-    {L"ir_a_ubicacion", Cmd::IrAUbicacion, L"Ctrl+Shift+E", L"abrir la carpeta que contiene lo resaltado"},
-    {L"vista_previa", Cmd::VistaPrevia, L"Espacio", L"mostrar u ocultar la vista previa"},
-    {L"dividir", Cmd::Dividir, L"Ctrl+S", L"vista dividida en dos paneles"},
-    {L"otro_panel", Cmd::OtroPanel, L"Tab", L"pasar al otro panel"},
-    {L"copiar_al_otro", Cmd::CopiarAlOtro, L"F5", L"copiar la selección al otro panel"},
-    {L"mover_al_otro", Cmd::MoverAlOtro, L"F6", L"mover la selección al otro panel"},
-    {L"copiar_ruta", Cmd::CopiarRuta, L"Ctrl+Shift+C", L"copiar la ruta de lo seleccionado (o de la carpeta)"},
-    {L"archivo_nuevo", Cmd::ArchivoNuevo, L"Ctrl+N", L"archivo nuevo"},
-    {L"duplicar", Cmd::Duplicar, L"Ctrl+Shift+D", L"duplicar lo seleccionado"},
-    {L"propiedades", Cmd::Propiedades, L"Alt+Enter", L"propiedades de Windows"},
-    {L"tamano_carpetas", Cmd::TamanoCarpetas, L"Alt+R", L"calcular el tamaño de las carpetas"},
-    {L"ver_carpetas", Cmd::VerCarpetas, L"", L"mostrar u ocultar las carpetas (toggle folders)"},
-    {L"ver_archivos", Cmd::VerArchivos, L"", L"mostrar u ocultar los archivos (toggle files)"},
-    {L"ver_ocultos", Cmd::VerOcultos, L"Ctrl+H", L"mostrar u ocultar los archivos ocultos (toggle hidden files)"},
-    {L"ver_extensiones", Cmd::VerExtensiones, L"", L"mostrar u ocultar las extensiones (toggle file extensions)"},
-    {L"reabrir_pestana", Cmd::ReabrirPestana, L"Ctrl+Shift+T", L"reabrir la última pestaña cerrada"},
-    {L"cerrar_otras", Cmd::CerrarOtras, L"Ctrl+Alt+W", L"cerrar las demás pestañas"},
-    {L"terminal", Cmd::Terminal, L"Ctrl+Alt+T", L"abrir la terminal en esta carpeta (consola, cmd, powershell)"},
-    {L"abrir_explorador", Cmd::AbrirExplorador, L"Ctrl+Alt+E", L"abrir en el Explorador de Windows"},
-    {L"ubicacion_real", Cmd::UbicacionReal, L"Ctrl+Alt+L", L"ir a la ubicación real de un acceso directo"},
-    {L"plegar_grupos", Cmd::PlegarGrupos, L"", L"plegar todos los grupos"},
-    {L"desplegar_grupos", Cmd::DesplegarGrupos, L"", L"desplegar todos los grupos"},
-    {L"agrupar_dia", Cmd::AgruparDia, L"", L"agrupar esta carpeta por día"},
-    {L"agrupar_tipo", Cmd::AgruparTipo, L"", L"agrupar esta carpeta por tipo"},
-    {L"sin_grupos", Cmd::SinGrupos, L"", L"sacar los grupos de esta carpeta"},
-    {L"ordenar_tipo", Cmd::OrdenarTipo, L"", L"ordenar por tipo (extensión)"},
-    {L"aumentar_interfaz", Cmd::AumentarInterfaz, L"Ctrl++, Ctrl+Shift++, Ctrl+Num+", L"agrandar la interfaz (zoom)"},
-    {L"reducir_interfaz", Cmd::ReducirInterfaz, L"Ctrl+-, Ctrl+Num-", L"achicar la interfaz (zoom)"},
-    {L"restablecer_interfaz", Cmd::RestablecerInterfaz, L"Ctrl+0", L"volver al tamaño normal de la interfaz (zoom)"},
-    {L"fila_mas", Cmd::FilaMas, L"", L"más espacio entre filas"},
-    {L"fila_menos", Cmd::FilaMenos, L"", L"menos espacio entre filas"},
-    {L"vaciar_papelera", Cmd::VaciarPapelera, L"", L"vaciar la papelera de reciclaje"},
-    {L"deshacer", Cmd::Deshacer, L"Ctrl+Z", L"deshacer lo último (renombrar, mover, copiar, crear, papelera)"},
-    {L"rehacer", Cmd::Rehacer, L"Ctrl+Y, Ctrl+Shift+Z", L"rehacer lo que se deshizo"},
-    {L"instalacion", Cmd::Instalacion, L"", L"instalar Jolt, agregarlo al PATH, hacerlo predeterminado"},
-    {L"salir", Cmd::Salir, L"", L"cerrar Jolt de verdad"},
+    {L"up", Cmd::Up, L"Backspace, Left, Alt+Up", L"go to the parent folder"},
+    {L"enter", Cmd::Enter, L"Right", L"enter the highlighted folder (does not open files)"},
+    {L"open", Cmd::Open, L"Enter", L"open the highlighted item (folder or file)"},
+    {L"open_tab", Cmd::OpenTab, L"Ctrl+Enter", L"open the highlighted folder in a new tab"},
+    {L"back", Cmd::Back, L"Alt+Left", L"back"},
+    {L"forward", Cmd::Forward, L"Alt+Right", L"forward"},
+    {L"rename", Cmd::Rename, L"F2", L"rename"},
+    {L"delete", Cmd::Delete, L"Del, Shift+Del", L"move to the Recycle Bin (with Shift, permanently)"},
+    {L"new_folder", Cmd::NewFolder, L"Ctrl+Shift+N", L"new folder"},
+    {L"copy", Cmd::Copy, L"Ctrl+C", L"copy"},
+    {L"cut", Cmd::Cut, L"Ctrl+X", L"cut"},
+    {L"paste", Cmd::Paste, L"Ctrl+V", L"paste"},
+    {L"select_all", Cmd::SelectAll, L"Ctrl+A", L"select all"},
+    {L"favorite", Cmd::Favorite, L"Ctrl+D", L"add or remove the current folder from favorites"},
+    {L"new_tab", Cmd::NewTab, L"Ctrl+T", L"new tab"},
+    {L"close_tab", Cmd::CloseTab, L"Ctrl+W", L"close tab"},
+    {L"next_tab", Cmd::NextTab, L"Ctrl+Tab", L"next tab"},
+    {L"previous_tab", Cmd::PreviousTab, L"Ctrl+Shift+Tab", L"previous tab"},
+    {L"path", Cmd::Path, L"Ctrl+L", L"type a path"},
+    {L"sidebar", Cmd::Sidebar, L"Ctrl+B", L"show or hide the sidebar"},
+    {L"reload", Cmd::Reload, L"Ctrl+R", L"reload the folder"},
+    {L"timings", Cmd::Timings, L"F12", L"show or hide timings"},
+    {L"context_menu", Cmd::ContextMenu, L"Shift+F10, Menu", L"context menu"},
+    {L"app_menu", Cmd::AppMenu, L"Alt+M", L"Jolt menu"},
+    {L"palette", Cmd::Palette, L"Ctrl+K", L"command palette"},
+    {L"go_to", Cmd::GoTo, L"Ctrl+P", L"go to a recent, favorite or system folder, or a path"},
+    {L"search_subfolders", Cmd::SearchSubfolders, L"Ctrl+Shift+F", L"search this folder and all its subfolders"},
+    {L"expand", Cmd::Expand, L"Shift+Right", L"expand or collapse the highlighted folder (tree)"},
+    {L"collapse", Cmd::Collapse, L"Shift+Left", L"collapse the folder (or go to the one above in the tree)"},
+    {L"go_to_location", Cmd::GoToLocation, L"Ctrl+Shift+E", L"open the folder containing the highlighted item"},
+    {L"preview", Cmd::Preview, L"Space", L"show or hide the preview"},
+    {L"split", Cmd::Split, L"Ctrl+S", L"split view with two panes"},
+    {L"other_pane", Cmd::OtherPane, L"Tab", L"switch to the other pane"},
+    {L"copy_to_other", Cmd::CopyToOther, L"F5", L"copy the selection to the other pane"},
+    {L"move_to_other", Cmd::MoveToOther, L"F6", L"move the selection to the other pane"},
+    {L"copy_path", Cmd::CopyPath, L"Ctrl+Shift+C", L"copy the path of the selection (or of the folder)"},
+    {L"new_file", Cmd::NewFile, L"Ctrl+N", L"new file"},
+    {L"duplicate", Cmd::Duplicate, L"Ctrl+Shift+D", L"duplicate the selection"},
+    {L"properties", Cmd::Properties, L"Alt+Enter", L"Windows properties"},
+    {L"folder_sizes", Cmd::FolderSizes, L"Alt+R", L"calculate folder sizes"},
+    {L"show_folders", Cmd::ShowFolders, L"", L"show or hide folders (toggle folders)"},
+    {L"show_files", Cmd::ShowFiles, L"", L"show or hide files (toggle files)"},
+    {L"show_hidden", Cmd::ShowHidden, L"Ctrl+H", L"show or hide hidden files (toggle hidden files)"},
+    {L"show_extensions", Cmd::ShowExtensions, L"", L"show or hide extensions (toggle file extensions)"},
+    {L"reopen_tab", Cmd::ReopenTab, L"Ctrl+Shift+T", L"reopen the last closed tab"},
+    {L"close_others", Cmd::CloseOthers, L"Ctrl+Alt+W", L"close the other tabs"},
+    {L"terminal", Cmd::Terminal, L"Ctrl+Alt+T", L"open the terminal in this folder (console, cmd, powershell)"},
+    {L"open_explorer", Cmd::OpenExplorer, L"Ctrl+Alt+E", L"open in Windows File Explorer"},
+    {L"real_location", Cmd::RealLocation, L"Ctrl+Alt+L", L"go to the real location of a shortcut"},
+    {L"collapse_groups", Cmd::CollapseGroups, L"", L"collapse all groups"},
+    {L"expand_groups", Cmd::ExpandGroups, L"", L"expand all groups"},
+    {L"group_by_day", Cmd::GroupByDay, L"", L"group this folder by day"},
+    {L"group_by_type", Cmd::GroupByType, L"", L"group this folder by type"},
+    {L"no_groups", Cmd::NoGroups, L"", L"remove the groups from this folder"},
+    {L"sort_by_type", Cmd::SortByType, L"", L"sort by type (extension)"},
+    {L"zoom_in", Cmd::ZoomIn, L"Ctrl++, Ctrl+Shift++, Ctrl+Num+", L"enlarge the interface (zoom)"},
+    {L"zoom_out", Cmd::ZoomOut, L"Ctrl+-, Ctrl+Num-", L"shrink the interface (zoom)"},
+    {L"zoom_reset", Cmd::ZoomReset, L"Ctrl+0", L"reset the interface to normal size (zoom)"},
+    {L"rows_taller", Cmd::RowsTaller, L"", L"more space between rows"},
+    {L"rows_shorter", Cmd::RowsShorter, L"", L"less space between rows"},
+    {L"empty_recycle_bin", Cmd::EmptyRecycleBin, L"", L"empty the Recycle Bin"},
+    {L"undo", Cmd::Undo, L"Ctrl+Z", L"undo the last action (rename, move, copy, create, Recycle Bin)"},
+    {L"redo", Cmd::Redo, L"Ctrl+Y, Ctrl+Shift+Z", L"redo what was undone"},
+    {L"install", Cmd::Install, L"", L"install Jolt, add it to PATH, make it the default"},
+    {L"quit", Cmd::Quit, L"", L"really quit Jolt"},
 };
 
 struct KeyName {
@@ -108,13 +111,10 @@ struct KeyName {
     UINT vk;
 };
 const KeyName kKeyNames[] = {
-    {L"enter", VK_RETURN},    {L"intro", VK_RETURN},   {L"esc", VK_ESCAPE},      {L"escape", VK_ESCAPE},
-    {L"supr", VK_DELETE},     {L"delete", VK_DELETE},  {L"del", VK_DELETE},      {L"retroceso", VK_BACK},
-    {L"backspace", VK_BACK},  {L"tab", VK_TAB},        {L"espacio", VK_SPACE},   {L"space", VK_SPACE},
-    {L"izquierda", VK_LEFT},  {L"left", VK_LEFT},      {L"derecha", VK_RIGHT},   {L"right", VK_RIGHT},
-    {L"arriba", VK_UP},       {L"up", VK_UP},          {L"abajo", VK_DOWN},      {L"down", VK_DOWN},
-    {L"inicio", VK_HOME},     {L"home", VK_HOME},      {L"fin", VK_END},         {L"end", VK_END},
-    {L"repag", VK_PRIOR},     {L"pageup", VK_PRIOR},   {L"avpag", VK_NEXT},      {L"pagedown", VK_NEXT},
+    {L"enter", VK_RETURN},    {L"esc", VK_ESCAPE},     {L"escape", VK_ESCAPE},   {L"del", VK_DELETE},
+    {L"delete", VK_DELETE},   {L"backspace", VK_BACK}, {L"tab", VK_TAB},         {L"space", VK_SPACE},
+    {L"left", VK_LEFT},       {L"right", VK_RIGHT},    {L"up", VK_UP},           {L"down", VK_DOWN},
+    {L"home", VK_HOME},       {L"end", VK_END},        {L"pageup", VK_PRIOR},    {L"pagedown", VK_NEXT},
     {L"menu", VK_APPS},       {L"apps", VK_APPS},      {L"insert", VK_INSERT},   {L"ins", VK_INSERT},
     {L"+", VK_OEM_PLUS},      {L"-", VK_OEM_MINUS},    {L",", VK_OEM_COMMA},     {L".", VK_OEM_PERIOD},
     {L"num+", VK_ADD},        {L"num-", VK_SUBTRACT},
@@ -127,19 +127,19 @@ struct ColorDef {
     const wchar_t* help;
 };
 const ColorDef kColors[] = {
-    {L"fondo", &cBg, 0x1A1A1E, L"fondo de la lista"},
-    {L"barra", &cTop, 0x202024, L"barra de navegación, pestaña activa y menús"},
-    {L"pestanas", &cTabBar, 0x0F0F12, L"barra de pestañas (título)"},
-    {L"lateral", &cSide, 0x151518, L"barra lateral y barra de estado"},
-    {L"borde", &cBorder, 0x2B2B31, L"líneas y bordes"},
-    {L"texto", &cText, 0xE9E9EE, L"texto principal"},
-    {L"texto_secundario", &cDim, 0x8C8C97, L"fechas, tamaños, pestañas inactivas"},
-    {L"texto_tenue", &cFaint, 0x4C4C55, L"títulos de sección, elementos deshabilitados"},
-    {L"acento", &cAccent, 0x4F8CF7, L"resaltados y bordes de destino"},
-    {L"seleccion", &cSel, 0x2C4C86, L"fila seleccionada"},
-    {L"error", &cError, 0xF07178, L"mensajes de error"},
-    {L"uso_disco", &cDisk, 0x3B8EEA, L"barra de uso de disco"},
-    {L"uso_disco_lleno", &cDiskFull, 0xE5484D, L"barra de uso de disco al 90 % o más"},
+    {L"background", &cBg, 0x1A1A1E, L"list background"},
+    {L"toolbar", &cTop, 0x202024, L"navigation bar, active tab and menus"},
+    {L"tabs", &cTabBar, 0x0F0F12, L"tab bar (title)"},
+    {L"sidebar", &cSide, 0x151518, L"sidebar and status bar"},
+    {L"border", &cBorder, 0x2B2B31, L"lines and borders"},
+    {L"text", &cText, 0xE9E9EE, L"main text"},
+    {L"text_secondary", &cDim, 0x8C8C97, L"dates, sizes, inactive tabs"},
+    {L"text_faint", &cFaint, 0x4C4C55, L"section titles, disabled items"},
+    {L"accent", &cAccent, 0x4F8CF7, L"highlights and drop target borders"},
+    {L"selection", &cSel, 0x2C4C86, L"selected row"},
+    {L"error", &cError, 0xF07178, L"error messages"},
+    {L"disk_usage", &cDisk, 0x3B8EEA, L"disk usage bar"},
+    {L"disk_usage_full", &cDiskFull, 0xE5484D, L"disk usage bar at 90% or more"},
 };
 
 std::wstring ConfigDir() {
@@ -171,7 +171,7 @@ std::vector<std::wstring> SplitList(const std::wstring& s) {
     return out;
 }
 
-// "Ctrl+Shift+N", "F2", "Alt+Izquierda", "Supr"...
+// "Ctrl+Shift+N", "F2", "Alt+Left", "Del"...
 bool ParseKey(const std::wstring& spec, UINT& mods, UINT& vk) {
     mods = 0;
     vk = 0;
@@ -179,11 +179,11 @@ bool ParseKey(const std::wstring& spec, UINT& mods, UINT& vk) {
     size_t start = 0;
     for (;;) {
         size_t plus = s.find(L'+', start);
-        bool last = plus == std::wstring::npos || plus + 1 >= s.size();  // "+" solo al final es la tecla "+"
+        bool last = plus == std::wstring::npos || plus + 1 >= s.size();  // a "+" alone at the end is the "+" key
         std::wstring part = Trim(last ? s.substr(start) : s.substr(start, plus - start));
         if (!last) {
             if (part == L"ctrl" || part == L"control") mods |= ModCtrl;
-            else if (part == L"shift" || part == L"mayus" || part == L"mayús") mods |= ModShift;
+            else if (part == L"shift") mods |= ModShift;
             else if (part == L"alt") mods |= ModAlt;
             else return false;
             start = plus + 1;
@@ -222,67 +222,69 @@ void WriteDefaultConfig() {
     std::wstring f = ConfigFile();
     if (f.empty()) return;
     std::ofstream out(f, std::ios::binary);
-    out << "\xEF\xBB\xBF";  // BOM: para que el Bloc de notas lo abra como UTF-8
+    out << "\xEF\xBB\xBF";  // BOM: so Notepad opens it as UTF-8
     std::string s =
-        "# Configuración de Jolt. Se recarga sola al guardar este archivo.\n"
-        "# Las líneas que empiezan con # son comentarios. Si borrás una opción, vuelve a su valor por defecto.\n"
+        "# Jolt settings. Reloads automatically when you save this file.\n"
+        "# Lines starting with # are comments. If you delete an option, it goes back to its default value.\n"
         "\n[general]\n"
-        "# Fuente y tamaño (en píxeles a 100 %) de toda la interfaz.\n"
-        "fuente = Segoe UI\n"
-        "tamano = 12\n"
-        "# Alto de cada fila de la lista.\n"
-        "fila = 25\n"
-        "# Tamaño de toda la interfaz, en porcentaje (Ctrl + y Ctrl - lo cambian).\n"
-        "escala = 100\n"
-        "# Ancho de la barra lateral.\n"
-        "barra_lateral = 208\n"
-        "# Ancho de la vista previa (Espacio).\n"
-        "vista_previa = 360\n"
-        "# Mostrar archivos ocultos y de sistema (atenuados): si / no\n"
-        "ocultos = si\n"
-        "# Carpetas arriba de los archivos: si / no / nombre (solo al ordenar por nombre; por fecha y tamaño van mezcladas)\n"
-        "carpetas_primero = nombre\n"
-        "# Cerrar la ventana la esconde y Jolt queda listo para volver al instante: si / no\n"
-        "segundo_plano = si\n"
-        "# Atajo desde cualquier app: abre Jolt, y si ya está al frente lo esconde. Vacío: sin atajo.\n"
-        "# Con el Explorador al frente, abre su carpeta. Windows no cede Win+E.\n"
-        "atajo_global = Win+J\n"
-        "# Icono en la bandeja del sistema: si / no\n"
-        "icono_bandeja = si\n"
-        "# Abrir los discos y pendrives apenas se conectan: si / no\n"
-        "abrir_discos = no\n"
-        "\n[columnas]\n"
-        "# Columnas visibles además del nombre: modificado, tamano\n"
-        "mostrar = modificado, tamano\n"
-        "ancho_modificado = 118\n"
-        "ancho_tamano = 72\n"
-        "\n[colores]\n"
-        "# RRGGBB en hexadecimal.\n";
+        "# Font and size (in pixels at 100%) of the whole interface.\n"
+        "font = Segoe UI\n"
+        "font_size = 12\n"
+        "# Height of each list row.\n"
+        "row_height = 25\n"
+        "# Size of the whole interface, as a percentage (Ctrl + and Ctrl - change it).\n"
+        "scale = 100\n"
+        "# Sidebar width.\n"
+        "sidebar_width = 208\n"
+        "# How many folders to show in Recents, sorted by use. With 0 the section does not appear.\n"
+        "recents = 10\n"
+        "# Preview width (Space).\n"
+        "preview_width = 360\n"
+        "# Show hidden and system files (dimmed): yes / no\n"
+        "show_hidden = yes\n"
+        "# Folders above files: yes / no / name (only when sorting by name; by date and size they are mixed)\n"
+        "folders_first = name\n"
+        "# Closing the window hides it and Jolt stays ready to come back instantly: yes / no\n"
+        "run_in_background = yes\n"
+        "# Shortcut from any app: opens Jolt, and hides it if it is already in front. Empty: no shortcut.\n"
+        "# With File Explorer in front, opens its folder. Windows does not give up Win+E.\n"
+        "global_hotkey = Win+J\n"
+        "# Icon in the system tray: yes / no\n"
+        "tray_icon = yes\n"
+        "# Open drives and USB sticks as soon as they are connected: yes / no\n"
+        "open_drives = no\n"
+        "\n[columns]\n"
+        "# Visible columns besides the name: modified, size\n"
+        "show = modified, size\n"
+        "modified_width = 118\n"
+        "size_width = 72\n"
+        "\n[colors]\n"
+        "# RRGGBB in hexadecimal.\n";
     for (const ColorDef& c : kColors) s += Utf8(std::wstring(c.name) + L" = " + Hex(c.def) + L"    # " + c.help + L"\n");
     s +=
-        "\n[atajos]\n"
-        "# Varias teclas por comando, separadas por coma. Modificadores: Ctrl, Shift, Alt.\n"
-        "# Teclas: letras, números, F1..F24, Enter, Esc, Supr, Retroceso, Tab, Espacio, Izquierda, Derecha,\n"
-        "# Arriba, Abajo, Inicio, Fin, RePag, AvPag, Menu, Insert, + - , .\n"
-        "# Las flechas Arriba/Abajo, RePag/AvPag, Inicio/Fin (con Shift extienden la selección), Esc,\n"
-        "# Ctrl+Espacio, Ctrl+1..9 (favoritos) y Alt+1..9 (pestañas) son fijos.\n";
+        "\n[shortcuts]\n"
+        "# Several keys per command, separated by commas. Modifiers: Ctrl, Shift, Alt.\n"
+        "# Keys: letters, digits, F1..F24, Enter, Esc, Del, Backspace, Tab, Space, Left, Right,\n"
+        "# Up, Down, Home, End, PageUp, PageDown, Menu, Insert, + - , .\n"
+        "# The Up/Down arrows, PageUp/PageDown, Home/End (with Shift they extend the selection), Esc,\n"
+        "# Ctrl+Space, Ctrl+1..9 (favorites) and Alt+1..9 (tabs) are fixed.\n";
     for (const CmdDef& c : kCommands) s += Utf8(std::wstring(c.name) + L" = " + c.defaults + L"    # " + c.help + L"\n");
     out << s;
 }
 
 bool ParseBool(const std::wstring& v) {
     std::wstring s = Lower(Trim(v));
-    return s == L"si" || s == L"sí" || s == L"yes" || s == L"true" || s == L"1" || s == L"on";
+    return s == L"yes" || s == L"true" || s == L"1" || s == L"on";
 }
 
 void LoadConfig() {
-    // valores por defecto
+    // default values
     g_cfg = Config{};
     for (const ColorDef& c : kColors) *c.var = c.def;
     kRow = 25;
     g_uiPx = 12;
     kSideW = 208;
-    g_previewW = 360;
+    g_previewW = kPreviewDefaultW;
     g_foldersFirst = 2;
     kDateW = 118;
     kSizeW = 72;
@@ -317,38 +319,39 @@ void LoadConfig() {
         if (eq == std::wstring::npos) continue;
         std::wstring key = Lower(Trim(line.substr(0, eq))), val = Trim(line.substr(eq + 1));
         if (section == L"general") {
-            if (key == L"fuente" && !val.empty()) g_cfg.font = val;
-            else if (key == L"tamano" || key == L"tamaño") g_cfg.fontSize = std::clamp(static_cast<float>(_wtof(val.c_str())), 8.f, 32.f);
-            else if (key == L"fila") kRow = std::clamp(static_cast<float>(_wtof(val.c_str())), 16.f, 60.f);
-            else if (key == L"escala") g_uiPx = std::clamp(static_cast<int>(std::lround(_wtof(val.c_str()) * 12 / 100)), kUiPxMin, kUiPxMax);
-            else if (key == L"barra_lateral") kSideW = std::clamp(static_cast<float>(_wtof(val.c_str())), 120.f, 500.f);
-            else if (key == L"ocultos") g_cfg.showHidden = ParseBool(val);
-            else if (key == L"segundo_plano") g_cfg.background = ParseBool(val);
-            else if (key == L"atajo_global") g_cfg.globalKey = val;
-            else if (key == L"icono_bandeja") g_cfg.tray = ParseBool(val);
-            else if (key == L"abrir_discos") g_cfg.openDrives = ParseBool(val);
-            else if (key == L"vista_previa") g_previewW = std::clamp(static_cast<float>(_wtof(val.c_str())), 200.f, 1200.f);
-            else if (key == L"carpetas_primero") {
+            if (key == L"font" && !val.empty()) g_cfg.font = val;
+            else if (key == L"font_size") g_cfg.fontSize = std::clamp(static_cast<float>(_wtof(val.c_str())), 8.f, 32.f);
+            else if (key == L"row_height") kRow = std::clamp(static_cast<float>(_wtof(val.c_str())), 16.f, 60.f);
+            else if (key == L"scale") g_uiPx = std::clamp(static_cast<int>(std::lround(_wtof(val.c_str()) * 12 / 100)), kUiPxMin, kUiPxMax);
+            else if (key == L"sidebar_width") kSideW = std::clamp(static_cast<float>(_wtof(val.c_str())), 120.f, 500.f);
+            else if (key == L"recents") g_cfg.hotCount = std::clamp(_wtoi(val.c_str()), 0, kHotCountMax);
+            else if (key == L"show_hidden") g_cfg.showHidden = ParseBool(val);
+            else if (key == L"run_in_background") g_cfg.background = ParseBool(val);
+            else if (key == L"global_hotkey") g_cfg.globalKey = val;
+            else if (key == L"tray_icon") g_cfg.tray = ParseBool(val);
+            else if (key == L"open_drives") g_cfg.openDrives = ParseBool(val);
+            else if (key == L"preview_width") g_previewW = std::clamp(static_cast<float>(_wtof(val.c_str())), kPreviewMinW, 4000.f);
+            else if (key == L"folders_first") {
                 std::wstring v = Lower(Trim(val));
-                g_foldersFirst = v == L"nombre" ? 2 : ParseBool(v) ? 1 : 0;
+                g_foldersFirst = v == L"name" ? 2 : ParseBool(v) ? 1 : 0;
             }
-        } else if (section == L"columnas") {
-            if (key == L"mostrar") {
+        } else if (section == L"columns") {
+            if (key == L"show") {
                 g_cfg.colDate = g_cfg.colSize = false;
                 for (const std::wstring& c : SplitList(Lower(val))) {
-                    if (c == L"modificado" || c == L"fecha") g_cfg.colDate = true;
-                    if (c == L"tamano" || c == L"tamaño") g_cfg.colSize = true;
+                    if (c == L"modified") g_cfg.colDate = true;
+                    if (c == L"size") g_cfg.colSize = true;
                 }
-            } else if (key == L"ancho_modificado") kDateW = std::clamp(static_cast<float>(_wtof(val.c_str())), kDateMin, kDateMax);
-            else if (key == L"ancho_tamano" || key == L"ancho_tamaño") kSizeW = std::clamp(static_cast<float>(_wtof(val.c_str())), kSizeMin, kSizeMax);
-        } else if (section == L"colores") {
+            } else if (key == L"modified_width") kDateW = std::clamp(static_cast<float>(_wtof(val.c_str())), kDateMin, kDateMax);
+            else if (key == L"size_width") kSizeW = std::clamp(static_cast<float>(_wtof(val.c_str())), kSizeMin, kSizeMax);
+        } else if (section == L"colors") {
             for (const ColorDef& c : kColors)
                 if (key == c.name) {
                     std::wstring h = val;
                     if (!h.empty() && h[0] == L'#') h.erase(0, 1);
                     if (h.size() == 6) *c.var = static_cast<UINT32>(wcstoul(h.c_str(), nullptr, 16));
                 }
-        } else if (section == L"atajos") {
+        } else if (section == L"shortcuts") {
             for (const CmdDef& c : kCommands)
                 if (key == c.name) {
                     anyKeys = true;
@@ -357,7 +360,7 @@ void LoadConfig() {
                     AddBindings(c.cmd, val);
                     userKeys.insert(userKeys.end(), g_cfg.keys.begin(), g_cfg.keys.end());
                     g_cfg.keys = std::move(saved);
-                    // el comando configurado reemplaza sus teclas por defecto
+                    // the configured command replaces its default keys
                     g_cfg.keys.erase(std::remove_if(g_cfg.keys.begin(), g_cfg.keys.end(),
                                                     [&](const KeyBind& k) { return k.cmd == c.cmd; }),
                                      g_cfg.keys.end());
@@ -365,7 +368,7 @@ void LoadConfig() {
         }
     }
     if (anyKeys) {
-        // las teclas del usuario tienen prioridad sobre cualquier otra asignación por defecto
+        // the user's keys take priority over any other default binding
         for (const KeyBind& u : userKeys)
             g_cfg.keys.erase(std::remove_if(g_cfg.keys.begin(), g_cfg.keys.end(),
                                             [&](const KeyBind& k) { return k.mods == u.mods && k.vk == u.vk; }),
@@ -374,8 +377,8 @@ void LoadConfig() {
     }
 }
 
-// Escribe en config.txt las teclas de un comando (y le quita esa tecla a cualquier otro comando).
-// Conserva comentarios y el resto del archivo. Si falta la sección, la agrega.
+// Writes a command's keys to config.txt (and takes that key away from any other command).
+// Keeps comments and the rest of the file. If the section is missing, adds it.
 void ConfigWriteShortcut(const std::wstring& cmdName, const std::wstring& specs, UINT mods, UINT vk) {
     std::wstring f = ConfigFile();
     if (f.empty()) return;
@@ -398,7 +401,7 @@ void ConfigWriteShortcut(const std::wstring& cmdName, const std::wstring& specs,
     while (!lines.empty() && lines.back().empty()) lines.pop_back();
 
     std::wstring section;
-    int sectionEnd = -1;  // última línea de [atajos]
+    int sectionEnd = -1;  // last line of [shortcuts]
     bool written = false;
     for (size_t i = 0; i < lines.size(); ++i) {
         std::wstring body = lines[i], comment;
@@ -413,7 +416,7 @@ void ConfigWriteShortcut(const std::wstring& cmdName, const std::wstring& specs,
             section = Lower(tb.substr(1, tb.size() - 2));
             continue;
         }
-        if (section != L"atajos") continue;
+        if (section != L"shortcuts") continue;
         sectionEnd = static_cast<int>(i);
         size_t eq = tb.find(L'=');
         if (eq == std::wstring::npos) continue;
@@ -424,7 +427,7 @@ void ConfigWriteShortcut(const std::wstring& cmdName, const std::wstring& specs,
             written = true;
             continue;
         }
-        // otro comando con la misma tecla: se la quitamos
+        // another command with the same key: take it away
         std::vector<std::wstring> keep;
         bool changed = false;
         for (const std::wstring& spec : SplitList(val)) {
@@ -438,7 +441,7 @@ void ConfigWriteShortcut(const std::wstring& cmdName, const std::wstring& specs,
             lines[i] = key + L" = " + joined + pad;
         }
     }
-    // comandos que usan la tecla por defecto y no figuran en el archivo: hay que fijarlos sin ella
+    // commands that use the key by default and are not in the file: pin them without it
     for (const CmdDef& c : kCommands) {
         if (c.name == cmdName) continue;
         bool inFile = false;
@@ -446,7 +449,7 @@ void ConfigWriteShortcut(const std::wstring& cmdName, const std::wstring& specs,
         for (const std::wstring& l : lines) {
             std::wstring tb = Trim(l.substr(0, l.find(L'#')));
             if (!tb.empty() && tb.front() == L'[' && tb.back() == L']') sec = Lower(tb.substr(1, tb.size() - 2));
-            else if (sec == L"atajos" && tb.find(L'=') != std::wstring::npos && Lower(Trim(tb.substr(0, tb.find(L'=')))) == c.name) inFile = true;
+            else if (sec == L"shortcuts" && tb.find(L'=') != std::wstring::npos && Lower(Trim(tb.substr(0, tb.find(L'=')))) == c.name) inFile = true;
         }
         if (inFile) continue;
         std::vector<std::wstring> keep;
@@ -463,7 +466,7 @@ void ConfigWriteShortcut(const std::wstring& cmdName, const std::wstring& specs,
         if (sectionEnd >= 0) lines.insert(lines.begin() + (++sectionEnd), nl);
         else {
             lines.push_back(L"");
-            lines.push_back(L"[atajos]");
+            lines.push_back(L"[shortcuts]");
             lines.push_back(nl);
             sectionEnd = static_cast<int>(lines.size()) - 1;
         }
@@ -475,7 +478,7 @@ void ConfigWriteShortcut(const std::wstring& cmdName, const std::wstring& specs,
         if (sectionEnd >= 0) lines.insert(lines.begin() + sectionEnd + 1, nl);
         else {
             lines.push_back(L"");
-            lines.push_back(L"[atajos]");
+            lines.push_back(L"[shortcuts]");
             lines.push_back(nl);
         }
     }
@@ -484,7 +487,7 @@ void ConfigWriteShortcut(const std::wstring& cmdName, const std::wstring& specs,
     for (const std::wstring& l : lines) out << Utf8(l) << "\r\n";
 }
 
-// Cambia una opción en config.txt (conserva comentarios); si no está, la agrega al principio de la sección.
+// Changes an option in config.txt (keeps comments); if it is missing, adds it at the start of the section.
 void ConfigSetValue(const std::wstring& sectionName, const std::wstring& key, const std::wstring& value) {
     std::wstring f = ConfigFile();
     if (f.empty()) return;
@@ -544,7 +547,7 @@ Cmd FindCommand(UINT mods, UINT vk) {
     return Cmd::None;
 }
 
-// Vigila la carpeta de configuración: cualquier cambio avisa a la ventana principal.
+// Watches the config folder: any change notifies the main window.
 constexpr UINT WM_APP_CONFIG = WM_APP + 4;
 void ConfigWatcherMain() {
     std::wstring dir = ConfigDir();

@@ -2,6 +2,6 @@ build/
 *.user
 .vs/
 
-# Material de referencia de File Pilot: queda solo en esta máquina
-docs/paleta-filepilot.md
+# File Pilot reference material: stays on this machine only
+docs/filepilot-palette.md
 docs/extract_fp_commands.py

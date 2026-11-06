@@ -1,2 +1,2 @@
-// Solo existe para generar el header precompilado.
+// Exists only to generate the precompiled header.
 #include "pch.h"

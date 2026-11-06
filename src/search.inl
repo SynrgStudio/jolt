@@ -1,9 +1,9 @@
-// Búsqueda en subcarpetas (Ctrl+Shift+F): un hilo recorre la carpeta y todas sus subcarpetas con
-// NtQueryDirectoryFile y manda los listados por tandas; el filtro difuso se aplica sobre todo eso.
-// Se incluye desde app.cpp después de ops.inl.
+// Subfolder search (Ctrl+Shift+F): a thread walks the folder and all its subfolders with
+// NtQueryDirectoryFile and sends the listings in batches; the fuzzy filter runs over all of that.
+// Included from app.cpp after ops.inl.
 
 constexpr UINT WM_APP_REC = WM_APP + 7;
-std::atomic<uint64_t> g_recActive{0};  // la búsqueda vigente; las demás se cortan solas
+std::atomic<uint64_t> g_recActive{0};  // the current search; the others stop on their own
 
 struct RecBatch {
     uint64_t gen = 0;
@@ -48,13 +48,13 @@ void RecThread(std::wstring root, uint64_t gen, bool showHidden, SortBy by, bool
 
 void StartRecursive(Tab& t) {
     if (t.path.empty() || !t.list || t.list->error) {
-        S.message = L"La búsqueda en subcarpetas necesita una carpeta";
+        S.message = L"Subfolder search needs a folder";
         Invalidate();
         return;
     }
     uint64_t gen = ++g_recActive;
     for (auto& tp : g_tabs)
-        if (tp->recursive && tp->recGen != gen) tp->recDone = true;  // la anterior queda como está
+        if (tp->recursive && tp->recGen != gen) tp->recDone = true;  // the previous one stays as it is
     Place p = SavePlace(t);
     t.recursive = true;
     t.recDone = false;
@@ -75,7 +75,7 @@ void StopRecursive(Tab& t, bool rebuild) {
     t.recursive = false;
     t.filter.clear();
     if (rebuild) {
-        // lo que estaba seleccionado puede estar en una subcarpeta: se pierde, salvo que esté acá
+        // what was selected may be in a subfolder: it's lost, unless it's here
         Rebuild(t, &p, L"");
         EnsureVisible(t);
     } else {

@@ -1,6 +1,6 @@
-// Selección con recuadro: arrastrar desde el vacío o desde la parte libre de una fila.
-// Sobre el icono o el nombre, y sobre una selección de varios, arrastrar sigue moviendo los archivos.
-// Sin teclas el recuadro reemplaza la selección, con Shift agrega y con Ctrl alterna. Esc la deja como estaba.
+// Box selection: drag from empty space or from the free part of a row.
+// On the icon or name, and on a multiple selection, dragging still moves the files.
+// With no keys the box replaces the selection, Shift adds and Ctrl toggles. Esc restores it.
 
 int HeaderRowIn(int pane, float x, float y);
 
@@ -10,12 +10,12 @@ struct BoxSel {
     bool active = false, ticking = false;
     int pane = 0;
     Tab* tab = nullptr;
-    float x0 = 0, y0 = 0;  // esquina fija; y se mide en el contenido, para que acompañe a la lista
-    float x = 0, y = 0;    // mouse, en la ventana
-    int mode = 0;          // 0 reemplaza, 1 agrega, 2 alterna
+    float x0 = 0, y0 = 0;  // fixed corner; y is measured in the content, so it moves with the list
+    float x = 0, y = 0;    // mouse, in the window
+    int mode = 0;          // 0 replaces, 1 adds, 2 toggles
     std::vector<uint8_t> base;
 } g_box;
-std::vector<uint8_t> g_boxBefore;  // la selección de antes de apretar el botón
+std::vector<uint8_t> g_boxBefore;  // the selection before the button was pressed
 
 bool BoxAlive() { return g_box.active && &PT(g_box.pane) == g_box.tab; }
 
@@ -23,7 +23,7 @@ float BoxContentY() {
     return std::clamp(g_box.y, ListTop(), std::max(ListTop(), ListBottom() - 1)) - ListTop() + g_box.tab->scroll;
 }
 
-// ¿El punto está sobre el icono o el nombre de la fila?
+// Is the point on the row's icon or name?
 bool OnItem(int row, float x) {
     Tab& t = T();
     if (row < 0 || row >= Count()) return false;
@@ -44,7 +44,7 @@ bool OnItem(int row, float x) {
     return x >= chevX + kChev && x <= std::min(textX + w + 8, c.nameR);
 }
 
-// ¿Arrastrar desde este punto dibuja un recuadro?
+// Does dragging from this point draw a box?
 bool BoxCanStart(int row, float x, float y, bool mods) {
     const Columns c = Cols(g_act);
     if (Count() == 0 || x < c.L || x >= c.R || y < ListTop() || y >= ListBottom()) return false;
@@ -55,7 +55,7 @@ bool BoxCanStart(int row, float x, float y, bool mods) {
 void BoxApply() {
     Tab& t = *g_box.tab;
     const int n = RowCount(t);
-    if (g_box.base.size() != t.selMask.size()) g_box.base.assign(t.selMask.size(), 0);  // la lista cambió
+    if (g_box.base.size() != t.selMask.size()) g_box.base.assign(t.selMask.size(), 0);  // the list changed
     t.selMask = g_box.base;
     const float cy = BoxContentY();
     const int first = std::max(0, static_cast<int>(std::floor(std::min(g_box.y0, cy) / kRow)));
@@ -127,7 +127,7 @@ void BoxMove(float x, float y) {
     BoxArmScroll();
 }
 
-// Con el mouse fuera de la lista, se desplaza más rápido cuanto más lejos esté.
+// With the mouse outside the list, it scrolls faster the farther away it is.
 void BoxTick() {
     g_box.ticking = false;
     if (!BoxAlive()) {

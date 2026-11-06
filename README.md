@@ -1,228 +1,235 @@
-# Jolt (nombre provisorio)
+# Jolt (working name)
 
-Explorador de archivos para Windows, pensado para que abrir carpetas se sienta instantáneo.
-C++20 + Win32 + Direct2D/DirectWrite, sin dependencias externas.
+File explorer for Windows, built so that opening folders feels instant.
+C++20 + Win32 + Direct2D/DirectWrite, no external dependencies.
 
-## Instalar
+## Install
 
-El mismo `jolt.exe` es el instalador. Copialo a cualquier lado y abrilo: ofrece instalarse en `%LOCALAPPDATA%\Jolt` sin
-pedir permisos de administrador. Desde ☰ → Instalación se prenden y apagan el PATH, el explorador predeterminado y el
-inicio con Windows. Al hacerlo predeterminado se guarda lo que había y al apagarlo vuelve. Las
-compilaciones con `jolt.dev` al lado no lo ofrecen solas.
+Download `jolt.exe` from the [latest release](https://github.com/SynrgStudio/jolt/releases/latest). It isn't signed, so
+Windows SmartScreen may warn you the first time: More info → Run anyway.
 
-## Siempre listo
+The same `jolt.exe` is the installer. Copy it anywhere and open it: it offers to install itself to `%LOCALAPPDATA%\Jolt`
+without asking for administrator rights. From ☰ → Install you can turn PATH, default file explorer and
+start with Windows on and off. Making it the default saves what was there before, and turning it off restores it. Builds
+with `jolt.dev` next to them don't offer this on their own.
 
-Cerrar la ventana la esconde y Jolt sigue abierto: vuelve al instante con el atajo global, el icono de la bandeja o
-abriendo `jolt.exe carpeta`, que usa la instancia abierta. ☰ → Salir y `jolt.exe --salir` lo cierran de verdad.
-`jolt.exe --oculto` arranca sin mostrar la ventana. Opciones en `config.txt`: `segundo_plano`, `atajo_global`,
-`icono_bandeja`, `abrir_discos`.
+## Always ready
 
-## Compilar
+Closing the window hides it and Jolt stays open: it comes back instantly with the global hotkey, the tray icon or by
+opening `jolt.exe folder`, which uses the running instance. ☰ → Quit and `jolt.exe --quit` really close it.
+`jolt.exe --hidden` starts without showing the window. Options in `config.txt`: `run_in_background`, `global_hotkey`,
+`tray_icon`, `open_drives`.
+
+## Build
 
 ```
-build.bat           optimizado (/O2)         ~2 s
-build.bat rapido    sin optimizar (/Od)      ~1 s, para iterar
-build.bat limpiar   borra build\
+build.bat           optimized (/O2)          ~2 s
+build.bat fast      unoptimized (/Od)        ~1 s, for iterating
+build.bat clean     deletes build\
 ```
 
-Requiere Visual Studio 2022 con la carga de trabajo de C++. Genera `build\jolt.exe` y `build\bench.exe`.
+Requires Visual Studio 2022 with the C++ workload. Produces `build\jolt.exe` and `build\bench.exe`.
 
-La primera vez tarda más: guarda el entorno del compilador en `build\env.bat` (para no correr `vcvars64.bat`
-en cada build) y genera el header precompilado con todo lo del sistema (`src\pch.h`, ~580 mil líneas que así
-se procesan una sola vez). Si agregás un header del sistema nuevo, ponelo en `src\pch.h` y corré `build.bat limpiar`.
+The first time takes longer: it saves the compiler environment in `build\env.bat` (so `vcvars64.bat` doesn't run
+on every build) and generates the precompiled header with everything from the system (`src\pch.h`, ~580k lines that are
+processed only once this way). If you add a new system header, put it in `src\pch.h` and run `build.bat clean`.
 
-## Usar
+## Use
 
-`build\jolt.exe [carpeta]`
+`build\jolt.exe [folder]`
 
-| Tecla / mouse | Acción |
+| Key / mouse | Action |
 |---|---|
-| ↑ ↓ RePág AvPág Inicio Fin | moverse |
-| Enter / doble click | abrir |
-| → / ← | entrar en la carpeta resaltada / subir un nivel (en el árbol, ← pliega y vuelve a la carpeta de arriba) |
-| Shift+flechas / Shift+click | seleccionar un rango |
-| Ctrl+click / Ctrl+Espacio | agregar o quitar de la selección |
-| arrastrar desde el vacío o la parte libre de una fila | **seleccionar con un recuadro**. Shift agrega, Ctrl alterna, Esc cancela; cerca del borde la lista se desplaza. Sobre el icono, el nombre o una selección de varios, arrastrar sigue moviendo archivos |
-| Ctrl+A / Esc | seleccionar todo / dejar solo el cursor |
-| escribir letras | **filtro difuso** (como fzf, sin importar tildes): filtra y ordena por coincidencia; Retroceso edita, Esc limpia |
-| Ctrl+P | **Ir a**: recientes, favoritos, lugares del sistema, unidades y **todo lo de los discos** (índice global) con búsqueda difusa; escribir una ruta (`C:\Us…`, `%APPDATA%`, `~`) autocompleta sus carpetas. Ctrl+Enter abre en pestaña nueva |
-| Ctrl+Shift+F | **buscar en subcarpetas**: el filtro busca en toda la carpeta y sus subcarpetas (se ve dónde está cada resultado); Esc vuelve |
-| Ctrl+Shift+E | abrir la carpeta que contiene lo resaltado (útil en la búsqueda y el árbol) |
-| chevrón ›, Shift+→ / Shift+← | **árbol**: desplegar / plegar subcarpetas dentro de la lista. Se recuerda por carpeta |
-| Espacio | **vista previa** a la derecha: imágenes (con orientación EXIF), texto y código, contenido de carpetas, y miniaturas del Shell (PDF, videos, Office…). Rueda: desplazar |
-| Ctrl+S | **vista dividida**: dos paneles, cada uno con sus pestañas. Tab cambia de panel; el divisor se arrastra (doble click: mitad y mitad) |
-| F5 / F6 | con la vista dividida: copiar / mover la selección a la carpeta del otro panel |
-| Alt+R | **tamaño de carpetas**: calcula todas las de la lista (o las seleccionadas); quedan calculadas también todas sus subcarpetas, y se recuerdan entre sesiones (`%LOCALAPPDATA%\Jolt\tamanos.bin`). Ordenar por tamaño las tiene en cuenta |
-| F2 | renombrar (queda seleccionado el nombre sin la extensión); **Tab / Shift+Tab** guarda y pasa al siguiente / anterior |
-| Ctrl+N / Ctrl+Shift+N | archivo nuevo / carpeta nueva, listos para renombrar |
-| Ctrl+Shift+D | duplicar ("nombre - copia.ext") |
-| Ctrl+Shift+C | copiar la ruta de lo seleccionado (o de la carpeta), con comillas solo si hacen falta |
-| Alt+Enter | propiedades de Windows |
-| Ctrl+C / Ctrl+X / Ctrl+V | copiar, cortar y pegar, compatible con el Explorador (progreso, conflictos y deshacer de Windows) |
-| Supr / Shift+Supr | a la papelera / borrar definitivamente |
-| Ctrl+Z / Ctrl+Y o Ctrl+Shift+Z | **deshacer / rehacer** lo hecho desde Jolt en esta sesión (hasta 100 pasos): renombrar, mover, copiar, duplicar, crear y mandar a la papelera. Nunca pisa nada ni toca lo que cambió después, y lo que quita va a la papelera. No cubre lo que reemplazó o combinó algo que ya existía, ni el borrado definitivo |
-| arrastrar y soltar | entre carpetas, paneles, pestañas, favoritos y unidades de Jolt, y desde/hacia otras apps; mismas reglas que el Explorador (Ctrl copia, Shift mueve) |
-| Ctrl+Enter / click medio | abrir carpeta en pestaña nueva |
-| Retroceso / Alt+↑ / botón ↑ | carpeta superior |
-| Alt+← / Alt+→ / botones laterales del mouse | atrás / adelante |
-| click en una miga de la ruta | ir a esa carpeta (click medio: en pestaña nueva) |
-| Ctrl+L o click en el espacio libre de la ruta | escribir una ruta (acepta `%VARIABLES%`) |
-| Ctrl+K | **paleta de comandos**: todos los comandos, orden, favoritos, pestañas y configuración. **Clic en el atajo de un comando** → presioná la tecla nueva y queda guardada en `config.txt` (Supr la quita, Esc cancela) |
-| Ctrl+T / Ctrl+W / Ctrl+Tab | pestaña nueva / cerrar / siguiente (del panel activo) |
-| Ctrl+Shift+T | reabrir la última pestaña cerrada, en su lugar y con su historial |
-| Ctrl+Alt+W | cerrar las demás pestañas del panel |
-| Alt+1 … Alt+8, Alt+9 | ir a esa pestaña del panel / a la última |
-| Ctrl+rueda | cambiar de pestaña en el panel que está debajo: arriba, la siguiente; abajo, la anterior |
-| Win+J (desde cualquier app) | abrir Jolt; si ya está al frente, esconderlo. Con el Explorador al frente, abre su carpeta. Se cambia con `atajo_global` |
-| Ctrl+Shift+rueda | mover la pestaña activa del panel que está debajo: arriba, a la derecha; abajo, a la izquierda |
-| Ctrl+Alt+T / Ctrl+Alt+E | abrir la terminal (Windows Terminal, o cmd) / el Explorador en esta carpeta |
-| Ctrl+Alt+L | ir a la ubicación real de un acceso directo (también enlaces simbólicos y junctions) |
-| Ctrl+B o el botón a la izquierda de las pestañas | mostrar / ocultar la barra lateral |
-| arrastrar desde la barra de pestañas | mover la ventana (doble click: maximizar; click derecho: menú del sistema) |
-| click medio en una pestaña | cerrarla |
-| Ctrl+D | agregar o quitar la carpeta actual de Favoritos |
-| Ctrl+1 … Ctrl+9 | ir al favorito N |
-| click en Nombre / Modificado / Tamaño | ordenar (segundo click invierte) |
-| arrastrar el borde izquierdo de Modificado o Tamaño | cambiar el ancho de la columna (doble click: justo para el contenido). Se guarda en `config.txt` |
-| Ctrl + / Ctrl - / Ctrl+0 | agrandar, achicar o volver al tamaño normal de toda la interfaz (se guarda como `escala`) |
-| click derecho / Shift+F10 / tecla Menú | menú contextual de Windows (archivo, carpeta o fondo); con Shift, el extendido |
-| ☰ (arriba a la izquierda) | menú de la app: editor del menú contextual, carpeta de configuración, salir |
-| Ctrl+H | mostrar / esconder los archivos ocultos (se guarda en `config.txt`) |
-| Ctrl+K → "toggle…" | mostrar u ocultar carpetas, archivos o extensiones (sin atajo por defecto: se asigna con un click en la paleta) |
-| Ctrl+K → "agrupar…", "plegar…", "desplegar…" | agrupar esta carpeta por día o por tipo, sacar los grupos, plegar o desplegar todos |
-| Ctrl+K → "ordenar por tipo", "espacio entre filas", "vaciar la papelera" | sin atajo por defecto; la papelera pide confirmación de Windows |
-| Ctrl+R | recargar |
-| F12 | mostrar/ocultar tiempos |
+| ↑ ↓ PageUp PageDown Home End | move around |
+| Enter / double click | open |
+| → / ← | enter the highlighted folder / go up one level (in the tree, ← collapses and returns to the folder above) |
+| Shift+arrows / Shift+click | select a range |
+| Ctrl+click / Ctrl+Space | add to or remove from the selection |
+| drag from empty space or the free part of a row | **box select**. Shift adds, Ctrl toggles, Esc cancels; near the edge the list scrolls. On the icon, the name or a multiple selection, dragging still moves files |
+| Ctrl+A / Esc | select all / keep only the cursor |
+| type letters | **fuzzy filter** (like fzf, ignoring accents): filters and sorts by match; Backspace edits, Esc clears |
+| Ctrl+P | **Go to**: recents, favorites, system places, drives and **everything on your drives** (global index) with fuzzy search; typing a path (`C:\Us…`, `%APPDATA%`, `~`) autocompletes its folders. Ctrl+Enter opens in a new tab |
+| Ctrl+Shift+F | **search subfolders**: the filter searches the whole folder and its subfolders (you can see where each result is); Esc goes back |
+| Ctrl+Shift+E | open the folder containing the highlighted item (useful in search and in the tree) |
+| chevron ›, Shift+→ / Shift+← | **tree**: expand / collapse subfolders inside the list. Remembered per folder |
+| Space | **preview** on the right: images (with EXIF orientation), text and code, folder contents, and Shell thumbnails (PDF, videos, Office…). Wheel: scroll. Drag its left edge to change the width; double click to reset it |
+| Ctrl+S | **split view**: two panes, each with its own tabs. Tab switches pane; the divider can be dragged (double click: half and half) |
+| F5 / F6 | in split view: copy / move the selection to the other pane's folder |
+| Alt+R | **folder sizes**: calculates every folder in the list (or the selected ones); all their subfolders end up calculated too, and they are remembered between sessions (`%LOCALAPPDATA%\Jolt\sizes.bin`). Sorting by size takes them into account |
+| F2 | rename (the name without the extension is selected); **Tab / Shift+Tab** saves and moves to the next / previous one |
+| Ctrl+N / Ctrl+Shift+N | new file / new folder, ready to rename |
+| Ctrl+Shift+D | duplicate ("name - Copy.ext") |
+| Ctrl+Shift+C | copy the path of the selection (or of the folder), with quotes only if needed |
+| Alt+Enter | Windows properties |
+| Ctrl+C / Ctrl+X / Ctrl+V | copy, cut and paste, compatible with File Explorer (Windows progress, conflicts and undo) |
+| Del / Shift+Del | to the Recycle Bin / delete permanently |
+| Ctrl+Z / Ctrl+Y or Ctrl+Shift+Z | **undo / redo** what was done from Jolt in this session (up to 100 steps): rename, move, copy, duplicate, create and send to the Recycle Bin. It never overwrites anything or touches what changed afterwards, and what it removes goes to the Recycle Bin. It doesn't cover what replaced or merged with something that already existed, or permanent deletion |
+| drag and drop | between Jolt's folders, panes, tabs, favorites and drives, and from/to other apps; same rules as File Explorer (Ctrl copies, Shift moves) |
+| Ctrl+Enter / middle click | open folder in a new tab |
+| Backspace / Alt+↑ / ↑ button | parent folder |
+| Alt+← / Alt+→ / mouse side buttons | back / forward |
+| click on a path breadcrumb | go to that folder (middle click: in a new tab) |
+| Ctrl+L or click on the free space of the path | type a path (accepts `%VARIABLES%`) |
+| Ctrl+K | **command palette**: all commands, sorting, favorites, tabs and configuration. **Click a command's shortcut** → press the new key and it is saved in `config.txt` (Del removes it, Esc cancels) |
+| Ctrl+T / Ctrl+W / Ctrl+Tab | new tab / close / next (in the active pane) |
+| Ctrl+Shift+T | reopen the last closed tab, in its place and with its history |
+| Ctrl+Alt+W | close the pane's other tabs |
+| Alt+1 … Alt+8, Alt+9 | go to that tab in the pane / to the last one |
+| Ctrl+wheel | switch tab in the pane underneath: up, the next one; down, the previous one |
+| Win+J (from any app) | open Jolt; if it is already in front, hide it. With File Explorer in front, it opens its folder. Change it with `global_hotkey` |
+| Ctrl+Shift+wheel | move the active tab of the pane underneath: up, to the right; down, to the left |
+| Ctrl+Alt+T / Ctrl+Alt+E | open the terminal (Windows Terminal, or cmd) / File Explorer in this folder |
+| Ctrl+Alt+L | go to the real location of a shortcut (also symbolic links and junctions) |
+| Ctrl+B or the button to the left of the tabs | show / hide the sidebar |
+| drag from the tab bar | move the window (double click: maximize; right click: system menu) |
+| middle click on a tab | close it |
+| Ctrl+D | add or remove the current folder from Favorites |
+| Ctrl+1 … Ctrl+9 | go to favorite N |
+| click on Name / Modified / Size | sort (second click reverses) |
+| drag the left edge of Modified or Size | change the column width (double click: fit the content). Saved in `config.txt` |
+| Ctrl + / Ctrl - / Ctrl+0 | enlarge, shrink or return the whole interface to normal size (saved as `scale`) |
+| right click / Shift+F10 / Menu key | Windows context menu (file, folder or background); with Shift, the extended one |
+| ☰ (top left) | app menu: context menu editor, configuration folder, quit |
+| Ctrl+H | show / hide hidden files (saved in `config.txt`) |
+| Ctrl+K → "toggle…" | show or hide folders, files or extensions (no default shortcut: assign one with a click in the palette) |
+| Ctrl+K → "group…", "collapse…", "expand…" | group this folder by day or by type, remove the groups, collapse or expand them all |
+| Ctrl+K → "sort by type", "space between rows", "empty the Recycle Bin" | no default shortcut; the Recycle Bin asks for Windows confirmation |
+| Ctrl+R | reload |
+| F12 | show/hide timings |
 
-Al cerrar se guardan las pestañas de cada panel, la vista dividida, la vista previa, la posición de la ventana, la
-barra lateral y el orden (`%APPDATA%\Jolt\sesion.txt`), y las carpetas recientes de Ctrl+P (`recientes.txt`). Si se
-pasa una carpeta por línea de comandos, se abre en una pestaña nueva además de las restauradas. Con `JOLT_DEBUG=1`
-en el entorno, escribe un registro en `%TEMP%\jolt.log`.
+On close, it saves each pane's tabs, split view, preview, window position,
+sidebar and sort order (`%APPDATA%\Jolt\session.txt`), and the recent folders for Ctrl+P (`recents.txt`). If a
+folder is passed on the command line, it opens in a new tab in addition to the restored ones. With `JOLT_DEBUG=1`
+in the environment, it writes a log to `%TEMP%\jolt.log`.
 
-Los favoritos se guardan en `%APPDATA%\Jolt\favoritos.txt`, una línea por carpeta (`Nombre|Ruta`).
-Se puede editar a mano; se lee al iniciar.
+**Favorites:** drag them to reorder, or drag a folder from Recents or Drives to add it. Right click to rename or remove one; on a folder in the list, right click → Add to favorites. They are saved in `%APPDATA%\Jolt\favorites.txt`, one line per folder (`Name|Path`).
 
-## Configuración
+**Drives:** when the mouse is over a drive, its row turns into the usage bar with the free space and the total, updated every second.
 
-`%APPDATA%\Jolt\config.txt` se genera la primera vez con todos los valores y comentarios, y **se recarga sola al
-guardar** (también `favoritos.txt` y `menu.txt`). Secciones:
+**Recents:** below the drives, sorted by use rather than by last opened. Each folder earns a point if you stay at least 1.5 seconds, and its heat halves every 30 days. Set how many with `recents` in `config.txt` (0 hides the section).
+It can be edited by hand; it is read at startup.
 
-- `[general]`: fuente, tamaño, alto de fila, ancho de la barra lateral y de la vista previa, mostrar ocultos, y `carpetas_primero`
-  (`si` / `no` / `nombre`: por defecto las carpetas van arriba solo al ordenar por nombre; por fecha y tamaño se
-  mezclan con los archivos, que es lo que uno espera).
-- `[columnas]`: qué columnas mostrar y sus anchos.
-- `[colores]`: todos los colores de la interfaz en RRGGBB.
-- `[atajos]`: un comando por línea con sus teclas (`subir = Retroceso, Izquierda, Alt+Arriba`). Por defecto, como
-  en un commander: **→ entra en la carpeta resaltada y ← sube un nivel**. Las flechas arriba/abajo, RePág/AvPág,
-  Inicio/Fin, Esc, Ctrl+Espacio, Ctrl+1..9 y Alt+1..9 son fijas. Si borrás una opción, vuelve al valor por defecto.
+## Configuration
 
-## Vistas: ordenar, agrupar y filtrar (por carpeta)
+`%APPDATA%\Jolt\config.txt` is generated the first time with all values and comments, and **reloads itself on
+save** (so do `favorites.txt` and `menu.txt`). Sections:
 
-El botón de filtro a la izquierda de "Nombre" (o Ctrl+K → "Vista de esta carpeta") abre las reglas de la vista,
-estilo Notion: **Ordenar por** (nombre, fecha, tamaño, tipo; varias reglas = desempates), **Agrupar** (por día, mes,
-tipo o extensión: la lista se separa en secciones con título), **Carpetas** (primero, al final, mezcladas) y
-**Mostrar solo / Ocultar** (nombre contiene, extensión es, más nuevos/viejos que N días, más grandes/chicos que N MB,
-carpetas, archivos, ocultos). Cada parte se cambia con un desplegable, las reglas se reordenan arrastrando la
-agarradera y todo se aplica al instante.
+- `[general]`: font, size, row height, sidebar and preview width, show hidden files, and `folders_first`
+  (`yes` / `no` / `name`: by default folders go on top only when sorting by name; by date and size they
+  mix with the files, which is what you'd expect).
+- `[columns]`: which columns to show and their widths.
+- `[colors]`: all interface colors in RRGGBB.
+- `[shortcuts]`: one command per line with its keys (`up = Backspace, Left, Alt+Up`). By default, as
+  in a commander: **→ enters the highlighted folder and ← goes up one level**. The up/down arrows, PageUp/PageDown,
+  Home/End, Esc, Ctrl+Space, Ctrl+1..9 and Alt+1..9 are fixed. If you delete an option, it returns to its default value.
 
-Arriba se elige qué se edita: **Todas las carpetas** o **Solo «esta carpeta»** (con la casilla *y sus subcarpetas*,
-vale también para todo lo de adentro). Cuando una carpeta tiene vista propia, el botón se ve azul. Cómo se combinan:
-primero los grupos, dentro de cada grupo las carpetas, y después el orden (la regla de más arriba manda). Hacer click
-en los encabezados de columna cambia el orden de la vista de esa carpeta.
+## Views: sort, group and filter (per folder)
 
-Se guardan en `%APPDATA%\Jolt\vistas.txt` (se puede editar a mano y se recarga solo):
+The filter button to the left of "Name" (or Ctrl+K → "View for this folder") opens the view rules,
+Notion style: **Sort by** (name, date, size, type; several rules = tiebreakers), **Group** (by day, month,
+type or extension: the list splits into titled sections), **Folders** (first, last, mixed) and
+**Show only / Hide** (name contains, extension is, newer/older than N days, larger/smaller than N MB,
+folders, files, hidden). Each part changes with a dropdown, rules are reordered by dragging the
+handle and everything applies instantly.
 
-```
-[todas]
-carpetas = nombre
-ordenar = fecha desc
+At the top you choose what to edit: **All folders** or **Only "this folder"** (with the *and its subfolders* checkbox,
+it also applies to everything inside). When a folder has its own view, the button turns blue. How they combine:
+groups first, folders within each group, and then the sort order (the topmost rule wins). Clicking
+the column headers changes the sort order of that folder's view.
 
-[C:\Users\yo\Downloads]
-subcarpetas = no
-ordenar = nombre asc
-agrupar = dia
-carpetas = primero
-ocultar = extension tmp part crdownload
-```
-
-Click en el título de un grupo lo pliega o lo despliega.
-
-## Índice de los discos (Ctrl+P)
-
-Jolt arma un índice de todos los discos fijos para que Ctrl+P encuentre cualquier carpeta o archivo al instante.
-Se guarda en `%LOCALAPPDATA%\Jolt\indice-X.bin`: al arrancar está disponible enseguida, lo que se crea con Jolt
-abierto se suma solo, lo que se borra se descarta al mostrar resultados, y si el índice tiene más de 12 horas se
-vuelve a armar en segundo plano (con prioridad baja, sin molestar). Sin permisos, recorrer un disco grande lleva unos
-minutos la primera vez; con Ctrl+K → *Reindexar los discos ya* Jolt pide permiso de administrador una vez y lee la
-tabla del disco (MFT, como Everything), que tarda segundos.
-
-## Menú contextual
-
-Es el menú real de Windows (el mismo que ve el Explorador, con las extensiones instaladas), pedido al Shell
-y dibujado por Jolt. Desde ☰ → *Menú contextual…* se abre un editor que muestra ese menú para tres contextos
-(fondo de la carpeta, archivo, carpeta) y permite **ocultar opciones** (casilla) y **reordenarlas** (arrastrar,
-o Ctrl+↑/↓). Se guarda en `%APPDATA%\Jolt\menu.txt`, que también se puede editar a mano:
+They are saved in `%APPDATA%\Jolt\views.txt` (it can be edited by hand and reloads itself):
 
 ```
-[fondo]
--anycode              ← oculto
+[all]
+folders = name
+sort = date desc
+
+[C:\Users\me\Downloads]
+subfolders = no
+sort = name asc
+group = day
+folders = first
+hide = extension tmp part crdownload
+```
+
+Clicking a group's title collapses or expands it.
+
+## Drive index (Ctrl+P)
+
+Jolt builds an index of all fixed drives so that Ctrl+P finds any folder or file instantly.
+It is saved in `%LOCALAPPDATA%\Jolt\index-X.bin`: at startup it is available right away, whatever is created while Jolt
+is open gets added on its own, whatever is deleted is discarded when showing results, and if the index is more than 12 hours old it is
+rebuilt in the background (at low priority, without getting in the way). Without elevated rights, walking a large drive takes a few
+minutes the first time; with Ctrl+K → *Reindex the drives now* Jolt asks for administrator rights once and reads the
+drive's table (MFT, like Everything), which takes seconds.
+
+## Context menu
+
+It is the real Windows menu (the same one File Explorer sees, with the installed extensions), requested from the Shell
+and drawn by Jolt. ☰ → *Context menu…* opens an editor that shows that menu for three contexts
+(folder background, file, folder) and lets you **hide options** (checkbox) and **reorder them** (drag,
+or Ctrl+↑/↓). It is saved in `%APPDATA%\Jolt\menu.txt`, which can also be edited by hand:
+
+```
+[background]
+-anycode              ← hidden
 git_shell
----                   ← separador
+---                   ← separator
 properties
 ```
 
-Cada opción se identifica por su "verbo" (lo que muestra la columna gris del editor). Lo que no figure en el
-archivo se agrega al final, en el orden que lo da Windows. Los submenús no se personalizan todavía.
+Each option is identified by its "verb" (what the editor's gray column shows). Whatever isn't listed in the
+file is added at the end, in the order Windows gives it. Submenus can't be customized yet.
 
-## Probar sin tocar nada (modo de prueba)
+## Testing without touching anything (test mode)
 
-`build\jolt.exe --prueba guion.txt [--salida carpeta]` corre Jolt sin mostrar la ventana (no le roba el foco a nadie):
-dibuja en un bitmap en memoria, ejecuta el guion y guarda capturas PNG (con los menús emergentes encima). Usa una copia
-de la configuración en `%TEMP%\jolt-prueba\datos`, así que no toca la sesión ni nada del usuario. Pasos, uno por línea:
-
-```
-ir C:\carpeta          tecla Ctrl+Shift+F      escribir texto        comando ver_carpetas
-click 300 118          doble x y / derecho x y  mover x y            rueda x y -3
-esperar 300            captura nombre.png       tamano 1100 700       eco texto (va a log.txt)
-apretar x y            arrastrar x y            levantar x y          mantener Alt / mantener nada
-medir 300              (primer cuadro, duración de los cuadros y etapas del arranque)
-atajo / abrir_ruta C:\x / pestanas / disco D si / explorador / estado / reg clave | valor / regponer clave | valor | dato
-seleccion              (escribe en el registro cuántos y cuáles hay seleccionados, el cursor y el desplazamiento)
-existe C:\a.txt         tocar C:\a.txt (agrega un byte o lo crea)      mensaje (anota el aviso de abajo)
-```
-
-Los clicks van en coordenadas de la ventana (las de las capturas). El registro queda en `capturas\log.txt`.
-
-Con `--prueba-escritorio guion.txt` corre igual pero en un **escritorio de Windows aparte**: las ventanas del sistema
-que se abran (Propiedades, el diálogo de conflicto al copiar) quedan ahí, invisibles. Pasos extra:
+`build\jolt.exe --test script.txt [--output folder]` runs Jolt without showing the window (it steals focus from nobody):
+it draws into an in-memory bitmap, runs the script and saves PNG captures (with popup menus on top). It uses a copy
+of the configuration in `%TEMP%\jolt-test\data`, so it doesn't touch the session or anything else of the user's. Steps, one per line:
 
 ```
-esperar_ventana Properties | 6000      captura_ventana Properties | p.png      boton Properties | Cancel
-cerrar_ventana Properties              ventanas  (anota las abiertas)
-arrastrar_sobre 400 300 copiar C:\a.txt | C:\b.txt   (como si viniera de otra app; o "seleccion")
-soltar / cancelar_arrastre             sacar C:\destino copiar  (la selección soltada en otra carpeta)
-activar no / activar si                (la ventana pierde o recupera el foco)
+go C:\folder           key Ctrl+Shift+F         type text             command show_folders
+click 300 118          double x y / right x y   move x y              wheel x y -3
+wait 300               capture name.png         size 1100 700         echo text (goes to log.txt)
+press x y              drag x y                 release x y           hold Alt / hold none
+measure 300            (first frame, frame duration and startup stages)
+hotkey / open_path C:\x / tabs / disk D yes / explorer / status / reg key | value / regset key | value | data
+selection              (writes to the log how many and which are selected, the cursor and the scroll position)
+exists C:\a.txt         touch C:\a.txt (appends a byte or creates it)      message (logs the bottom notice)
 ```
 
-Los botones se aprietan con UI Automation, buscándolos por su texto (en el idioma de Windows). Si un paso abre algo
-modal (copiar con conflicto), el guion sigue corriendo adentro de esa espera. Lo único que no se puede automatizar es
-el permiso de administrador: Windows lo muestra en un escritorio seguro, a propósito fuera del alcance de los programas.
+Clicks use window coordinates (the ones in the captures). The log ends up in `captures\log.txt`.
 
-## Medir
+With `--test-desktop script.txt` it runs the same way but on a **separate Windows desktop**: system windows
+that open (Properties, the copy conflict dialog) stay there, invisible. Extra steps:
 
-`build\bench.exe <carpeta> [iteraciones]` compara cuánto tarda listar la carpeta con
-`NtQueryDirectoryFile` (lo que usa Jolt), `FindFirstFileEx` y el Shell de Windows.
+```
+wait_window Properties | 6000          capture_window Properties | p.png       button Properties | Cancel
+close_window Properties                windows  (logs the open ones)
+drag_over 400 300 copy C:\a.txt | C:\b.txt   (as if it came from another app; or "selection")
+drop / cancel_drag                     drag_out C:\target copy  (the selection dropped on another folder)
+activate no / activate yes             (the window loses or regains focus)
+```
 
-## Cómo es rápido
+Buttons are pressed with UI Automation, found by their text (in the Windows language). If a step opens something
+modal (a copy with a conflict), the script keeps running inside that wait. The only thing that can't be automated is
+the administrator prompt: Windows shows it on a secure desktop, deliberately out of reach of programs.
 
-- Lista con `NtQueryDirectoryFile` en lotes de 64 KiB, en un hilo aparte.
-- Cada carpeta visitada queda en memoria; al volver se muestra al instante y se revisa en segundo plano.
-- Vigila la carpeta actual y se actualiza sola si algo cambia.
-- Precarga la carpeta seleccionada (discos locales) para que Enter no tenga que leer el disco.
-- Iconos: los que dependen solo de la extensión se resuelven al momento sin tocar el disco; los que dependen
-  del archivo (carpetas, .exe, accesos directos) se piden a otro hilo y solo para las filas visibles.
-- Dibuja solo lo visible.
+## Benchmark
 
-## Licencia
+`build\bench.exe <folder> [iterations]` compares how long it takes to list the folder with
+`NtQueryDirectoryFile` (what Jolt uses), `FindFirstFileEx` and the Windows Shell.
 
-Jolt es software libre bajo la [GNU GPL v3](LICENSE): podés usarlo, modificarlo y distribuirlo, siempre que quien distribuya una versión modificada publique su código con la misma licencia.
+## How it stays fast
+
+- Lists with `NtQueryDirectoryFile` in 64 KiB batches, on a separate thread.
+- Every visited folder stays in memory; going back shows it instantly and rechecks it in the background.
+- Watches the current folder and updates itself if something changes.
+- Preloads the selected folder (local drives) so Enter doesn't have to read the disk.
+- Icons: those that depend only on the extension are resolved on the spot without touching the disk; those that depend
+  on the file (folders, .exe, shortcuts) are requested from another thread and only for visible rows.
+- Draws only what is visible.
+
+## License
+
+Jolt is free software under the [GNU GPL v3](LICENSE): you can use, modify and distribute it, as long as anyone who distributes a modified version publishes its source code under the same license.

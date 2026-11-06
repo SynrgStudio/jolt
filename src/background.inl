@@ -1,5 +1,5 @@
-// Jolt siempre listo: una sola instancia que se esconde en vez de cerrarse y vuelve al instante con un atajo
-// global, la bandeja, o cuando otro proceso le pide abrir una carpeta.
+// Jolt always ready: a single instance that hides instead of closing and comes back instantly with a global
+// shortcut, the tray, or when another process asks it to open a folder.
 
 constexpr UINT WM_APP_TRAY = WM_APP + 40, WM_APP_QUIT = WM_APP + 41;
 constexpr int kHotkeyId = 1;
@@ -7,27 +7,27 @@ constexpr UINT kTrayShow = 1, kTrayQuit = 2;
 constexpr wchar_t kWindowClass[] = L"JoltWindow";
 
 HANDLE g_instance = nullptr;
-bool g_quitting = false;    // cerrar de verdad, no esconder
-bool g_showMaxOnce = false;  // arrancó escondido y la ventana estaba maximizada
-bool g_testShown = true;     // en las pruebas la ventana nunca se ve: se lleva la cuenta acá
+bool g_quitting = false;    // really close, not hide
+bool g_showMaxOnce = false;  // started hidden and the window was maximized
+bool g_testShown = true;     // in tests the window is never visible: it is tracked here
 bool g_hotkeyOk = false, g_trayOn = false;
 UINT g_taskbarCreated = 0;
-std::wstring g_relaunch, g_relaunchArgs;  // al salir, abrir esto (después de instalar)
+std::wstring g_relaunch, g_relaunchArgs;  // on quit, open this (after installing)
 
 void TestLog(const std::wstring& s);
 bool FolderExists(const std::wstring& p);
 void SaveSession();
 void InstPanelClose();
 
-// ---- una sola instancia
+// ---- single instance
 
-// Si ya hay un Jolt, le pasa la carpeta y devuelve true. El que arranca tiene permiso de pasar al frente; se lo cede.
-// Con toggle ("--alternar", lo que corre Win+E) hace lo mismo que el atajo global: mostrar o esconder.
+// If a Jolt already exists, passes it the folder and returns true. The starting process may come to the front; it hands that over.
+// With toggle ("--toggle", what Win+E runs) it does the same as the global shortcut: show or hide.
 bool BgHandOff(const std::wstring& path, bool toggle) {
     g_instance = CreateMutexW(nullptr, FALSE, L"Local\\JoltInstancia");
     if (GetLastError() != ERROR_ALREADY_EXISTS) return false;
     HWND w = nullptr;
-    for (int i = 0; i < 40 && !w; ++i) {  // puede estar arrancando
+    for (int i = 0; i < 40 && !w; ++i) {  // it may be starting up
         w = FindWindowW(kWindowClass, nullptr);
         if (!w) Sleep(50);
     }
@@ -40,7 +40,7 @@ bool BgHandOff(const std::wstring& path, bool toggle) {
     return true;
 }
 
-// "jolt.exe --salir": cierra de verdad la instancia abierta y espera a que termine.
+// "jolt.exe --quit": really closes the open instance and waits for it to finish.
 void BgSendQuit() {
     HWND w = FindWindowW(kWindowClass, nullptr);
     if (!w) return;
@@ -54,7 +54,7 @@ void BgSendQuit() {
     }
 }
 
-// ---- mostrar y esconder
+// ---- show and hide
 
 bool BgIsUp() {
     if (g_test) return g_testShown;
@@ -62,11 +62,11 @@ bool BgIsUp() {
 }
 
 void BgShow() {
-    if (T().has) Enqueue(T().path, JobKind::Revalidate);  // pudo cambiar mientras estaba escondido
+    if (T().has) Enqueue(T().path, JobKind::Revalidate);  // it may have changed while hidden
     Invalidate();
     if (g_test) {
         g_testShown = true;
-        TestLog(L"ventana: mostrada");
+        TestLog(L"window: shown");
         return;
     }
     if (g_showMaxOnce) ShowWindow(g_hwnd, SW_SHOWMAXIMIZED);
@@ -81,11 +81,11 @@ void BgHide() {
     InstPanelClose();
     if (g_test) {
         g_testShown = false;
-        TestLog(L"ventana: escondida");
+        TestLog(L"window: hidden");
         return;
     }
     ShowWindow(g_hwnd, SW_HIDE);
-    SaveSession();  // por si Windows se apaga o Jolt se cuelga
+    SaveSession();  // in case Windows shuts down or Jolt hangs
     if (g_dsAny) SaveDirSizes();
 }
 
@@ -94,7 +94,7 @@ void BgQuit() {
     PostMessageW(g_hwnd, WM_CLOSE, 0, 0);
 }
 
-// Abre una carpeta: la pestaña que ya la tenga, o una nueva.
+// Opens a folder: the tab that already has it, or a new one.
 void BgOpenPath(const std::wstring& raw) {
     const std::wstring path = Normalize(raw);
     if (!FolderExists(path)) return;
@@ -106,7 +106,7 @@ void BgOpenPath(const std::wstring& raw) {
     NewTab(path);
 }
 
-// La carpeta de la ventana del Explorador que está al frente (de la pestaña activa). Vacío si no es una carpeta real.
+// The folder of the File Explorer window in front (of its active tab). Empty if it is not a real folder.
 std::wstring ExplorerFolder(HWND fg) {
     wchar_t cls[64] = {};
     if (!fg || !GetClassNameW(fg, cls, 64) || (wcscmp(cls, L"CabinetWClass") != 0 && wcscmp(cls, L"ExploreWClass") != 0)) return L"";
@@ -146,7 +146,7 @@ std::wstring ExplorerFolder(HWND fg) {
     return first;
 }
 
-// El atajo global y el click en la bandeja: aparece, y si ya estaba al frente, se esconde.
+// The global shortcut and the tray click: shows up, and if it was already in front, hides.
 void BgToggle(bool fromHotkey) {
     if (BgIsUp()) {
         BgHide();
@@ -157,7 +157,7 @@ void BgToggle(bool fromHotkey) {
     BgShow();
 }
 
-// ---- atajo global y bandeja
+// ---- global shortcut and tray
 
 bool ParseGlobalKey(const std::wstring& spec, UINT& fsMods, UINT& vk) {
     std::wstring s = Lower(Trim(spec));
@@ -202,20 +202,20 @@ void TrayRemove() {
 
 void TrayMenu() {
     HMENU m = CreatePopupMenu();
-    AppendMenuW(m, MF_STRING, kTrayShow, L"Abrir Jolt");
+    AppendMenuW(m, MF_STRING, kTrayShow, L"Open Jolt");
     AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(m, MF_STRING, kTrayQuit, L"Salir");
+    AppendMenuW(m, MF_STRING, kTrayQuit, L"Quit");
     SetMenuDefaultItem(m, kTrayShow, FALSE);
     POINT pt;
     GetCursorPos(&pt);
-    SetForegroundWindow(g_hwnd);  // si no, el menú no se cierra al hacer click afuera
+    SetForegroundWindow(g_hwnd);  // otherwise the menu does not close when clicking outside
     const UINT id = TrackPopupMenu(m, TPM_RETURNCMD | TPM_NONOTIFY, pt.x, pt.y, 0, g_hwnd, nullptr);
     DestroyMenu(m);
     if (id == kTrayShow) BgShow();
     if (id == kTrayQuit) BgQuit();
 }
 
-// Aplica el atajo y la bandeja de la configuración. Se llama al arrancar y al recargarla.
+// Applies the shortcut and tray settings. Called at startup and when the config reloads.
 void BgApplyConfig() {
     UINT mods = 0, vk = 0;
     const bool parsed = !g_cfg.globalKey.empty() && ParseGlobalKey(g_cfg.globalKey, mods, vk);
@@ -225,13 +225,13 @@ void BgApplyConfig() {
     }
     UnregisterHotKey(g_hwnd, kHotkeyId);
     g_hotkeyOk = parsed && RegisterHotKey(g_hwnd, kHotkeyId, mods, vk);
-    if (!g_cfg.globalKey.empty() && !g_hotkeyOk) S.message = L"El atajo global " + g_cfg.globalKey + L" no está disponible";
+    if (!g_cfg.globalKey.empty() && !g_hotkeyOk) S.message = L"The global shortcut " + g_cfg.globalKey + L" is not available";
     const bool wantTray = g_cfg.background && g_cfg.tray;
     if (wantTray && !g_trayOn) TrayAdd();
     if (!wantTray) TrayRemove();
 }
 
-// Windows avisa los discos nuevos a todas las ventanas, aunque estén escondidas.
+// Windows announces new drives to all windows, even hidden ones.
 void BgDeviceChange(WPARAM wp, LPARAM lp) {
     if (!g_cfg.openDrives || wp != DBT_DEVICEARRIVAL) return;
     const auto* h = reinterpret_cast<const DEV_BROADCAST_HDR*>(lp);

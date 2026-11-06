@@ -1,11 +1,11 @@
-// Vistas: cómo se muestra una carpeta. Una lista de reglas (ordenar, agrupar, carpetas primero,
-// mostrar solo, ocultar) que vale para todas las carpetas, y vistas propias para carpetas puntuales
-// (opcionalmente también para sus subcarpetas). Se guardan en %APPDATA%\Jolt\vistas.txt, que se
-// puede editar a mano. Se incluye desde app.cpp después de dirsize.inl.
+// Views: how a folder is shown. A list of rules (sort, group, folders first,
+// show only, hide) that applies to all folders, and separate views for specific folders
+// (optionally for their subfolders too). They are saved in %APPDATA%\Jolt\views.txt, which can
+// be edited by hand. Included from app.cpp after dirsize.inl.
 //
-// Cómo se combinan las reglas: los grupos son lo de más afuera (cada día, cada tipo...); dentro de
-// cada grupo, "carpetas" separa carpetas y archivos; y dentro de eso mandan las reglas de orden, la
-// primera de la lista antes que las demás (las siguientes desempatan). Los filtros se aplican antes.
+// How rules combine: groups are the outermost level (each day, each type...); within each
+// group, "folders" separates folders and files; within that the sort rules decide, the
+// first in the list before the rest (the later ones break ties). Filters are applied first.
 
 enum class StepKind { Sort, Group, Folders, Show, Hide, Fold };
 enum FoldMode { FdAll, FdButToday, FdButFirst, FdCount };
@@ -16,23 +16,23 @@ enum Cond { CName, CExt, CNewer, COlder, CBigger, CSmaller, CFolders, CFiles, CH
 
 struct Step {
     StepKind kind = StepKind::Sort;
-    int a = 0;  // campo / agrupado / modo de carpetas / condición
-    int b = 0;  // orden: 1 = ascendente
-    std::wstring text;  // valor de la condición
+    int a = 0;  // field / grouping / folder mode / condition
+    int b = 0;  // sort: 1 = ascending
+    std::wstring text;  // condition value
 };
 struct View {
     std::vector<Step> steps;
-    bool sub = false;   // vale también para las subcarpetas (solo vistas de una carpeta)
-    std::wstring path;  // carpeta (vacío = todas)
+    bool sub = false;   // also applies to subfolders (folder views only)
+    std::wstring path;  // folder (empty = all)
 };
 
 View g_viewAll;
-// Ver carpetas / archivos / extensiones (comandos de la paleta; valen para todas las carpetas)
+// Show folders / files / extensions (palette commands; they apply to all folders)
 bool g_hideDirs = false, g_hideFiles = false, g_hideExt = false;
-std::unordered_map<std::wstring, View> g_views;  // por carpeta (clave: Key(ruta))
-uint64_t g_viewEpoch = 1;                        // cambia con cualquier cosa que altere cómo se ve un listado
+std::unordered_map<std::wstring, View> g_views;  // per folder (key: Key(path))
+uint64_t g_viewEpoch = 1;                        // changes with anything that alters how a listing looks
 
-// La vista que manda en una carpeta: la propia, la de un ancestro con "subcarpetas", o la general.
+// The view that rules a folder: its own, that of an ancestor with "subfolders", or the general one.
 View* ViewFor(const std::wstring& path) {
     if (!g_views.empty() && !path.empty()) {
         auto it = g_views.find(Key(path));
@@ -52,7 +52,7 @@ const Step* FirstStep(const View& v, StepKind k) {
     return nullptr;
 }
 
-// Lo que se ve en el encabezado de columnas: el primer orden de la vista.
+// What the column header shows: the view's first sort.
 bool ViewPrimarySort(const View& v, SortBy& by, bool& asc) {
     const Step* s = FirstStep(v, StepKind::Sort);
     if (!s || s->a == SfExt) return false;
@@ -61,12 +61,12 @@ bool ViewPrimarySort(const View& v, SortBy& by, bool& asc) {
     return true;
 }
 
-// ---- texto (vistas.txt)
-const wchar_t* kSortNames[] = {L"nombre", L"fecha", L"tamano", L"extension"};
-const wchar_t* kGroupNames[] = {L"dia", L"mes", L"tipo", L"extension"};
-const wchar_t* kFolderNames[] = {L"mezcladas", L"primero", L"ultimo", L"nombre"};
-const wchar_t* kFoldNames[] = {L"todos", L"hoy", L"primero"};
-const wchar_t* kCondNames[] = {L"nombre", L"extension", L"nuevos", L"viejos", L"grandes", L"chicos", L"carpetas", L"archivos", L"ocultos"};
+// ---- text (views.txt)
+const wchar_t* kSortNames[] = {L"name", L"date", L"size", L"extension"};
+const wchar_t* kGroupNames[] = {L"day", L"month", L"type", L"extension"};
+const wchar_t* kFolderNames[] = {L"mixed", L"first", L"last", L"name"};
+const wchar_t* kFoldNames[] = {L"all", L"today", L"first"};
+const wchar_t* kCondNames[] = {L"name", L"extension", L"newer", L"older", L"larger", L"smaller", L"folders", L"files", L"hidden"};
 
 int IndexOf(const wchar_t* const* names, int n, const std::wstring& s) {
     for (int i = 0; i < n; ++i)
@@ -82,35 +82,35 @@ bool ParseStep(const std::wstring& key, const std::wstring& val, Step& s) {
         rest = Trim(v.substr(sp + 1));
     }
     std::wstring f = Lower(first);
-    if (key == L"ordenar") {
+    if (key == L"sort") {
         int a = IndexOf(kSortNames, SfCount, f);
         if (a < 0) return false;
         s = {StepKind::Sort, a, Lower(rest) != L"desc", L""};
         return true;
     }
-    if (key == L"agrupar") {
+    if (key == L"group") {
         int a = IndexOf(kGroupNames, GbCount, f);
         if (a < 0) return false;
         s = {StepKind::Group, a, 0, L""};
         return true;
     }
-    if (key == L"carpetas") {
+    if (key == L"folders") {
         int a = IndexOf(kFolderNames, FmCount, f);
         if (a < 0) return false;
         s = {StepKind::Folders, a, 0, L""};
         return true;
     }
-    if (key == L"plegar") {
+    if (key == L"collapse") {
         int a = IndexOf(kFoldNames, FdCount, f);
         if (a < 0) return false;
         s = {StepKind::Fold, a, 0, L""};
         return true;
     }
-    if (key == L"mostrar" || key == L"ocultar") {
+    if (key == L"show" || key == L"hide") {
         int a = IndexOf(kCondNames, CCount, f);
         if (a < 0) return false;
-        if (a == CName && Lower(rest).rfind(L"contiene", 0) == 0) rest = Trim(rest.substr(8));
-        s = {key == L"mostrar" ? StepKind::Show : StepKind::Hide, a, 0, rest};
+        if (a == CName && Lower(rest).rfind(L"contains", 0) == 0) rest = Trim(rest.substr(8));
+        s = {key == L"show" ? StepKind::Show : StepKind::Hide, a, 0, rest};
         return true;
     }
     return false;
@@ -118,14 +118,14 @@ bool ParseStep(const std::wstring& key, const std::wstring& val, Step& s) {
 
 std::wstring StepLine(const Step& s) {
     switch (s.kind) {
-        case StepKind::Sort: return std::wstring(L"ordenar = ") + kSortNames[s.a] + (s.b ? L" asc" : L" desc");
-        case StepKind::Group: return std::wstring(L"agrupar = ") + kGroupNames[s.a];
-        case StepKind::Folders: return std::wstring(L"carpetas = ") + kFolderNames[s.a];
-        case StepKind::Fold: return std::wstring(L"plegar = ") + kFoldNames[s.a];
+        case StepKind::Sort: return std::wstring(L"sort = ") + kSortNames[s.a] + (s.b ? L" asc" : L" desc");
+        case StepKind::Group: return std::wstring(L"group = ") + kGroupNames[s.a];
+        case StepKind::Folders: return std::wstring(L"folders = ") + kFolderNames[s.a];
+        case StepKind::Fold: return std::wstring(L"collapse = ") + kFoldNames[s.a];
         default: {
-            std::wstring l = s.kind == StepKind::Show ? L"mostrar = " : L"ocultar = ";
+            std::wstring l = s.kind == StepKind::Show ? L"show = " : L"hide = ";
             l += kCondNames[s.a];
-            if (s.a == CName) l += L" contiene";
+            if (s.a == CName) l += L" contains";
             if (s.a <= CSmaller && !s.text.empty()) l += L" " + s.text;
             return l;
         }
@@ -134,27 +134,27 @@ std::wstring StepLine(const Step& s) {
 
 std::wstring ViewsFile() {
     std::wstring d = ConfigDir();
-    return d.empty() ? L"" : d + L"\\vistas.txt";
+    return d.empty() ? L"" : d + L"\\views.txt";
 }
 
 void SaveViews() {
     std::wstring f = ViewsFile();
     if (f.empty()) return;
     std::wstring s =
-        L"# Vistas de Jolt: cómo se muestra cada carpeta. Se edita desde el botón de filtro del encabezado\n"
-        L"# (o a mano: se recarga sola). Reglas, una por línea y en orden:\n"
-        L"#   ordenar = nombre|fecha|tamano|extension asc|desc   (la primera manda, las demás desempatan)\n"
-        L"#   agrupar = dia|mes|tipo|extension\n"
-        L"#   carpetas = primero|ultimo|mezcladas|nombre          (nombre: primero solo al ordenar por nombre)\n"
-        L"#   plegar = todos|hoy|primero   (cómo arrancan los grupos: todos plegados, todos menos hoy, todos menos el primero)\n"
-        L"#   mostrar = ... / ocultar = ...  con: nombre contiene X, extension pdf docx, nuevos N (días),\n"
-        L"#            viejos N, grandes N (MB), chicos N, carpetas, archivos, ocultos\n"
-        L"# [todas] vale para todas las carpetas; [C:\\ruta] solo para esa (subcarpetas = si: también adentro).\n\n";
-    s += L"[todas]\n";
+        L"# Jolt views: how each folder is shown. Edit them from the filter button in the header\n"
+        L"# (or by hand: it reloads automatically). Rules, one per line and in order:\n"
+        L"#   sort = name|date|size|extension asc|desc   (the first one wins, the rest break ties)\n"
+        L"#   group = day|month|type|extension\n"
+        L"#   folders = first|last|mixed|name          (name: first only when sorting by name)\n"
+        L"#   collapse = all|today|first   (how groups start: all collapsed, all except today, all except the first)\n"
+        L"#   show = ... / hide = ...  with: name contains X, extension pdf docx, newer N (days),\n"
+        L"#            older N, larger N (MB), smaller N, folders, files, hidden\n"
+        L"# [all] applies to all folders; [C:\\path] only to that one (subfolders = yes: also inside it).\n\n";
+    s += L"[all]\n";
     for (const Step& st : g_viewAll.steps) s += StepLine(st) + L"\n";
     for (auto& [k, v] : g_views) {
         s += L"\n[" + v.path + L"]\n";
-        if (v.sub) s += L"subcarpetas = si\n";
+        if (v.sub) s += L"subfolders = yes\n";
         for (const Step& st : v.steps) s += StepLine(st) + L"\n";
     }
     std::ofstream out(f, std::ios::binary);
@@ -180,7 +180,7 @@ bool LoadViews() {
         if (line.empty()) continue;
         if (line.front() == L'[' && line.back() == L']') {
             std::wstring name = Trim(line.substr(1, line.size() - 2));
-            if (Lower(name) == L"todas") {
+            if (Lower(name) == L"all") {
                 cur = &g_viewAll;
             } else {
                 std::wstring p = Normalize(name);
@@ -193,7 +193,7 @@ bool LoadViews() {
         size_t eq = line.find(L'=');
         if (!cur || eq == std::wstring::npos) continue;
         std::wstring key = Lower(Trim(line.substr(0, eq))), val = Trim(line.substr(eq + 1));
-        if (key == L"subcarpetas") {
+        if (key == L"subfolders") {
             cur->sub = ParseBool(val);
             continue;
         }
@@ -203,7 +203,7 @@ bool LoadViews() {
     return true;
 }
 
-// ---- aplicar una vista a un listado
+// ---- apply a view to a listing
 int64_t NowFileTime() {
     FILETIME ft;
     GetSystemTimeAsFileTime(&ft);
@@ -224,7 +224,7 @@ std::vector<std::wstring> SplitTerms(const std::wstring& s) {
     return out;
 }
 
-// 1 = cumple, 0 = no cumple, -1 = no aplica (p. ej. tamaño o extensión de una carpeta)
+// 1 = matches, 0 = does not match, -1 = not applicable (e.g. size or extension of a folder)
 int CondMatch(const Listing& l, const Entry& e, const Step& s, int64_t now) {
     const int64_t day = 864000000000LL;
     switch (s.a) {
@@ -258,7 +258,7 @@ int CondMatch(const Listing& l, const Entry& e, const Step& s, int64_t now) {
     return -1;
 }
 
-// Tipo de archivo por extensión, para "agrupar por tipo".
+// File type by extension, for "group by type".
 int TypeGroup(const Listing& l, const Entry& e) {
     if (e.isDir()) return 0;
     std::wstring x = ExtOf(l.name(e), e.nameLen);
@@ -277,17 +277,17 @@ int TypeGroup(const Listing& l, const Entry& e) {
             L".json", L".xml", L".yaml", L".yml", L".toml", L".html", L".css", L".sql", L".sh", L".lua"})) return 7;
     return 8;
 }
-const wchar_t* kTypeLabels[] = {L"Carpetas", L"Imágenes", L"Videos", L"Audio", L"Documentos", L"Comprimidos",
-                                L"Programas", L"Código", L"Otros"};
+const wchar_t* kTypeLabels[] = {L"Folders", L"Images", L"Videos", L"Audio", L"Documents", L"Archives",
+                                L"Programs", L"Code", L"Other"};
 
 std::wstring DayLabel(int y, int m, int d, int wday, const SYSTEMTIME& today, const SYSTEMTIME& yest) {
-    static const wchar_t* days[] = {L"domingo", L"lunes", L"martes", L"miércoles", L"jueves", L"viernes", L"sábado"};
-    static const wchar_t* months[] = {L"enero", L"febrero", L"marzo", L"abril", L"mayo", L"junio", L"julio",
-                                      L"agosto", L"septiembre", L"octubre", L"noviembre", L"diciembre"};
-    if (y == today.wYear && m == today.wMonth && d == today.wDay) return L"Hoy";
-    if (y == yest.wYear && m == yest.wMonth && d == yest.wDay) return L"Ayer";
-    std::wstring s = std::wstring(days[wday]) + L" " + std::to_wstring(d) + L" de " + months[m - 1];
-    if (y != today.wYear) s += L" de " + std::to_wstring(y);
+    static const wchar_t* days[] = {L"Sunday", L"Monday", L"Tuesday", L"Wednesday", L"Thursday", L"Friday", L"Saturday"};
+    static const wchar_t* months[] = {L"January", L"February", L"March", L"April", L"May", L"June", L"July",
+                                      L"August", L"September", L"October", L"November", L"December"};
+    if (y == today.wYear && m == today.wMonth && d == today.wDay) return L"Today";
+    if (y == yest.wYear && m == yest.wMonth && d == yest.wDay) return L"Yesterday";
+    std::wstring s = std::wstring(days[wday]) + L" " + std::to_wstring(d) + L" " + months[m - 1];
+    if (y != today.wYear) s += L" " + std::to_wstring(y);
     return s;
 }
 
@@ -300,7 +300,7 @@ std::shared_ptr<const Listing> ApplyView(const Listing& src, const View& v) {
     out->sortAsc = src.sortAsc;
     out->foldersFirst = src.foldersFirst;
     out->isView = true;
-    // filtros
+    // filters
     const bool hideHidden = !g_cfg.showHidden && !src.path.empty();
     const int64_t now = NowFileTime();
     out->entries.reserve(src.entries.size());
@@ -318,7 +318,7 @@ std::shared_ptr<const Listing> ApplyView(const Listing& src, const View& v) {
         }
         if (keep) out->entries.push_back(e);
     }
-    if (src.path.empty()) return out;  // unidades: en su orden
+    if (src.path.empty()) return out;  // drives: in their own order
 
     std::vector<const Step*> sorts;
     for (const Step& s : v.steps)
@@ -332,13 +332,13 @@ std::shared_ptr<const Listing> ApplyView(const Listing& src, const View& v) {
         Entry e;
         uint64_t size;
         int64_t g;
-        uint32_t k = 0;  // su clave de orden por nombre
+        uint32_t k = 0;  // its name sort key
     };
     std::vector<It> items;
     items.reserve(out->entries.size());
     std::unique_lock<std::mutex> lk(g_dsm, std::defer_lock);
     if (g_dsAny) lk.lock();
-    // fechas locales para agrupar por día o mes
+    // local dates for grouping by day or month
     SYSTEMTIME today{}, yest{};
     GetLocalTime(&today);
     {
@@ -366,7 +366,7 @@ std::shared_ptr<const Listing> ApplyView(const Listing& src, const View& v) {
             } else if (grp->a == GbType) {
                 it.g = TypeGroup(src, e);
             } else {
-                std::wstring x = e.isDir() ? L"/" : ExtOf(src.name(e), e.nameLen);  // "/": carpetas
+                std::wstring x = e.isDir() ? L"/" : ExtOf(src.name(e), e.nameLen);  // "/": folders
                 auto f = std::find(extKeys.begin(), extKeys.end(), x);
                 if (f == extKeys.end()) {
                     extKeys.push_back(x);
@@ -381,7 +381,7 @@ std::shared_ptr<const Listing> ApplyView(const Listing& src, const View& v) {
     if (lk.owns_lock()) lk.unlock();
     NameKeys keys;
     keys.Build(*out);
-    // orden de los grupos: fechas, lo más nuevo primero salvo que el orden por fecha sea ascendente
+    // group order: dates, newest first unless the date sort is ascending
     bool dateAsc = false;
     for (const Step* s : sorts)
         if (s->a == SfDate) {
@@ -393,7 +393,7 @@ std::shared_ptr<const Listing> ApplyView(const Listing& src, const View& v) {
         std::vector<int> idx(extKeys.size());
         for (size_t i = 0; i < idx.size(); ++i) idx[i] = static_cast<int>(i);
         std::sort(idx.begin(), idx.end(), [&](int a, int b) {
-            // carpetas primero, sin extensión al final
+            // folders first, no extension last
             auto rank = [](const std::wstring& x) { return x == L"/" ? 0 : x.empty() ? 2 : 1; };
             if (rank(extKeys[a]) != rank(extKeys[b])) return rank(extKeys[a]) < rank(extKeys[b]);
             return extKeys[a] < extKeys[b];
@@ -426,10 +426,10 @@ std::shared_ptr<const Listing> ApplyView(const Listing& src, const View& v) {
         return keys.Compare(a.k, b.k) < 0;
     });
     for (size_t i = 0; i < items.size(); ++i) out->entries[i] = items[i].e;
-    // grupos: dónde empieza cada uno y su título
+    // groups: where each one starts and its title
     if (grp) {
-        static const wchar_t* months[] = {L"enero", L"febrero", L"marzo", L"abril", L"mayo", L"junio", L"julio",
-                                          L"agosto", L"septiembre", L"octubre", L"noviembre", L"diciembre"};
+        static const wchar_t* months[] = {L"January", L"February", L"March", L"April", L"May", L"June", L"July",
+                                          L"August", L"September", L"October", L"November", L"December"};
         for (size_t i = 0; i < items.size(); ++i) {
             if (i > 0 && items[i].g == items[i - 1].g) continue;
             int64_t g = items[i].g;
@@ -442,25 +442,25 @@ std::shared_ptr<const Listing> ApplyView(const Listing& src, const View& v) {
                 st.wDay = static_cast<WORD>(d);
                 FILETIME ft;
                 SystemTimeToFileTime(&st, &ft);
-                FileTimeToSystemTime(&ft, &st);  // calcula el día de la semana
+                FileTimeToSystemTime(&ft, &st);  // computes the day of the week
                 label = DayLabel(y, m, d, st.wDayOfWeek, today, yest);
             } else if (grp->a == GbMonth) {
                 int y = static_cast<int>(g / 100), m = static_cast<int>(g % 100);
-                label = std::wstring(months[std::clamp(m, 1, 12) - 1]) + L" de " + std::to_wstring(y);
+                label = std::wstring(months[std::clamp(m, 1, 12) - 1]) + L" " + std::to_wstring(y);
                 label[0] = towupper(label[0]);
             } else if (grp->a == GbType) {
                 label = kTypeLabels[std::clamp(static_cast<int>(g), 0, 8)];
             } else {
                 const std::wstring& x = extKeys[static_cast<size_t>(g)];
-                label = x == L"/" ? L"Carpetas" : x.empty() ? L"Sin extensión" : x;
+                label = x == L"/" ? L"Folders" : x.empty() ? L"No extension" : x;
             }
             out->groups.push_back({static_cast<uint32_t>(i), label});
         }
-        // cómo arranca cada grupo
+        // how each group starts
         if (const Step* fd = FirstStep(v, StepKind::Fold)) {
             out->groupFolded.resize(out->groups.size());
             for (size_t gi = 0; gi < out->groups.size(); ++gi)
-                out->groupFolded[gi] = fd->a == FdAll ? 1 : fd->a == FdButFirst ? (gi != 0) : (out->groups[gi].second != L"Hoy");
+                out->groupFolded[gi] = fd->a == FdAll ? 1 : fd->a == FdButFirst ? (gi != 0) : (out->groups[gi].second != L"Today");
         }
     }
     return out;

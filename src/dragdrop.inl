@@ -1,14 +1,14 @@
-// Arrastrar y soltar. Se incluye desde app.cpp después de menu.inl.
+// Drag and drop. Included from app.cpp after menu.inl.
 //
-// Destino: la carpeta bajo el cursor (fila, fondo, favorito, unidad o pestaña) delega en el
-// IDropTarget que le da el Shell para esa carpeta: el mismo código que usa el Explorador, así que
-// mover/copiar según el disco, Ctrl/Shift, conflictos, "optimized move" y deshacer se comportan igual.
-// Origen: la selección se arrastra con el objeto de datos del Shell (SHDoDragDrop pone la imagen).
+// Target: the folder under the cursor (row, background, favorite, drive or tab) delegates to the
+// IDropTarget the Shell provides for that folder: the same code File Explorer uses, so
+// move/copy by drive, Ctrl/Shift, conflicts, "optimized move" and undo all behave the same.
+// Source: the selection is dragged with the Shell data object (SHDoDragDrop sets the image).
 
 ComPtr<IDropTargetHelper> g_dropHelper;
 
-// Lo que se arrastra desde Jolt y cae en Jolt no se le pasa al Shell, que no avisa qué hizo: se resuelve
-// con FileOp al terminar el arrastre, así queda en el historial de Ctrl+Z.
+// What's dragged from Jolt and dropped in Jolt isn't passed to the Shell, which doesn't report what it did:
+// it's resolved with FileOp when the drag ends, so it lands in the Ctrl+Z history.
 std::vector<std::wstring> g_dragFiles;
 struct PendingDrop {
     std::wstring dest;
@@ -38,7 +38,7 @@ struct DropTarget : IDropTarget {
         return r;
     }
 
-    // Carpeta destino bajo el punto de pantalla; "" = ninguna.
+    // Target folder under the screen point; "" = none.
     std::wstring TargetAt(POINTL ptl, int& row, int& side, int& tab) {
         POINT pt{ptl.x, ptl.y};
         ScreenToClient(g_hwnd, &pt);
@@ -85,7 +85,7 @@ struct DropTarget : IDropTarget {
         Invalidate();
     }
 
-    // Lleva el destino interno al punto actual y devuelve el efecto que ofrece.
+    // Moves the inner target to the current point and returns the effect it offers.
     void Track(DWORD keys, POINTL pt, DWORD* effect, bool entering) {
         int row, side, tab;
         std::wstring path = TargetAt(pt, row, side, tab);
@@ -146,7 +146,7 @@ struct DropTarget : IDropTarget {
             *effect = DROPEFFECT_NONE;
         } else if (inner) {
             HRESULT hr = inner->Drop(pdo, keys, pt, effect);
-            Log(L"Drop hr=0x%08X effect=%u en \"%s\"", static_cast<unsigned>(hr), *effect, innerPath.c_str());
+            Log(L"Drop hr=0x%08X effect=%u on \"%s\"", static_cast<unsigned>(hr), *effect, innerPath.c_str());
         } else {
             *effect = DROPEFFECT_NONE;
         }
@@ -165,7 +165,7 @@ void InitDragDrop() {
     RegisterDragDrop(g_hwnd, g_dropTarget);
 }
 
-// Objeto de datos del Shell con la selección (lo que se arrastra; el modo de prueba también lo usa).
+// Shell data object with the selection (what's dragged; test mode uses it too).
 ComPtr<IDataObject> SelectionDataObject() {
     Tab& t = T();
     ComPtr<IDataObject> pdo;
@@ -186,13 +186,13 @@ ComPtr<IDataObject> SelectionDataObject() {
     if (folderPidl && !pidls.empty())
         SHCreateDataObject(folderPidl, static_cast<UINT>(pidls.size()), (PCUITEMID_CHILD_ARRAY)pidls.data(), nullptr,
                            IID_PPV_ARGS(&pdo));
-    Log(L"SelectionDataObject: %zu nombres, %zu pidls, pdo=%d", names.size(), pidls.size(), pdo ? 1 : 0);
+    Log(L"SelectionDataObject: %zu names, %zu pidls, pdo=%d", names.size(), pidls.size(), pdo ? 1 : 0);
     for (auto p : pidls) CoTaskMemFree(p);
     if (folderPidl) CoTaskMemFree(folderPidl);
     return pdo;
 }
 
-// Hace lo que quedó pendiente de un arrastre dentro de Jolt.
+// Does what was left pending from a drag within Jolt.
 void RunPendingDrop() {
     PendingDrop d = std::move(g_pendingDrop);
     std::vector<std::wstring> files = std::move(g_dragFiles);
@@ -202,14 +202,14 @@ void RunPendingDrop() {
     std::vector<std::wstring> elsewhere;
     for (const auto& f : files)
         if (Key(ParentOf(f)) != Key(d.dest)) elsewhere.push_back(f);
-    // copiar sobre su misma carpeta crea copias con otro nombre, como en el Explorador
+    // copying onto its own folder creates copies with another name, as in File Explorer
     if (d.move) FileOp(FileOpKind::Move, elsewhere, d.dest);
     else FileOp(FileOpKind::Copy, files, d.dest, elsewhere.size() == files.size() ? 0 : FOF_RENAMEONCOLLISION);
     Enqueue(d.dest, JobKind::Revalidate);
     for (const auto& f : files) Enqueue(ParentOf(f), JobKind::Revalidate);
 }
 
-// Arrastra la selección actual.
+// Drags the current selection.
 void StartDrag() {
     ComPtr<IDataObject> pdo = SelectionDataObject();
     if (!pdo) return;
@@ -221,13 +221,13 @@ void StartDrag() {
     RunPendingDrop();
 }
 
-// Detección del arrastre con el mouse: un click sobre algo ya seleccionado no cambia la selección
-// hasta soltar (para poder arrastrar varios); moverse más de SM_CXDRAG empieza el arrastre.
+// Mouse drag detection: a click on something already selected doesn't change the selection
+// until release (so several items can be dragged); moving more than SM_CXDRAG starts the drag.
 struct Press {
     bool active = false, deferred = false;
     int row = -1;
     POINT pt{};
-    bool box = false;  // moverse dibuja un recuadro en vez de arrastrar archivos
+    bool box = false;  // moving draws a box instead of dragging files
 } g_press;
 
 void PressBegin(int row, POINT pt, bool deferred) {

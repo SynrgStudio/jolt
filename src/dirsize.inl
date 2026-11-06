@@ -1,6 +1,6 @@
-// Tamaño de carpetas: suma recursiva en un hilo aparte (con NtQueryDirectoryFile, como el listado).
-// Guarda el total de cada subcarpeta que recorre: después de calcular una carpeta, todas sus
-// subcarpetas ya tienen tamaño. Se incluye desde app.cpp antes del estado de las pestañas.
+// Folder sizes: recursive sum on a separate thread (with NtQueryDirectoryFile, like the listing).
+// Stores the total of every subfolder it walks: after computing a folder, all its subfolders
+// already have a size. Included from app.cpp before the tab state.
 
 constexpr UINT WM_APP_DIRSIZE = WM_APP + 5;
 
@@ -11,12 +11,12 @@ struct DirSize {
 
 std::mutex g_dsm;
 std::condition_variable g_dscv;
-std::unordered_map<std::wstring, DirSize> g_dirSizes;  // clave: Key(ruta)
+std::unordered_map<std::wstring, DirSize> g_dirSizes;  // key: Key(path)
 std::deque<std::wstring> g_dsQueue;
-std::atomic<bool> g_dsAny{false};       // hay algún tamaño (atajo para no bloquear al dibujar)
-std::atomic<bool> g_dsBusy{false};      // calculando
-std::atomic<bool> g_dsNotify{false};    // hay un aviso pendiente para la ventana
-std::atomic<bool> g_dsFinished{false};  // terminó una raíz: reordenar si se ordena por tamaño
+std::atomic<bool> g_dsAny{false};       // some size exists (a shortcut to avoid locking while drawing)
+std::atomic<bool> g_dsBusy{false};      // computing
+std::atomic<bool> g_dsNotify{false};    // a notification for the window is pending
+std::atomic<bool> g_dsFinished{false};  // a root finished: re-sort if sorting by size
 
 bool DirSizeOf(const std::wstring& key, DirSize& out) {
     if (!g_dsAny) return false;
@@ -39,7 +39,7 @@ DirSize DsWalk(const std::wstring& path, const std::wstring& rootKey, DirSize& a
         if (e.isDir()) {
             ++me.dirs;
             ++acc.dirs;
-            if (e.attrs & FILE_ATTRIBUTE_REPARSE_POINT) continue;  // enlaces y uniones: no se siguen
+            if (e.attrs & FILE_ATTRIBUTE_REPARSE_POINT) continue;  // links and junctions aren't followed
             DirSize sub = DsWalk(Join(path, l.name(e)), rootKey, acc, lastPost);
             me.bytes += sub.bytes;
             me.files += sub.files;
@@ -64,8 +64,8 @@ DirSize DsWalk(const std::wstring& path, const std::wstring& rootKey, DirSize& a
     return me;
 }
 
-// ---- persistencia: los tamaños calculados se guardan en %LOCALAPPDATA%\Jolt\tamanos.bin
-// (se escriben al terminar cada cálculo y se leen al arrancar, en segundo plano).
+// ---- persistence: computed sizes are saved in %LOCALAPPDATA%\Jolt\sizes.bin
+// (written when each calculation finishes and read at startup, in the background).
 std::wstring LocalDataDir() {
     wchar_t* p = nullptr;
     std::wstring dir;
@@ -97,7 +97,7 @@ void SaveDirSizes() {
         }
         memcpy(buf.data() + 4, &n, 4);
     }
-    std::wstring f = LocalDataDir() + L"\\tamanos.bin", tmp = f + L".tmp";
+    std::wstring f = LocalDataDir() + L"\\sizes.bin", tmp = f + L".tmp";
     HANDLE h = CreateFileW(tmp.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (h == INVALID_HANDLE_VALUE) return;
     DWORD w = 0;
@@ -107,7 +107,7 @@ void SaveDirSizes() {
 }
 
 void LoadDirSizes() {
-    std::wstring f = LocalDataDir() + L"\\tamanos.bin";
+    std::wstring f = LocalDataDir() + L"\\sizes.bin";
     HANDLE h = CreateFileW(f.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
     if (h == INVALID_HANDLE_VALUE) return;
     LARGE_INTEGER sz{};
@@ -142,7 +142,7 @@ void LoadDirSizes() {
     }
     {
         std::lock_guard lk(g_dsm);
-        for (auto& [k, v] : m) g_dirSizes.emplace(k, v);  // lo calculado en esta sesión manda
+        for (auto& [k, v] : m) g_dirSizes.emplace(k, v);  // what was computed this session wins
         g_dsAny = !g_dirSizes.empty();
     }
     g_dsFinished = true;
@@ -177,7 +177,7 @@ void DirSizeThread() {
     }
 }
 
-// Pide calcular el tamaño de estas carpetas (se muestran con "…" hasta que terminan).
+// Requests the size of these folders (shown with "…" until they finish).
 void DirSizeRequest(const std::vector<std::wstring>& paths) {
     static std::once_flag started;
     std::call_once(started, [] { std::thread(DirSizeThread).detach(); });

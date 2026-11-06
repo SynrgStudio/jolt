@@ -1,10 +1,10 @@
-// bench: compara cuánto tarda listar una carpeta con distintas APIs de Windows.
-// Uso: bench.exe <carpeta> [iteraciones]
+// bench: compares how long listing a folder takes with different Windows APIs.
+// Usage: bench.exe <folder> [iterations]
 #include <windows.h>
 #include <shellapi.h>
 #include <shlobj.h>
 #include <shobjidl.h>
-// propkey.h necesita initguid para definir las PKEY en esta unidad.
+// propkey.h needs initguid to define the PKEYs in this translation unit.
 #include <initguid.h>
 #include <propkey.h>
 
@@ -48,7 +48,7 @@ bool RunWin32(const std::wstring& p) {
     return ok;
 }
 
-// Lo que hace una app basada en el Shell: nombre visible, fecha y tamaño por cada elemento.
+// What a Shell-based app does: display name, date and size for each item.
 bool RunShellImpl(const std::wstring& p, bool icons) {
     IShellItem* folder = nullptr;
     if (FAILED(SHCreateItemFromParsingName(p.c_str(), nullptr, IID_PPV_ARGS(&folder)))) return false;
@@ -94,7 +94,7 @@ struct Method {
 
 }  // namespace
 
-// bench.exe --orden <carpeta>: recorre el árbol y compara el orden con claves contra StrCmpLogicalW.
+// bench.exe --order <folder>: walks the tree and compares key-based sorting against StrCmpLogicalW.
 int CheckOrder(const std::wstring& root) {
     std::vector<std::wstring> stack{root};
     size_t folders = 0, names = 0, bad = 0;
@@ -112,22 +112,22 @@ int CheckOrder(const std::wstring& root) {
         SortListing(b);
         for (size_t i = 0; i < a.entries.size() && i < b.entries.size(); ++i) {
             if (std::wcscmp(a.name(a.entries[i]), b.name(b.entries[i])) != 0) {
-                if (++bad <= 12) std::printf("distinto en %s: %s / %s\n", Utf8(p).c_str(), Utf8(a.name(a.entries[i])).c_str(), Utf8(b.name(b.entries[i])).c_str());
+                if (++bad <= 12) std::printf("differs in %s: %s / %s\n", Utf8(p).c_str(), Utf8(a.name(a.entries[i])).c_str(), Utf8(b.name(b.entries[i])).c_str());
                 break;
             }
         }
         for (const Entry& e : a.entries)
             if (e.isDir() && !(e.attrs & FILE_ATTRIBUTE_REPARSE_POINT)) stack.push_back(p + L"\\" + a.name(e));
     }
-    std::printf("%zu carpetas, %zu nombres, %zu carpetas con otro orden\n", folders, names, bad);
+    std::printf("%zu folders, %zu names, %zu folders in a different order\n", folders, names, bad);
     return bad != 0;
 }
 
 int wmain(int argc, wchar_t** argv) {
     SetConsoleOutputCP(CP_UTF8);
-    if (argc == 3 && std::wcscmp(argv[1], L"--orden") == 0) return CheckOrder(argv[2]);
+    if (argc == 3 && std::wcscmp(argv[1], L"--order") == 0) return CheckOrder(argv[2]);
     if (argc < 2) {
-        std::printf("Uso: bench.exe <carpeta> [iteraciones]\n");
+        std::printf("Usage: bench.exe <folder> [iterations]\n");
         return 1;
     }
     wchar_t full[4096];
@@ -138,20 +138,20 @@ int wmain(int argc, wchar_t** argv) {
 
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
 
-    // Una pasada previa sin medir, para que todos los métodos arranquen con el disco en el mismo estado.
+    // One unmeasured warm-up pass, so all methods start with the disk in the same state.
     if (!RunNt(path)) {
-        std::printf("No se pudo leer la carpeta.\n");
+        std::printf("Couldn't read the folder.\n");
         return 1;
     }
-    std::printf("Carpeta:     %s\nElementos:   %d\nIteraciones: %d\n\n", Utf8(path).c_str(), g_count, iters);
-    std::printf("   primera     minimo    mediana   metodo\n");
+    std::printf("Folder:     %s\nItems:      %d\nIterations: %d\n\n", Utf8(path).c_str(), g_count, iters);
+    std::printf("     first        min     median   method\n");
 
     const Method methods[] = {
-        {"NtQueryDirectoryFile, lotes de 64 KiB (Jolt)", RunNt},
-        {"  + orden natural, carpetas primero", RunNtSorted},
-        {"FindFirstFileEx (Win32 clasico)", RunWin32},
-        {"Shell / IShellItem: nombre, fecha, tamano", RunShell},
-        {"Shell + indice de icono por archivo", RunShellIcons},
+        {"NtQueryDirectoryFile, 64 KiB batches (Jolt)", RunNt},
+        {"  + natural sort, folders first", RunNtSorted},
+        {"FindFirstFileEx (classic Win32)", RunWin32},
+        {"Shell / IShellItem: name, date, size", RunShell},
+        {"Shell + icon index per file", RunShellIcons},
     };
     for (const Method& m : methods) {
         std::vector<double> t;
@@ -162,7 +162,7 @@ int wmain(int argc, wchar_t** argv) {
             t.push_back(NowMs() - t0);
         }
         if (!ok) {
-            std::printf("   (fallo)                         %s\n", m.label);
+            std::printf("   (failed)                        %s\n", m.label);
             continue;
         }
         double first = t[0];

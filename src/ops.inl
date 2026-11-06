@@ -1,8 +1,8 @@
-// Operaciones de archivos y comandos rápidos. Se incluye desde app.cpp después de dragdrop.inl.
+// File operations and quick commands. Included from app.cpp after dragdrop.inl.
 
-// A la papelera con IFileOperation, que dice dónde quedó cada cosa (Ctrl+Z la recupera) y respeta la
-// confirmación elegida en Windows. El borrado definitivo no se puede deshacer: en una sola carpeta va
-// con el verbo del Shell, que pregunta como el Explorador.
+// To the Recycle Bin with IFileOperation, which reports where each item ended up (Ctrl+Z brings it back)
+// and honours the confirmation chosen in Windows. Permanent delete can't be undone: within a single folder
+// it uses the Shell verb, which asks the way File Explorer does.
 void DeleteSelection() {
     Tab& t = T();
     std::vector<std::wstring> all = SelectedFullPaths(t);
@@ -38,8 +38,8 @@ bool SetClipboardText(const std::wstring& s) {
     return true;
 }
 
-// Ctrl+Shift+C: la ruta de lo seleccionado (una por línea), o la de la carpeta si no hay nada.
-// Las comillas se agregan solo si hacen falta.
+// Ctrl+Shift+C: the path of the selection (one per line), or of the folder if nothing is selected.
+// Quotes are added only when needed.
 void CopyPathText() {
     Tab& t = T();
     std::vector<std::wstring> paths;
@@ -54,17 +54,17 @@ void CopyPathText() {
         text += (i ? L"\r\n" : L"") + (quote ? L"\"" + p + L"\"" : p);
     }
     if (SetClipboardText(text))
-        S.message = paths.size() == 1 ? L"Ruta copiada: " + paths[0] : Thousands(static_cast<int>(paths.size())) + L" rutas copiadas";
+        S.message = paths.size() == 1 ? L"Path copied: " + paths[0] : Thousands(static_cast<int>(paths.size())) + L" paths copied";
     Invalidate();
 }
 
-// Duplica lo seleccionado en su misma carpeta: "nombre - copia.ext", "nombre - copia (2).ext"...
+// Duplicates the selection in its own folder: "name - Copy.ext", "name - Copy (2).ext"...
 void Duplicate() {
     Tab& t = T();
     std::vector<std::wstring> files = SelectedFullPaths(t), names;
     if (files.empty()) return;
     std::wstring firstCopy;
-    // de a una carpeta destino por vez (en el árbol puede haber varias)
+    // one destination folder at a time (the tree can have several)
     std::unordered_map<std::wstring, std::pair<std::vector<std::wstring>, std::vector<std::wstring>>> byDir;
     std::vector<std::wstring> order;
     for (const std::wstring& f : files) {
@@ -77,11 +77,11 @@ void Duplicate() {
                 ext = leaf.substr(dot);
             }
         }
-        std::wstring nn = FreeName(dir, base + L" - copia", ext);
-        // que dos copias del mismo lote no elijan el mismo nombre
+        std::wstring nn = FreeName(dir, base + L" - Copy", ext);
+        // so two copies in the same batch don't pick the same name
         auto& slot = byDir[Key(dir)];
         for (int i = 2; std::find(slot.second.begin(), slot.second.end(), nn) != slot.second.end(); ++i)
-            nn = FreeName(dir, base + L" - copia (" + std::to_wstring(i) + L")", ext);
+            nn = FreeName(dir, base + L" - Copy (" + std::to_wstring(i) + L")", ext);
         if (slot.first.empty()) order.push_back(dir);
         slot.first.push_back(f);
         slot.second.push_back(nn);
@@ -90,14 +90,14 @@ void Duplicate() {
     for (const std::wstring& dir : order) {
         auto& slot = byDir[Key(dir)];
         FileOp(FileOpKind::Copy, slot.first, dir, 0, &slot.second);
-        g_undoMerge = true;  // un solo Ctrl+Z para todo el duplicado
+        g_undoMerge = true;  // a single Ctrl+Z for the whole duplicate
         Enqueue(dir, JobKind::Revalidate);
     }
     g_undoMerge = false;
     t.pendingSelect = firstCopy;
 }
 
-// Alt+Enter: propiedades de Windows de lo seleccionado (o de la carpeta, si no hay nada).
+// Alt+Enter: Windows properties of the selection (or of the folder, if nothing is selected).
 void Properties() {
     Tab& t = T();
     std::vector<std::wstring> names = SelectedNames(t);
@@ -108,17 +108,17 @@ void Properties() {
     ShellVerb(names, "properties");
 }
 
-// F5 / F6 con la vista dividida: copiar / mover la selección a la carpeta del otro panel.
+// F5 / F6 with split view: copy / move the selection to the other pane's folder.
 void TransferToOther(bool move) {
     if (!g_split) {
-        S.message = L"Abrí la vista dividida para copiar o mover al otro panel";
+        S.message = L"Open split view to copy or move to the other pane";
         Invalidate();
         return;
     }
     Tab& src = T();
     Tab& dst = PT(1 - g_act);
     if (dst.path.empty()) {
-        S.message = L"El otro panel no está en una carpeta";
+        S.message = L"The other pane isn't in a folder";
         Invalidate();
         return;
     }
@@ -127,20 +127,20 @@ void TransferToOther(bool move) {
     bool same = true;
     for (const auto& f : files) same &= Key(ParentOf(f)) == Key(dst.path);
     if (same) {
-        S.message = L"Ya está en esa carpeta";
+        S.message = L"Already in that folder";
         Invalidate();
         return;
     }
     if (FileOp(move ? FileOpKind::Move : FileOpKind::Copy, files, dst.path)) {
         if (files.size() == 1) dst.pendingSelect = LeafOf(files[0]);
-        S.message = (move ? L"Movido a " : L"Copiado a ") + TabTitle(dst);
+        S.message = (move ? L"Moved to " : L"Copied to ") + TabTitle(dst);
     }
     Enqueue(dst.path, JobKind::Revalidate);
     Enqueue(src.path, JobKind::Revalidate);
     Invalidate();
 }
 
-// Abre la carpeta que contiene lo resaltado (útil en la búsqueda y el árbol) y lo deja seleccionado.
+// Opens the folder containing the highlighted item (useful in search and the tree) and leaves it selected.
 void GoToLocation() {
     Tab& t = T();
     if (t.sel < 0 || t.sel >= Count()) return;
@@ -150,8 +150,8 @@ void GoToLocation() {
     Navigate(t, dir, true);
 }
 
-// Desde un acceso directo (o un enlace simbólico o una junction): va a la carpeta donde está lo
-// apuntado y lo deja resaltado.
+// From a shortcut (or a symbolic link or a junction): goes to the folder holding the target and
+// leaves it highlighted.
 void GoToRealLocation() {
     Tab& t = T();
     if (t.sel < 0 || t.sel >= Count() || IsHeader(t, t.sel) || RowDir(t, t.sel).empty()) return;
@@ -166,7 +166,7 @@ void GoToRealLocation() {
             SUCCEEDED(link->GetPath(buf, 4096, nullptr, 0)))
             real = buf;
         if (real.empty()) {
-            S.message = L"Este acceso directo no apunta a un archivo";
+            S.message = L"This shortcut doesn't point to a file";
             Invalidate();
             return;
         }
@@ -181,20 +181,20 @@ void GoToRealLocation() {
         if (real.rfind(L"\\\\?\\UNC\\", 0) == 0) real = L"\\\\" + real.substr(8);
         else if (real.rfind(L"\\\\?\\", 0) == 0) real.erase(0, 4);
         if (real.empty() || Key(Normalize(real)) == Key(path)) {
-            S.message = L"Esto no es un acceso directo";
+            S.message = L"This isn't a shortcut";
             Invalidate();
             return;
         }
     }
     if (GetFileAttributesW(real.c_str()) == INVALID_FILE_ATTRIBUTES) {
-        S.message = L"El destino ya no existe: " + real;
+        S.message = L"The target no longer exists: " + real;
         Invalidate();
         return;
     }
     real = Normalize(real);
     const std::wstring dir = ParentOf(real);
     if (dir.empty()) {
-        Navigate(t, real, true);  // apunta a la raíz de un disco
+        Navigate(t, real, true);  // points to a drive root
         return;
     }
     const std::wstring name = real.substr(real.find_last_of(L'\\') + 1);
@@ -207,17 +207,17 @@ void GoToRealLocation() {
     Navigate(t, dir, true);
 }
 
-// La terminal en la carpeta actual: Windows Terminal si está, y si no cmd. La carpeta va como
-// directorio de trabajo ("-d ."), así no hay comillas que se rompan con rutas como C:\.
+// The terminal in the current folder: Windows Terminal if present, otherwise cmd. The folder is passed as
+// the working directory ("-d ."), so there are no quotes to break on paths like C:\.
 void OpenTerminal() {
     const std::wstring dir = T().path;
     if (dir.empty()) {
-        S.message = L"Entrá a una carpeta para abrir la terminal";
+        S.message = L"Go into a folder to open the terminal";
         Invalidate();
         return;
     }
-    if (g_test) {  // las pruebas no abren ventanas de verdad
-        S.message = L"Terminal en " + dir;
+    if (g_test) {  // tests don't open real windows
+        S.message = L"Terminal in " + dir;
         Invalidate();
         return;
     }
@@ -232,12 +232,12 @@ void OpenTerminal() {
     si.lpFile = L"cmd.exe";
     si.lpParameters = nullptr;
     if (!ShellExecuteExW(&si)) {
-        S.message = L"No se pudo abrir la terminal";
+        S.message = L"Couldn't open the terminal";
         Invalidate();
     }
 }
 
-// El Explorador en la carpeta actual, con lo resaltado ya seleccionado.
+// File Explorer in the current folder, with the highlighted item already selected.
 void OpenInExplorer() {
     Tab& t = T();
     std::wstring args;
@@ -245,25 +245,25 @@ void OpenInExplorer() {
     else if (t.sel >= 0 && t.sel < Count() && !IsHeader(t, t.sel)) args = L"/select,\"" + RowPath(t, t.sel) + L"\"";
     else args = L"\"" + t.path + L"\"";
     if (g_test) {
-        S.message = L"Explorador: " + args;
+        S.message = L"File Explorer: " + args;
         Invalidate();
         return;
     }
     ShellExecuteW(g_hwnd, L"open", L"explorer.exe", args.c_str(), nullptr, SW_SHOWNORMAL);
 }
 
-// Vacía la papelera de todos los discos. Windows pide confirmación; va en otro hilo porque borrar
-// muchos gigas tarda y Jolt no se tiene que trabar.
+// Empties the Recycle Bin on all drives. Windows asks for confirmation; it runs on another thread because
+// deleting many gigabytes takes time and Jolt must not hang.
 void EmptyRecycleBin() {
     SHQUERYRBINFO before{sizeof(before)};
     SHQueryRecycleBinW(nullptr, &before);
     if (before.i64NumItems == 0) {
-        S.message = L"La papelera ya está vacía";
+        S.message = L"The Recycle Bin is already empty";
         Invalidate();
         return;
     }
-    if (g_test) {  // las pruebas jamás tocan la papelera de verdad
-        S.message = L"Papelera con elementos (en las pruebas no se vacía)";
+    if (g_test) {  // tests never touch the real Recycle Bin
+        S.message = L"Recycle Bin has items (not emptied in tests)";
         Invalidate();
         return;
     }
@@ -274,16 +274,16 @@ void EmptyRecycleBin() {
         SHEmptyRecycleBinW(owner, nullptr, 0);
         SHQUERYRBINFO after{sizeof(after)};
         SHQueryRecycleBinW(nullptr, &after);
-        if (after.i64NumItems == 0) {  // si no, se canceló: no hay nada que avisar
+        if (after.i64NumItems == 0) {  // otherwise it was cancelled: nothing to report
             wchar_t buf[64];
             FormatSize(bytes, buf, 64);
-            IdxStatus(std::wstring(L"Papelera vacía: ") + buf + L" liberados");
+            IdxStatus(std::wstring(L"Recycle Bin emptied: ") + buf + L" freed");
         }
         CoUninitialize();
     }).detach();
 }
 
-// Alt+R: calcula el tamaño de todas las carpetas de la lista; con varias seleccionadas, solo de esas.
+// Alt+R: computes the size of every folder in the list; with several selected, only those.
 void ComputeFolderSizes() {
     Tab& t = T();
     std::vector<std::wstring> dirs;
@@ -296,12 +296,12 @@ void ComputeFolderSizes() {
                 dirs.push_back(RowPath(t, i));
     if (dirs.empty()) return;
     DirSizeRequest(dirs);
-    S.message = L"Calculando el tamaño de " + Thousands(static_cast<int>(dirs.size())) +
+    S.message = L"Calculating the size of " + Thousands(static_cast<int>(dirs.size())) +
                 (dirs.size() == 1 ? L" carpeta" : L" carpetas");
     Invalidate();
 }
 
-// --- vista dividida
+// --- split view
 void SetSplit(bool on) {
     if (on == g_split) return;
     CancelRename();
@@ -309,7 +309,7 @@ void SetSplit(bool on) {
         g_paneCur[0] = g_cur;
         g_split = true;
         for (auto& t : g_tabs) t->pane = 0;
-        // el panel derecho arranca en la misma carpeta
+        // the right pane starts in the same folder
         std::wstring path = T().path;
         g_tabs.push_back(std::make_unique<Tab>());
         Tab& nt = *g_tabs.back();

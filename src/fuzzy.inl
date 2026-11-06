@@ -1,8 +1,8 @@
-// Búsqueda difusa al estilo fzf: el patrón tiene que aparecer como subsecuencia (sin distinguir
-// mayúsculas); el puntaje premia coincidencias contiguas, al principio de palabra y al principio del
-// texto, y castiga los huecos. Devuelve también las posiciones para resaltarlas.
+// fzf-style fuzzy search: the pattern has to appear as a subsequence (case-insensitive);
+// the score rewards contiguous matches, word starts and the start of the text, and penalizes
+// gaps. Also returns the positions so they can be highlighted.
 
-// Minúscula y sin tilde: "Imágenes" coincide con "ima", "Canción" con "cancion".
+// Lowercase with accents stripped: "Café" matches "cafe", "Résumé" matches "resume".
 inline wchar_t FzLower(wchar_t c) {
     if (c < 128) return (c >= L'A' && c <= L'Z') ? static_cast<wchar_t>(c + 32) : c;
     if (c >= 0xC0 && c <= 0xFF) {
@@ -22,7 +22,7 @@ inline bool FzBoundary(const wchar_t* text, size_t i) {
     return false;
 }
 
-// pat ya en minúsculas. Devuelve false si no hay coincidencia.
+// pat is already lowercase. Returns false if there's no match.
 bool FuzzyMatch(const wchar_t* text, size_t n, const std::wstring& pat, int& score, std::vector<int>* pos) {
     const size_t m = pat.size();
     if (m == 0) {
@@ -31,7 +31,7 @@ bool FuzzyMatch(const wchar_t* text, size_t n, const std::wstring& pat, int& sco
         return true;
     }
     if (m > n) return false;
-    // 1) ¿es subsecuencia? (barrido hacia adelante, guarda dónde termina)
+    // 1) is it a subsequence? (forward scan, records where it ends)
     size_t pi = 0, end = 0;
     for (size_t i = 0; i < n && pi < m; ++i)
         if (FzLower(text[i]) == FzLower(pat[pi])) {
@@ -39,7 +39,7 @@ bool FuzzyMatch(const wchar_t* text, size_t n, const std::wstring& pat, int& sco
             end = i;
         }
     if (pi < m) return false;
-    // 2) barrido hacia atrás desde el final para achicar la ventana
+    // 2) backward scan from the end to shrink the window
     size_t start = end;
     for (size_t i = end + 1, k = m; i > 0 && k > 0;) {
         --i;
@@ -48,7 +48,7 @@ bool FuzzyMatch(const wchar_t* text, size_t n, const std::wstring& pat, int& sco
             start = i;
         }
     }
-    // 3) dentro de la ventana, elegir para cada letra la mejor posición cercana (límite de palabra si hay)
+    // 3) within the window, pick the best nearby position for each letter (a word boundary if there is one)
     std::vector<int> p;
     p.reserve(m);
     size_t i = start;
@@ -61,25 +61,25 @@ bool FuzzyMatch(const wchar_t* text, size_t n, const std::wstring& pat, int& sco
                 best = j;
                 break;
             }
-            if (j > best + 2) break;  // no alejarse demasiado buscando un límite de palabra
+            if (j > best + 2) break;  // don't stray too far looking for a word boundary
         }
-        if (best == n) return false;  // no debería pasar
+        if (best == n) return false;  // shouldn't happen
         p.push_back(static_cast<int>(best));
         i = best + 1;
     }
-    // 4) puntaje
+    // 4) score
     int s = 0;
     for (size_t k = 0; k < m; ++k) {
         int at = p[k];
         s += 16;
-        if (k > 0 && at == p[k - 1] + 1) s += 12;        // contigua
-        if (FzBoundary(text, at)) s += 10;               // principio de palabra
-        if (k == 0 && at == 0) s += 20;                  // principio del texto
-        if (k > 0) s -= std::min(8, at - p[k - 1] - 1);  // hueco
+        if (k > 0 && at == p[k - 1] + 1) s += 12;        // contiguous
+        if (FzBoundary(text, at)) s += 10;               // word start
+        if (k == 0 && at == 0) s += 20;                  // text start
+        if (k > 0) s -= std::min(8, at - p[k - 1] - 1);  // gap
     }
-    // coincidencia exacta como subcadena: bonus grande
+    // exact substring match: big bonus
     if (p.back() - p.front() + 1 == static_cast<int>(m)) s += 30;
-    s -= static_cast<int>(std::min<size_t>(n, 64) / 8);  // textos más cortos primero, apenas
+    s -= static_cast<int>(std::min<size_t>(n, 64) / 8);  // shorter texts first, just barely
     score = s;
     if (pos) *pos = std::move(p);
     return true;

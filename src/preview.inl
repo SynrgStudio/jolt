@@ -1,8 +1,8 @@
-// Vista previa (Espacio): columna a la derecha con lo que está bajo el cursor.
-// Imágenes con WIC (escaladas y rotadas según EXIF), texto/código, contenido de carpetas (desde la
-// memoria del listado) y, para el resto, la miniatura del Shell (PDF, videos, Office...). Todo se
-// carga en un hilo aparte y solo cuando el cursor se queda quieto: moverse por la lista no se frena.
-// Se incluye desde app.cpp después de palette.inl.
+// Preview (Space): right-hand column showing what's under the cursor.
+// Images via WIC (scaled and rotated per EXIF), text/code, folder contents (from the listing's
+// memory) and, for everything else, the Shell thumbnail (PDF, videos, Office...). It all loads on
+// a separate thread and only once the cursor stops: moving through the list doesn't slow down.
+// Included from app.cpp after palette.inl.
 
 constexpr UINT WM_APP_PREVIEW = WM_APP + 6;
 constexpr UINT_PTR kTimerPreview = 6;
@@ -10,26 +10,31 @@ constexpr UINT_PTR kTimerPreview = 6;
 struct PreviewResult {
     uint64_t gen = 0;
     std::wstring path;
-    int kind = 0;  // 0 nada, 1 imagen, 2 texto
+    int kind = 0;  // 0 nothing, 1 image, 2 text
     ComPtr<IWICBitmap> bmp;
-    UINT imgW = 0, imgH = 0;  // tamaño original (ya rotado)
-    bool thumb = false;       // miniatura o icono del Shell (no se agranda)
+    UINT imgW = 0, imgH = 0;  // original size (already rotated)
+    bool thumb = false;       // Shell thumbnail or icon (not enlarged)
     std::wstring text;
     bool truncated = false;
     std::wstring typeName;
 };
 
 struct PreviewState {
-    std::wstring want;  // lo que está bajo el cursor
-    std::wstring path;  // lo que se pidió/muestra
+    std::wstring want;  // what's under the cursor
+    std::wstring path;  // what was requested/is shown
     uint64_t gen = 0;
     std::unique_ptr<PreviewResult> res;
     ComPtr<ID2D1Bitmap> d2d;
-    std::vector<std::pair<size_t, size_t>> lines;  // (inicio, largo) en res->text
+    std::vector<std::pair<size_t, size_t>> lines;  // (start, length) in res->text
     float scroll = 0;
     bool loading = false;
+    bool isDir = false;  // the shown item is a folder
     D2D1_RECT_F box{};
 } g_pv;
+
+// Type names already seen, by extension: moving through the list shows them without waiting for the load.
+std::unordered_map<std::wstring, std::wstring> g_pvTypes;
+std::wstring PvExtKey(const std::wstring& path) { return Key(ExtOf(path.c_str(), path.size())); }
 
 std::mutex g_pvm;
 std::condition_variable g_pvcv;
@@ -61,8 +66,22 @@ bool PvImage(IWICImagingFactory* wic, const std::wstring& path, PreviewResult& r
     if (FAILED(dec->GetFrame(0, &frame))) return false;
     UINT w = 0, h = 0;
     frame->GetSize(&w, &h);
+    GUID container{};
+    UINT frames = 1;
+    if (SUCCEEDED(dec->GetContainerFormat(&container)) && container == GUID_ContainerFormatIco &&
+        SUCCEEDED(dec->GetFrameCount(&frames))) {
+        for (UINT i = 1; i < frames; ++i) {  // an icon stores several sizes: the largest one looks best
+            ComPtr<IWICBitmapFrameDecode> other;
+            UINT ow = 0, oh = 0;
+            if (SUCCEEDED(dec->GetFrame(i, &other)) && SUCCEEDED(other->GetSize(&ow, &oh)) && ow > w) {
+                frame = other;
+                w = ow;
+                h = oh;
+            }
+        }
+    }
     if (!w || !h) return false;
-    // orientación EXIF (fotos de celular)
+    // EXIF orientation (phone photos)
     USHORT orient = 1;
     ComPtr<IWICMetadataQueryReader> q;
     if (SUCCEEDED(frame->GetMetadataQueryReader(&q))) {
@@ -95,7 +114,7 @@ bool PvImage(IWICImagingFactory* wic, const std::wstring& path, PreviewResult& r
         case 8: tr = WICBitmapTransformRotate270; break;
     }
     if (tr != WICBitmapTransformRotate0) {
-        // el rotador necesita los píxeles en memoria
+        // the rotator needs the pixels in memory
         ComPtr<IWICBitmap> mem;
         ComPtr<IWICBitmapFlipRotator> rot;
         if (SUCCEEDED(wic->CreateBitmapFromSource(src.Get(), WICBitmapCacheOnLoad, &mem)) &&
@@ -119,7 +138,12 @@ bool PvThumb(IWICImagingFactory* wic, const std::wstring& path, PreviewResult& r
     ComPtr<IShellItemImageFactory> f;
     if (FAILED(SHCreateItemFromParsingName(path.c_str(), nullptr, IID_PPV_ARGS(&f)))) return false;
     HBITMAP hb = nullptr;
-    if (FAILED(f->GetImage(SIZE{512, 512}, SIIGBF_BIGGERSIZEOK, &hb)) || !hb) return false;
+    // A real thumbnail (PDF, video...) if there is one; otherwise the icon at its largest real size: asking
+    // for more makes Windows stretch it.
+    if (FAILED(f->GetImage(SIZE{512, 512}, SIIGBF_BIGGERSIZEOK | SIIGBF_THUMBNAILONLY, &hb)) || !hb) {
+        hb = nullptr;
+        if (FAILED(f->GetImage(SIZE{256, 256}, SIIGBF_ICONONLY, &hb)) || !hb) return false;
+    }
     BITMAP bm{};
     GetObjectW(hb, sizeof(bm), &bm);
     bool ok = false;
@@ -129,15 +153,24 @@ bool PvThumb(IWICImagingFactory* wic, const std::wstring& path, PreviewResult& r
         BITMAPINFO bi{};
         bi.bmiHeader.biSize = sizeof(bi.bmiHeader);
         bi.bmiHeader.biWidth = w;
-        bi.bmiHeader.biHeight = -h;  // de arriba hacia abajo
+        bi.bmiHeader.biHeight = -h;  // top-down
         bi.bmiHeader.biPlanes = 1;
         bi.bmiHeader.biBitCount = 32;
         HDC dc = GetDC(nullptr);
         if (GetDIBits(dc, hb, 0, h, px.data(), &bi, DIB_RGB_COLORS) == h) {
-            bool anyAlpha = false;
-            for (size_t i = 3; i < px.size() && !anyAlpha; i += 4) anyAlpha = px[i] != 0;
-            if (!anyAlpha)
+            bool anyAlpha = false, straight = false;
+            for (size_t i = 0; i + 3 < px.size(); i += 4) {
+                anyAlpha |= px[i + 3] != 0;
+                straight |= px[i] > px[i + 3] || px[i + 1] > px[i + 3] || px[i + 2] > px[i + 3];
+            }
+            if (!anyAlpha) {
                 for (size_t i = 3; i < px.size(); i += 4) px[i] = 255;
+            } else if (straight) {
+                // Icons come with straight alpha and Direct2D wants it premultiplied (a channel above the
+                // alpha gives it away): otherwise the soft edges turn into bright specks.
+                for (size_t i = 0; i + 3 < px.size(); i += 4)
+                    for (size_t c = 0; c < 3; ++c) px[i + c] = static_cast<uint8_t>((px[i + c] * px[i + 3] + 127) / 255);
+            }
             ok = SUCCEEDED(wic->CreateBitmapFromMemory(w, h, GUID_WICPixelFormat32bppPBGRA, w * 4,
                                                        static_cast<UINT>(px.size()), px.data(), &r.bmp));
             if (ok) {
@@ -173,11 +206,11 @@ bool PvText(const std::wstring& path, PreviewResult& r) {
     } else {
         size_t start = got >= 3 && static_cast<uint8_t>(buf[0]) == 0xEF && static_cast<uint8_t>(buf[1]) == 0xBB &&
                                static_cast<uint8_t>(buf[2]) == 0xBF ? 3 : 0;
-        // binario: hay bytes nulos al principio
+        // binary: there are null bytes near the start
         for (size_t i = start; i < std::min<size_t>(got, 8192); ++i)
             if (buf[i] == 0) return false;
         size_t len = got - start;
-        if (r.truncated) {  // cortar en un fin de línea para no partir un carácter
+        if (r.truncated) {  // cut at a line end so a character isn't split
             size_t nl = std::string_view(buf.data() + start, len).find_last_of('\n');
             if (nl != std::string_view::npos) len = nl + 1;
         }
@@ -191,7 +224,7 @@ bool PvText(const std::wstring& path, PreviewResult& r) {
         w.resize(std::max(0, n));
         if (n > 0) MultiByteToWideChar(cp, cp == CP_UTF8 ? MB_ERR_INVALID_CHARS : 0, p, static_cast<int>(len), w.data(), n);
     }
-    // tabulaciones a 4 espacios, sin retornos de carro
+    // tabs to 4 spaces, no carriage returns
     r.text.reserve(w.size());
     size_t col = 0;
     for (wchar_t c : w) {
@@ -237,14 +270,14 @@ void PreviewThread() {
     }
 }
 
-// Lo que está bajo el cursor de la pestaña activa ("" = nada).
+// What's under the active tab's cursor ("" = nothing).
 std::wstring PreviewTarget() {
     Tab& t = T();
     if (t.sel < 0 || t.sel >= Count()) return L"";
     return RowPath(t, t.sel);
 }
 
-// Se llama un rato después de que el cursor se quedó quieto.
+// Called a little while after the cursor stops moving.
 void PreviewLoad() {
     if (!g_preview || g_pv.want == g_pv.path) return;
     static std::once_flag started;
@@ -260,7 +293,8 @@ void PreviewLoad() {
         return;
     }
     DWORD a = GetFileAttributesW(ToExtendedPath(g_pv.path).c_str());
-    if (a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_DIRECTORY)) {
+    g_pv.isDir = a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_DIRECTORY);
+    if (g_pv.isDir) {
         if (!g_cache.count(Key(g_pv.path))) Enqueue(g_pv.path, JobKind::Revalidate);
         Invalidate();
         return;
@@ -292,6 +326,7 @@ void PreviewApply(PreviewResult* raw) {
             start = nl + 1;
         }
     }
+    if (!r->typeName.empty()) g_pvTypes[PvExtKey(r->path)] = r->typeName;
     g_pv.res = std::move(r);
     Invalidate();
 }
@@ -299,7 +334,7 @@ void PreviewApply(PreviewResult* raw) {
 void PreviewToggle() {
     g_preview = !g_preview;
     g_pv.want.clear();
-    g_pv.path = L"\x01";  // fuerza la carga
+    g_pv.path = L"\x01";  // forces a load
     for (auto& tp : g_tabs) ClampScroll(*tp);
     LayoutEdit();
     LayoutRename();
@@ -312,7 +347,7 @@ void PreviewWheel(int delta) {
     Invalidate();
 }
 
-// Una línea "etiqueta ...... valor" del bloque de datos.
+// A "label ...... value" line in the info block.
 void PvInfoLine(const wchar_t* label, const std::wstring& value, float x0, float x1, float& y) {
     Color(cFaint);
     Text(label, wcslen(label), g_fmtName.Get(), x0, y, x0 + 90, y + 20);
@@ -325,8 +360,10 @@ void DrawPreview(float W, float H) {
     if (!g_preview) return;
     const float pw = PreviewW(), x0 = W - pw, y0 = kTabH + kToolH, y1 = H - kStatus;
     Fill(D2D1::RectF(x0, y0, W, y1), cSide);
-    Fill(D2D1::RectF(x0, y0, x0 + 1, y1), cBorder);
-    // pedir lo nuevo cuando el cursor se queda quieto
+    // left edge: drag to change the width (double click: back to the default)
+    Fill(D2D1::RectF(x0, y0, x0 + 1, y1), g_pvDrag || IsHover(HitKind::PreviewEdge, 0) ? cDim : cBorder);
+    g_hits.push_back({D2D1::RectF(x0 - 3, y0, x0 + 4, y1), HitKind::PreviewEdge, 0});
+    // request the new item once the cursor stops
     std::wstring want = PreviewTarget();
     if (want != g_pv.want) {
         g_pv.want = want;
@@ -334,47 +371,64 @@ void DrawPreview(float W, float H) {
     }
     const float pad = 14, L = x0 + pad, R = W - pad;
     Tab& t = T();
-    if (g_pv.path.empty() || g_pv.path == L"\x01" || t.sel < 0 || t.sel >= Count()) {
+    if (t.sel < 0 || t.sel >= Count()) {
         Color(cFaint);
-        Text(L"Nada seleccionado", g_fmtCenter.Get(), x0, y0, W, y0 + 80);
+        Text(L"Nothing selected", g_fmtCenter.Get(), x0, y0, W, y0 + 80);
         return;
     }
-    // datos (abajo): de la fila del cursor si sigue siendo lo mostrado
-    const bool rowMatches = Key(RowPath(t, t.sel)) == Key(g_pv.path);
-    const Entry* e = rowMatches ? &EntryAt(t, t.sel) : nullptr;
-    const bool isDir = e ? e->isDir() : false;
-    std::vector<std::pair<const wchar_t*, std::wstring>> info;
+    // Info (bottom): straight from the cursor row, without waiting for the content to load. Every value has a
+    // fixed slot and the block a fixed height, so a value that arrives late doesn't move anything.
+    const std::wstring rowPath = RowPath(t, t.sel);
+    const bool rowMatches = Key(rowPath) == Key(g_pv.path);
+    const Entry& e = EntryAt(t, t.sel);
     wchar_t buf[64];
-    std::wstring type = g_pv.res && !g_pv.res->typeName.empty() ? g_pv.res->typeName : isDir ? L"Carpeta" : L"";
-    if (!type.empty()) info.push_back({L"Tipo", type});
-    if (e && !isDir) {
-        FormatSize(e->size, buf, 64);
-        info.push_back({L"Tamaño", std::wstring(buf) + L"  (" + Thousands(static_cast<int>(std::min<uint64_t>(e->size, INT_MAX))) + L" bytes)"});
+    std::wstring modified;
+    if (e.mtime) {
+        FormatDate(e.mtime, buf, 64);
+        modified = buf;
     }
-    auto cached = isDir ? g_cache.find(Key(g_pv.path)) : g_cache.end();
-    if (isDir && cached != g_cache.end() && !cached->second->error)
-        info.push_back({L"Contiene", Thousands(static_cast<int>(cached->second->entries.size())) + L" elementos"});
-    DirSize ds;
-    if (isDir && DirSizeOf(Key(g_pv.path), ds) && (ds.done || ds.bytes)) {
-        FormatSize(ds.bytes, buf, 64);
-        info.push_back({L"Tamaño", std::wstring(buf) + (ds.done ? L"" : L"…") + L"   ·   " + Thousands(static_cast<int>(ds.files)) + L" archivos"});
+    constexpr int kInfoRows = 4;
+    std::pair<const wchar_t*, std::wstring> info[kInfoRows];
+    if (e.isDir()) {
+        std::wstring contains, size;
+        auto list = g_cache.find(Key(rowPath));
+        if (list != g_cache.end() && !list->second->error)
+            contains = Thousands(static_cast<int>(list->second->entries.size())) + L" items";
+        DirSize ds;
+        if (DirSizeOf(Key(rowPath), ds) && (ds.done || ds.bytes)) {
+            FormatSize(ds.bytes, buf, 64);
+            size = std::wstring(buf) + (ds.done ? L"" : L"…") + L"   ·   " + Thousands(static_cast<int>(ds.files)) + L" files";
+        }
+        info[0] = {L"Type", L"Folder"};
+        info[1] = {L"Modified", modified};
+        info[2] = {L"Contains", contains};
+        info[3] = {L"Size", size};
+    } else {
+        std::wstring type = rowMatches && g_pv.res ? g_pv.res->typeName : L"";
+        if (type.empty()) {
+            auto known = g_pvTypes.find(PvExtKey(rowPath));
+            if (known != g_pvTypes.end()) type = known->second;
+        }
+        FormatSize(e.size, buf, 64);
+        info[0] = {L"Type", type};
+        info[1] = {L"Size", std::wstring(buf) + L"  (" + Thousands(static_cast<int>(std::min<uint64_t>(e.size, INT_MAX))) + L" bytes)"};
+        info[2] = {L"Modified", modified};
+        if (rowMatches && g_pv.res && g_pv.res->kind == 1 && !g_pv.res->thumb)
+            info[3] = {L"Dimensions", std::to_wstring(g_pv.res->imgW) + L" × " + std::to_wstring(g_pv.res->imgH)};
     }
-    if (g_pv.res && g_pv.res->kind == 1 && !g_pv.res->thumb)
-        info.push_back({L"Dimensiones", std::to_wstring(g_pv.res->imgW) + L" × " + std::to_wstring(g_pv.res->imgH)});
-    if (e && e->mtime) {
-        FormatDate(e->mtime, buf, 64);
-        info.push_back({L"Modificado", buf});
-    }
-    const float infoH = 34 + static_cast<float>(info.size()) * 20 + 10;
+    const float infoH = 34 + kInfoRows * 20 + 10;
     const float top = y0 + pad, bot = std::max(top + 60, y1 - infoH - 6);
     const D2D1_RECT_F box = D2D1::RectF(L, top, R, bot);
     g_pv.box = box;
-    // contenido
+    // content: what has loaded, which for a moment can still be the previous item
     g_rt->PushAxisAlignedClip(box, D2D1_ANTIALIAS_MODE_ALIASED);
-    if (isDir) {
+    auto cached = g_pv.isDir ? g_cache.find(Key(g_pv.path)) : g_cache.end();
+    if (g_pv.path.empty() || g_pv.path == L"\x01") {
+        // nothing requested yet (it takes a frame)
+    } else if (g_pv.isDir) {
         if (cached == g_cache.end()) {
             Color(cFaint);
-            Text(L"Cargando…", g_fmtCenter.Get(), L, top, R, top + 60);
+            Text(L"Loading…", g_fmtCenter.Get(), L, top, R, top + 60);
         } else if (cached->second->error) {
             Color(cError);
             Text(ErrorText(cached->second->error), g_fmtCenter.Get(), L, top, R, top + 60);
@@ -384,7 +438,7 @@ void DrawPreview(float W, float H) {
             int first = static_cast<int>(g_pv.scroll / rh);
             if (l->entries.empty()) {
                 Color(cFaint);
-                Text(L"Carpeta vacía", g_fmtCenter.Get(), L, top, R, top + 60);
+                Text(L"Empty folder", g_fmtCenter.Get(), L, top, R, top + 60);
             }
             for (int i = std::max(0, first); i < static_cast<int>(l->entries.size()); ++i) {
                 float y = top + i * rh - g_pv.scroll;
@@ -400,13 +454,15 @@ void DrawPreview(float W, float H) {
         if (!g_pv.d2d) g_rt->CreateBitmapFromWicBitmap(g_pv.res->bmp.Get(), nullptr, &g_pv.d2d);
         if (g_pv.d2d) {
             D2D1_SIZE_U px = g_pv.d2d->GetPixelSize();
-            float scale = 96.f / g_dpi;  // píxeles -> DIP
+            float scale = 96.f / g_dpi;  // pixels -> DIP
             float iw = px.width * scale, ih = px.height * scale;
             float bw = box.right - box.left, bh = box.bottom - box.top;
             float k = std::min(bw / iw, bh / ih);
-            if (g_pv.res->thumb || k > 1) k = std::min(k, 1.f);  // no agrandar
+            if (g_pv.res->thumb || k > 1) k = std::min(k, 1.f);  // don't enlarge
             float dw = iw * k, dh = ih * k;
-            float dx = box.left + (bw - dw) / 2, dy = box.top + (bh - dh) / 2;
+            const float snap = g_dpi / 96.f;  // whole pixels: at its real size it isn't resampled
+            float dx = std::round((box.left + (bw - dw) / 2) * snap) / snap;
+            float dy = std::round((box.top + (bh - dh) / 2) * snap) / snap;
             g_rt->DrawBitmap(g_pv.d2d.Get(), D2D1::RectF(dx, dy, dx + dw, dy + dh), 1.f,
                              D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
         }
@@ -420,7 +476,7 @@ void DrawPreview(float W, float H) {
         g_pv.scroll = std::min(g_pv.scroll, maxScroll);
         if (s.empty()) {
             Color(cFaint);
-            Text(L"Archivo vacío", g_fmtCenter.Get(), L, top, R, top + 60);
+            Text(L"Empty file", g_fmtCenter.Get(), L, top, R, top + 60);
         }
         for (int i = std::max(0, static_cast<int>(g_pv.scroll / lh)); i < nl; ++i) {
             float y = top + i * lh - g_pv.scroll;
@@ -434,17 +490,20 @@ void DrawPreview(float W, float H) {
             Text(s.c_str() + off, std::min<size_t>(len, 400), g_fmtMono.Get(), L + gutter, y, R + 2000, y + lh);
         }
     } else if (g_pv.loading) {
-        // sin parpadeo: no se muestra "cargando" (casi siempre tarda menos que un cuadro)
+        // no flicker: "loading" isn't shown (it almost always takes less than a frame)
     } else {
         DrawIcon(g_pv.path, nullptr, nullptr, 0, false, (L + R) / 2 - kIcon / 2, top + 30, 1.f);
     }
     g_rt->PopAxisAlignedClip();
-    // datos
+    // info
     float y = bot + 10;
     HLine(L, R, y - 4);
-    std::wstring name = rowMatches ? RowName(t, t.sel) : LeafOf(g_pv.path);
+    const std::wstring name = RowName(t, t.sel);
     Color(cText);
     Text(name, g_fmtNameBold.Get(), L, y, R, y + 26);
     y += 30;
-    for (auto& [label, value] : info) PvInfoLine(label, value, L, R, y);
+    for (auto& [label, value] : info) {
+        if (!value.empty()) PvInfoLine(label, value, L, R, y);
+        else y += 20;
+    }
 }

@@ -1,158 +1,158 @@
-# Plan de Jolt
+# Jolt plan
 
-Acordado el 2026-11-04. Se implementa en este orden.
+Agreed on 2026-11-04. To be implemented in this order.
 
-| # | Función | Estado |
+| # | Feature | Status |
 |---|---|---|
-| 1 | Deshacer con `Ctrl+Z` | hecho |
-| 2 | Jolt siempre listo | aprobado |
-| 3 | Renombrar varios a la vez | aprobado |
-| 4 | Comandos propios, también en el botón derecho | aprobado |
-| 5 | Comprimir y extraer | aprobado, en tres etapas |
-| 6 | Temas | opcional, al final si sigue interesando |
+| 1 | Undo with `Ctrl+Z` | done |
+| 2 | Jolt always ready | approved |
+| 3 | Rename several at once | approved |
+| 4 | Custom commands, also on right click | approved |
+| 5 | Compress and extract | approved, in three stages |
+| 6 | Themes | optional, at the end if still of interest |
 
-## 1. Deshacer con Ctrl+Z (hecho)
+## 1. Undo with Ctrl+Z (done)
 
-Está en `src/undo.inl`; las reglas de uso están en el README.
+It is in `src/undo.inl`; the usage rules are in the README.
 
-Límites que quedaron:
-- Lo que llega arrastrado desde otras apps y las demás opciones del menú contextual de Windows no quedan registradas.
-- Lo que reemplazó o combinó algo que ya existía no se puede deshacer: `Ctrl+Z` pasa a la operación anterior.
-- Si deshacer falla, esa operación sale del historial.
-- Una carpeta con una pestaña abierta más adentro no se puede renombrar: Windows la da por en uso.
+Remaining limits:
+- What arrives by dragging from other apps and the other Windows context menu options are not recorded.
+- What replaced or merged with something that already existed can't be undone: `Ctrl+Z` moves on to the previous operation.
+- If an undo fails, that operation leaves the history.
+- A folder with a tab open deeper inside can't be renamed: Windows considers it in use.
 
-## 2. Jolt siempre listo (hecho, ver `plan-implementacion.md`)
+## 2. Jolt always ready (done, see `implementation-plan.md`)
 
-**Qué hace:** cerrar la ventana la esconde y Jolt sigue vivo. Un atajo global la trae al instante desde cualquier app.
+**What it does:** closing the window hides it and Jolt stays alive. A global hotkey brings it back instantly from any app.
 
-**Cómo:**
-- **Una sola instancia:** hoy no existe. Se agrega un mutex, y `jolt.exe carpeta` le pasa la ruta por `WM_COPYDATA` a
-  la instancia abierta.
-- **Atajo global:** `RegisterHotKey`, configurable en `config.txt`.
-- **Bandeja del sistema:** un ícono para abrir y salir, que se puede sacar. ☰ → Salir cierra de verdad.
-- **Al esconder:** guardar la sesión, por si Windows se apaga o Jolt se cuelga.
-- **Al mostrar:** revisar la carpeta actual, por si cambió mientras estaba escondido.
-- **Opciones nuevas:** `segundo_plano`, `atajo_global`, `icono_bandeja` e `iniciar_con_windows`. Esta última viene
-  apagada.
+**How:**
+- **Single instance:** doesn't exist today. Add a mutex, and `jolt.exe folder` passes the path via `WM_COPYDATA` to
+  the running instance.
+- **Global hotkey:** `RegisterHotKey`, configurable in `config.txt`.
+- **System tray:** an icon to open and quit, which can be removed. ☰ → Quit really closes it.
+- **On hide:** save the session, in case Windows shuts down or Jolt hangs.
+- **On show:** recheck the current folder, in case it changed while hidden.
+- **New options:** `run_in_background`, `global_hotkey`, `tray_icon` and `start_with_windows`. The last one is off by
+  default.
 
-**A resolver:**
-- Si `Win+E` se puede tomar. Windows lo reserva, así que `RegisterHotKey` puede rechazarlo. Si es así, usamos otra
-  combinación antes que un truco frágil.
-- Cuánta memoria ocupa escondido.
+**To resolve:**
+- Whether `Win+E` can be taken. Windows reserves it, so `RegisterHotKey` may reject it. If so, we use another
+  combination rather than a fragile trick.
+- How much memory it uses while hidden.
 
-**Probar:** el atajo global y la bandeja necesitan una prueba real, porque el modo de prueba no los ejercita. Avisar
-antes de hacerla.
+**Test:** the global hotkey and the tray need a real test, because test mode doesn't exercise them. Give notice
+before doing it.
 
-## 3. Renombrar varios a la vez
+## 3. Rename several at once
 
-**Qué hace:** `F2` con varios archivos seleccionados abre un panel con la lista de nombres y el resultado en vivo. Con
-uno solo, `F2` sigue igual.
+**What it does:** `F2` with several files selected opens a panel with the list of names and the live result. With
+just one, `F2` stays the same.
 
-**Opciones:**
-- Buscar y reemplazar.
-- Plantilla con `{nombre}`, `{ext}` y `{n}`, con número inicial y cantidad de dígitos.
-- Mayúsculas, minúsculas y Tipo Título.
+**Options:**
+- Find and replace.
+- Template with `{name}`, `{ext}` and `{n}`, with a starting number and digit count.
+- Uppercase, lowercase and Title Case.
 
-**Cómo:**
-- Antes de aplicar, marcar nombres repetidos, caracteres inválidos y choques con archivos que ya existen. Con errores
-  no se aplica nada.
-- Renombrar en dos pasos, con nombres temporales, para que funcionen los intercambios (`a → b` y `b → a`).
-- Si algo falla a mitad de camino, volver todo atrás.
-- Queda como una sola operación en `Ctrl+Z`, por eso va después del punto 1.
+**How:**
+- Before applying, flag repeated names, invalid characters and clashes with files that already exist. With errors,
+  nothing is applied.
+- Rename in two steps, with temporary names, so that swaps work (`a → b` and `b → a`).
+- If something fails halfway, roll everything back.
+- It counts as a single operation for `Ctrl+Z`, which is why it comes after item 1.
 
-**Probar:** intercambios, repetidos, nombres que solo cambian de mayúsculas, numeración y `Ctrl+Z`.
+**Test:** swaps, repeats, names that only change case, numbering and `Ctrl+Z`.
 
-## 4. Comandos propios
+## 4. Custom commands
 
-**Qué hace:** cada comando definido aparece en `Ctrl+K`, puede tener atajo y puede sumarse al botón derecho.
+**What it does:** each defined command appears in `Ctrl+K`, can have a shortcut and can be added to the right-click menu.
 
-Archivo nuevo, `%APPDATA%\Jolt\comandos.txt`, que se recarga solo al guardar:
+New file, `%APPDATA%\Jolt\commands.txt`, which reloads itself on save:
 
 ```
-[Abrir en VS Code]
-correr = code {carpeta}
-menu = fondo, carpeta
-atajo = Ctrl+Alt+C
+[Open in VS Code]
+run = code {folder}
+menu = background, folder
+shortcut = Ctrl+Alt+C
 
-[Convertir a MP4]
-correr = ffmpeg -i {archivo} {sin_ext}.mp4
-en = terminal
-menu = archivo
-extensiones = mkv avi mov
+[Convert to MP4]
+run = ffmpeg -i {file} {no_ext}.mp4
+in = terminal
+menu = file
+extensions = mkv avi mov
 ```
 
-**Campos:**
-- `correr`: la línea a ejecutar.
-- `en`: `terminal` deja ver la salida; `oculto` corre sin ventana.
-- `menu`: en qué menús aparece, `archivo`, `carpeta` o `fondo`.
-- `extensiones`: solo se ofrece para esos tipos.
-- `atajo`: opcional, con el mismo formato que `[atajos]`.
+**Fields:**
+- `run`: the line to execute.
+- `in`: `terminal` shows the output; `hidden` runs without a window.
+- `menu`: which menus it appears in, `file`, `folder` or `background`.
+- `extensions`: only offered for those types.
+- `shortcut`: optional, in the same format as `[shortcuts]`.
 
-**Variables, con comillas automáticas:**
-- `{archivo}`: corre una vez por cada archivo seleccionado.
-- `{archivos}`: corre una sola vez con todos.
-- `{carpeta}`, `{nombre}`, `{sin_ext}`, `{ext}` y `{otro_panel}`.
+**Variables, with automatic quoting:**
+- `{file}`: runs once for each selected file.
+- `{files}`: runs once with all of them.
+- `{folder}`, `{name}`, `{no_ext}`, `{ext}` and `{other_pane}`.
 
-**Cómo:**
-- En el menú entran con un verbo propio, `jolt:nombre`. Así el editor de `menu.txt` los oculta y los ordena como a
-  cualquier otra opción.
-- En la paleta salen junto a `kCommands`, con la misma asignación de atajo por click.
-- Más adelante, si hace falta: crear comandos desde la propia app.
+**How:**
+- In the menu they enter with their own verb, `jolt:name`. That way the `menu.txt` editor hides and orders them like
+  any other option.
+- In the palette they appear alongside `kCommands`, with the same click-to-assign shortcut.
+- Later, if needed: creating commands from the app itself.
 
-**Probar:** comillas con espacios y acentos, uno contra varios archivos, filtro por extensión y orden en el menú. En
-modo de prueba el comando se anota sin ejecutarse, y la terminal real se prueba una vez a mano.
+**Test:** quoting with spaces and accents, one versus several files, extension filter and menu order. In
+test mode the command is logged without running, and the real terminal is tested once by hand.
 
-## 5. Comprimir y extraer
+## 5. Compress and extract
 
-Formatos que usa: zip y 7z siempre, rar solo para abrir lo que le mandan, y `.tar.zst` como formato nuevo. Usa
-contraseñas. Casi siempre extrae todo y a veces saca archivos sueltos.
+Formats in use: zip and 7z always, rar only to open what gets sent, and `.tar.zst` as a new format. Passwords are
+used. It almost always extracts everything and sometimes pulls out individual files.
 
-**Motor:** `7z.dll`, cargado solo la primera vez que se abre un comprimido, así no afecta el arranque de Jolt. Va al
-lado de `jolt.exe` con su licencia (LGPL con la restricción de unRAR, que solo prohíbe crear un compresor de RAR).
-Para crear `.tar.zst` se suma la biblioteca zstd (BSD), porque `7z.dll` puede leer ese formato pero no crearlo.
+**Engine:** `7z.dll`, loaded only the first time an archive is opened, so it doesn't affect Jolt's startup. It sits
+next to `jolt.exe` with its license (LGPL with the unRAR restriction, which only forbids creating a RAR compressor).
+To create `.tar.zst`, the zstd library (BSD) is added, because `7z.dll` can read that format but not create it.
 
-Se descartó libarchive. Probado el 2026-11-04 con el `tar.exe` de Windows (libarchive 3.8.9) y 7-Zip 26.02:
+libarchive was ruled out. Tested on 2026-11-04 with Windows' `tar.exe` (libarchive 3.8.9) and 7-Zip 26.02:
 
-| Caso | libarchive | 7z.dll |
+| Case | libarchive | 7z.dll |
 |---|---|---|
-| Listar 7z con contraseña | sí | sí |
-| Extraer 7z con contraseña | no: "not supported" | sí |
-| 7z con nombres cifrados | no: ni lista | sí |
-| Extraer zip AES con contraseña | sin error, contenido sin comprobar | sí |
-| Crear zst | sí | no |
+| List password-protected 7z | yes | yes |
+| Extract password-protected 7z | no: "not supported" | yes |
+| 7z with encrypted names | no: can't even list | yes |
+| Extract password-protected AES zip | no error, content unchecked | yes |
+| Create zst | yes | no |
 
-La columna de `7z.dll` en los casos de extracción sale de sus capacidades declaradas (`7z i`); hay que confirmarla
-en la implementación, junto con los RAR con contraseña.
+The `7z.dll` column for the extraction cases comes from its declared capabilities (`7z i`); it has to be confirmed
+during implementation, along with password-protected RAR files.
 
-**Etapa 1, extraer (lo que más usa):**
-- "Extraer aquí" y "Extraer en carpeta" en el botón derecho, `Ctrl+K` y con atajo.
-- "Extraer en carpeta" no crea una carpeta doble si el comprimido ya trae una sola adentro.
-- Corre en segundo plano, con progreso, cancelar y varios a la vez.
-- Respeta los conflictos: nunca pisa nada sin preguntar.
+**Stage 1, extract (the most used):**
+- "Extract here" and "Extract to folder" on right click, in `Ctrl+K` and with a shortcut.
+- "Extract to folder" doesn't create a double folder if the archive already has a single one inside.
+- Runs in the background, with progress, cancel and several at once.
+- Respects conflicts: never overwrites anything without asking.
 
-**Etapa 2, entrar como carpeta:**
-- Enter abre el comprimido en la lista de siempre, con filtro, orden y vista previa.
-- Copiar o arrastrar saca solo lo elegido. Solo lectura.
-- `tar.zst` no tiene índice: para listarlo hay que leerlo entero. Se muestra progreso.
+**Stage 2, enter as a folder:**
+- Enter opens the archive in the usual list, with filter, sorting and preview.
+- Copying or dragging extracts only what was chosen. Read-only.
+- `tar.zst` has no index: listing it means reading all of it. Progress is shown.
 
-**Etapa 3, crear:**
-- zip para compartir, 7z para ocupar lo mínimo y `.tar.zst` para velocidad.
-- Con contraseña: zip AES-256 y 7z con nombres cifrados. `tar.zst` no admite contraseña, así que la opción no aparece.
+**Stage 3, create:**
+- zip for sharing, 7z for minimum size and `.tar.zst` for speed.
+- With a password: AES-256 zip and 7z with encrypted names. `tar.zst` doesn't support passwords, so the option doesn't appear.
 
-**Contraseñas:**
-- Se piden en un cuadro de Jolt. Si es incorrecta, se vuelve a pedir sin perder lo que se estaba haciendo.
-- Se recuerdan solo en memoria mientras Jolt esté abierto, nunca en disco.
+**Passwords:**
+- Asked for in a Jolt dialog. If wrong, it asks again without losing what was in progress.
+- Remembered only in memory while Jolt is open, never on disk.
 
-**Seguridad:** rechazar las rutas que salen de la carpeta de destino (`..\`, rutas absolutas), porque un comprimido
-malicioso podría escribir en cualquier lado. Un error a mitad de camino no deja archivos a medias como si estuvieran
-completos.
+**Security:** reject paths that leave the destination folder (`..\`, absolute paths), because a malicious archive
+could write anywhere. An error halfway doesn't leave partial files looking
+complete.
 
-**Probar:** cada formato con y sin contraseña, contraseña incorrecta, nombres con acentos, archivos de más de 4 GB,
-comprimidos dañados y rutas maliciosas. Todo se puede en modo de prueba, salvo el cuadro de progreso real.
+**Test:** each format with and without a password, wrong password, names with accents, files over 4 GB,
+damaged archives and malicious paths. All possible in test mode, except the real progress dialog.
 
-**Falta decidir al implementar:** cómo instalar `7z.dll` y zstd en el proyecto (fuente, versión y `build.bat`).
+**Still to decide at implementation:** how to bring `7z.dll` and zstd into the project (source, version and `build.bat`).
 
-## 6. Temas (opcional)
+## 6. Themes (optional)
 
-Entre 4 y 5 temas cuidados, y un selector en `Ctrl+K` que los aplica en vivo mientras te movés por la lista. Los
-colores ya son configurables, así que es poco trabajo.
+Between 4 and 5 polished themes, and a selector in `Ctrl+K` that applies them live as you move through the list.
+Colors are already configurable, so it is little work.

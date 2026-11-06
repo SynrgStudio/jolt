@@ -1,18 +1,18 @@
-// Deshacer y rehacer (Ctrl+Z / Ctrl+Y). Se incluye desde app.cpp antes de menu.inl.
+// Undo and redo (Ctrl+Z / Ctrl+Y). Included from app.cpp before menu.inl.
 //
-// Windows guarda su propio historial, pero no hay forma pública de pedirle que deshaga. Por eso cada
-// operación avisa acá qué hizo de verdad: IFileOperationProgressSink da el nombre final de cada archivo
-// (aunque un conflicto lo haya cambiado) y el elemento que quedó en la papelera.
+// Windows keeps its own history, but there's no public way to ask it to undo. So every operation
+// reports here what it really did: IFileOperationProgressSink gives the final name of each file
+// (even if a conflict changed it) and the item that ended up in the Recycle Bin.
 //
-// Reglas: deshacer nunca pisa nada, nunca toca lo que cambió después y lo que quita va a la papelera.
+// Rules: undo never overwrites anything, never touches what changed later, and what it removes goes to the Recycle Bin.
 
 enum class FileOpKind { Copy, Move, Delete };
 enum class UndoKind { Rename, Move, Copy, Create, Delete };
 
 struct UndoItem {
-    std::wstring from, to;  // Rename/Move: origen y destino. Copy/Create: to. Delete: from.
-    std::wstring bin;       // dónde quedó en la papelera ($R…), si está ahí
-    ULONGLONG stamp = 0, size = 0;  // Copy: cómo quedó, para no tocarlo si cambió
+    std::wstring from, to;  // Rename/Move: source and destination. Copy/Create: to. Delete: from.
+    std::wstring bin;       // where it ended up in the Recycle Bin ($R…), if it's there
+    ULONGLONG stamp = 0, size = 0;  // Copy: its resulting state, so it's left alone if it changed
 };
 struct UndoEntry {
     UndoKind kind;
@@ -21,8 +21,8 @@ struct UndoEntry {
 
 constexpr size_t kUndoMax = 100;
 std::deque<UndoEntry> g_undo, g_redo;
-bool g_undoBusy = false;   // hay una operación de deshacer en curso
-bool g_undoMerge = false;  // la próxima operación se suma a la última (duplicar en varias carpetas)
+bool g_undoBusy = false;   // an undo operation is in progress
+bool g_undoMerge = false;  // the next operation joins the last one (duplicating across several folders)
 
 bool PathStamp(const std::wstring& p, ULONGLONG& stamp, ULONGLONG& size) {
     WIN32_FILE_ATTRIBUTE_DATA d;
@@ -50,7 +50,7 @@ std::wstring ItemPath(IShellItem* item) {
 
 void UndoPush(UndoEntry e) {
     if (e.items.empty()) return;
-    Log(L"undo: anotado tipo %d, %zu elementos, primero \"%s\" -> \"%s\"", static_cast<int>(e.kind), e.items.size(),
+    Log(L"undo: recorded kind %d, %zu items, first \"%s\" -> \"%s\"", static_cast<int>(e.kind), e.items.size(),
         e.items[0].from.c_str(), e.items[0].to.c_str());
     g_redo.clear();
     if (g_undoMerge && !g_undo.empty() && g_undo.back().kind == e.kind) {
@@ -63,7 +63,7 @@ void UndoPush(UndoEntry e) {
 }
 
 void UndoRecordRename(const std::wstring& from, const std::wstring& to) {
-    // "archivo nuevo" entra renombrando: crear y ponerle nombre es una sola cosa
+    // "new file" goes straight into rename: creating and naming it are one step
     if (!g_undo.empty() && g_undo.back().kind == UndoKind::Create && g_undo.back().items.size() == 1 &&
         Key(g_undo.back().items[0].to) == Key(from)) {
         g_undo.back().items[0].to = to;
@@ -81,9 +81,9 @@ void UndoRecordCreate(const std::wstring& path) {
     UndoPush({UndoKind::Create, {it}});
 }
 
-// Anota lo que hace un IFileOperation. Solo cuenta lo pedido: de una carpeta copiada no interesa cada
-// archivo de adentro. Lo que cayó sobre algo que ya existía (reemplazar, combinar carpetas) no se anota,
-// porque deshacerlo se llevaría también lo que había antes.
+// Records what an IFileOperation does. Only what was requested counts: the individual files inside a
+// copied folder don't matter. Whatever landed on something that already existed (replace, merge folders)
+// isn't recorded, because undoing it would also take away what was there before.
 struct OpRecorder : IFileOperationProgressSink {
     LONG refs = 1;
     DWORD cookie = 0;
@@ -150,8 +150,8 @@ struct OpRecorder : IFileOperationProgressSink {
     STDMETHODIMP PauseTimer() override { return S_OK; }
     STDMETHODIMP ResumeTimer() override { return S_OK; }
 
-    // Se llama antes de empezar, con el disco todavía intacto: en un conflicto, Windows avisa de la copia
-    // dos veces y durante la operación ya no se puede saber qué había.
+    // Called before starting, while the disk is still untouched: on a conflict, Windows reports the copy
+    // twice, and during the operation there's no longer any way to tell what was there.
     void AddSource(const std::wstring& path, const std::wstring& destDir = L"", const wchar_t* newName = nullptr) {
         sources.insert(Key(path));
         if (destDir.empty()) return;
@@ -161,15 +161,15 @@ struct OpRecorder : IFileOperationProgressSink {
     }
     void Attach(IFileOperation* op) { op->Advise(this, &cookie); }
 
-    // Después de PerformOperations. Un paso saltado en un conflicto también llega como éxito: por eso se
-    // mira cómo quedó el disco.
+    // After PerformOperations. A step skipped on a conflict also arrives as a success: that's why the
+    // resulting state of the disk is checked.
     void Detach(IFileOperation* op) {
         op->Unadvise(cookie);
         auto drop = [](std::vector<UndoItem>& v, auto bad) { v.erase(std::remove_if(v.begin(), v.end(), bad), v.end()); };
         drop(moved, [](const UndoItem& i) { return !PathExists(i.to) || (Key(i.from) != Key(i.to) && PathExists(i.from)); });
         drop(copied, [](const UndoItem& i) { return !PathExists(i.to); });
         drop(deleted, [](const UndoItem& i) { return PathExists(i.from); });
-        std::unordered_set<std::wstring> seen;  // el mismo elemento puede avisar más de una vez
+        std::unordered_set<std::wstring> seen;  // the same item can report more than once
         drop(moved, [&](const UndoItem& i) { return !seen.insert(Key(i.to)).second; });
         seen.clear();
         drop(copied, [&](const UndoItem& i) { return !seen.insert(Key(i.to)).second; });
@@ -178,7 +178,7 @@ struct OpRecorder : IFileOperationProgressSink {
         for (UndoItem& i : copied) PathStamp(i.to, i.stamp, i.size);
     }
     void Commit() {
-        std::vector<UndoItem> binned;  // sin papelera (borrado definitivo) no hay vuelta atrás
+        std::vector<UndoItem> binned;  // without the Recycle Bin (permanent delete) there's no going back
         for (UndoItem& i : deleted)
             if (!i.bin.empty()) binned.push_back(i);
         UndoPush({UndoKind::Move, moved});
@@ -187,9 +187,9 @@ struct OpRecorder : IFileOperationProgressSink {
     }
 };
 
-// Copia, mueve o borra con IFileOperation: progreso, conflictos y elevación como el Explorador.
-// newNames (opcional, paralelo a files): nombre de cada copia. rec: quien la pide se queda con lo que
-// pasó; si no, va al historial.
+// Copies, moves or deletes with IFileOperation: progress, conflicts and elevation like File Explorer.
+// newNames (optional, parallel to files): the name of each copy. rec: the caller keeps what
+// happened; otherwise it goes to the history.
 bool FileOp(FileOpKind kind, const std::vector<std::wstring>& files, const std::wstring& dest, DWORD extraFlags = 0,
             const std::vector<std::wstring>* newNames = nullptr, OpRecorder* rec = nullptr) {
     if (files.empty()) return false;
@@ -197,7 +197,7 @@ bool FileOp(FileOpKind kind, const std::vector<std::wstring>& files, const std::
     if (FAILED(CoCreateInstance(CLSID_FileOperation, nullptr, CLSCTX_ALL, IID_PPV_ARGS(&op)))) return false;
     op->SetOwnerWindow(g_hwnd);
     DWORD flags = FOF_NOCONFIRMMKDIR | FOFX_SHOWELEVATIONPROMPT | extraFlags;
-    // FOF_ALLOWUNDO manda a la papelera: un borrado definitivo no puede llevarlo
+    // FOF_ALLOWUNDO sends to the Recycle Bin: a permanent delete can't use it
     if (kind != FileOpKind::Delete || (extraFlags & FOFX_RECYCLEONDELETE)) flags |= FOF_ALLOWUNDO | FOFX_ADDUNDORECORD;
     if (kind == FileOpKind::Delete && (extraFlags & FOFX_RECYCLEONDELETE)) flags |= FOF_WANTNUKEWARNING;
     op->SetOperationFlags(flags);
@@ -227,11 +227,11 @@ bool FileOp(FileOpKind kind, const std::vector<std::wstring>& files, const std::
     return ok;
 }
 
-// Recupera de la papelera con el verbo de Windows, que además borra su registro ($I…). Busca cada
-// elemento en la carpeta virtual de la papelera: el que devuelve IFileOperation es el archivo $R, y ese
-// no tiene el verbo. Devuelve las rutas originales que volvieron.
+// Restores from the Recycle Bin with the Windows verb, which also removes its record ($I…). Looks up each
+// item in the Recycle Bin's virtual folder: the one IFileOperation returns is the $R file, and that one
+// doesn't have the verb. Returns the original paths that came back.
 std::unordered_set<std::wstring> BinRestore(const std::vector<std::pair<std::wstring, std::wstring>>& items) {
-    std::unordered_set<std::wstring> back;  // items: ruta en la papelera, ruta original
+    std::unordered_set<std::wstring> back;  // items: path in the Recycle Bin, original path
     ComPtr<IShellItem> bin;
     ComPtr<IEnumShellItems> en;
     if (FAILED(SHGetKnownFolderItem(FOLDERID_RecycleBinFolder, KF_FLAG_DEFAULT, nullptr, IID_PPV_ARGS(&bin))) ||
@@ -260,7 +260,7 @@ std::unordered_set<std::wstring> BinRestore(const std::vector<std::pair<std::wst
         DestroyMenu(m);
     }
     for (auto& [it, original] : found) {
-        for (int i = 0; i < 150 && !PathExists(original); ++i) Sleep(20);  // el verbo puede terminar después
+        for (int i = 0; i < 150 && !PathExists(original); ++i) Sleep(20);  // the verb may finish later
         if (PathExists(original)) back.insert(Key(original));
     }
     return back;
@@ -268,19 +268,19 @@ std::unordered_set<std::wstring> BinRestore(const std::vector<std::pair<std::wst
 
 std::wstring UndoDesc(const UndoEntry& e) {
     const UndoItem& first = e.items[0];
-    std::wstring what = e.items.size() == 1 ? L"«" + LeafOf(e.kind == UndoKind::Delete ? first.from : first.to) + L"»"
-                                            : Thousands(static_cast<int>(e.items.size())) + L" elementos";
+    std::wstring what = e.items.size() == 1 ? L"“" + LeafOf(e.kind == UndoKind::Delete ? first.from : first.to) + L"”"
+                                            : Thousands(static_cast<int>(e.items.size())) + L" items";
     switch (e.kind) {
-        case UndoKind::Rename: return L"renombrar " + what;
-        case UndoKind::Move: return L"mover " + what;
-        case UndoKind::Copy: return L"copiar " + what;
-        case UndoKind::Create: return L"crear " + what;
-        case UndoKind::Delete: return L"mandar a la papelera " + what;
+        case UndoKind::Rename: return L"rename " + what;
+        case UndoKind::Move: return L"move " + what;
+        case UndoKind::Copy: return L"copy " + what;
+        case UndoKind::Create: return L"create " + what;
+        case UndoKind::Delete: return L"send " + what + L" to the Recycle Bin";
     }
     return what;
 }
 
-// Si una carpeta renombrada estaba desplegada, el árbol la sigue.
+// If a renamed folder was expanded, the tree follows it.
 void TreeFollow(Tab& t, const std::wstring& from, const std::wstring& to) {
     std::wstring k = Key(from);
     if (!t.expanded.count(k)) return;
@@ -290,8 +290,8 @@ void TreeFollow(Tab& t, const std::wstring& from, const std::wstring& to) {
     LoadKid(t, Key(to), to);
 }
 
-// Aplica una entrada para atrás (undo) o para adelante. Deja en e.items lo que se pudo y en why por qué
-// no se pudo lo demás; devuelve cuántos no se pudieron.
+// Applies an entry backward (undo) or forward. Leaves in e.items what succeeded and in why the reason
+// the rest failed; returns how many failed.
 int UndoApply(UndoEntry& e, bool undo, std::wstring& why, std::vector<std::wstring>& touched, std::wstring& select,
               std::vector<std::pair<std::wstring, std::wstring>>& gone) {
     std::vector<UndoItem> done;
@@ -307,9 +307,9 @@ int UndoApply(UndoEntry& e, bool undo, std::wstring& why, std::vector<std::wstri
         auto dstOf = [&](const UndoItem& i) -> const std::wstring& { return undo ? i.from : i.to; };
         std::vector<UndoItem> ready;
         for (UndoItem& i : e.items) {
-            if (!PathExists(srcOf(i))) fail(L"ya no está donde quedó");
-            else if (Key(srcOf(i)) != Key(dstOf(i)) && PathExists(dstOf(i))) fail(L"ya hay algo con ese nombre");
-            else if (!PathExists(ParentOf(dstOf(i)))) fail(L"su carpeta ya no existe");
+            if (!PathExists(srcOf(i))) fail(L"no longer where it was");
+            else if (Key(srcOf(i)) != Key(dstOf(i)) && PathExists(dstOf(i))) fail(L"something with that name already exists");
+            else if (!PathExists(ParentOf(dstOf(i)))) fail(L"its folder no longer exists");
             else ready.push_back(i);
         }
         if (e.kind == UndoKind::Rename) {
@@ -318,11 +318,11 @@ int UndoApply(UndoEntry& e, bool undo, std::wstring& why, std::vector<std::wstri
                     for (auto& tab : g_tabs) TreeFollow(*tab, srcOf(i), dstOf(i));
                     done.push_back(i);
                 } else {
-                    fail(L"está en uso");
+                    fail(L"in use");
                 }
             }
         } else {
-            std::unordered_map<std::wstring, std::vector<UndoItem>> byDir;  // el destino puede ser más de uno
+            std::unordered_map<std::wstring, std::vector<UndoItem>> byDir;  // there can be more than one destination
             for (UndoItem& i : ready) byDir[ParentOf(dstOf(i))].push_back(i);
             for (auto& [dir, group] : byDir) {
                 std::vector<std::wstring> srcs, names;
@@ -335,7 +335,7 @@ int UndoApply(UndoEntry& e, bool undo, std::wstring& why, std::vector<std::wstri
                 rec->Release();
                 for (UndoItem& i : group) {
                     if (PathExists(dstOf(i)) && !PathExists(srcOf(i))) done.push_back(i);
-                    else fail(L"no se pudo mover");
+                    else fail(L"couldn't be moved");
                 }
             }
         }
@@ -346,7 +346,7 @@ int UndoApply(UndoEntry& e, bool undo, std::wstring& why, std::vector<std::wstri
         }
         if (!done.empty()) select = dstOf(done[0]);
     } else {
-        const bool toBin = (e.kind == UndoKind::Delete) != undo;  // deshacer crear = rehacer borrar
+        const bool toBin = (e.kind == UndoKind::Delete) != undo;  // undoing create = redoing delete
         auto place = [&](const UndoItem& i) -> const std::wstring& { return e.kind == UndoKind::Delete ? i.from : i.to; };
         if (toBin) {
             std::vector<UndoItem> ready;
@@ -354,10 +354,10 @@ int UndoApply(UndoEntry& e, bool undo, std::wstring& why, std::vector<std::wstri
             for (UndoItem& i : e.items) {
                 const std::wstring& p = place(i);
                 ULONGLONG stamp = 0, size = 0;
-                if (!PathStamp(p, stamp, size)) fail(L"ya no está");
-                else if (e.kind == UndoKind::Copy && (stamp != i.stamp || size != i.size)) fail(L"cambió desde entonces");
+                if (!PathStamp(p, stamp, size)) fail(L"no longer there");
+                else if (e.kind == UndoKind::Copy && (stamp != i.stamp || size != i.size)) fail(L"changed since then");
                 else if (e.kind == UndoKind::Create && (PathIsDir(p) ? !PathIsDirectoryEmptyW(ToExtendedPath(p).c_str()) : size != 0))
-                    fail(L"ya tiene contenido");
+                    fail(L"now has content");
                 else {
                     ready.push_back(i);
                     paths.push_back(p);
@@ -369,10 +369,10 @@ int UndoApply(UndoEntry& e, bool undo, std::wstring& why, std::vector<std::wstri
                 auto it = std::find_if(rec->deleted.begin(), rec->deleted.end(),
                                        [&](const UndoItem& d) { return Key(d.from) == Key(place(i)); });
                 if (it == rec->deleted.end()) {
-                    fail(L"no se pudo mandar a la papelera");
+                    fail(L"couldn't be sent to the Recycle Bin");
                     continue;
                 }
-                i.bin = it->bin;  // vacío si no había papelera: Windows ya avisó que era definitivo
+                i.bin = it->bin;  // empty if there was no Recycle Bin: Windows already warned it was permanent
                 touch(place(i));
                 gone.emplace_back(place(i), L"");
                 done.push_back(i);
@@ -382,9 +382,9 @@ int UndoApply(UndoEntry& e, bool undo, std::wstring& why, std::vector<std::wstri
             std::vector<std::pair<std::wstring, std::wstring>> wanted;
             std::vector<UndoItem> ready;
             for (UndoItem& i : e.items) {
-                if (PathExists(place(i))) fail(L"ya hay algo con ese nombre");
-                else if (!PathExists(ParentOf(place(i)))) fail(L"su carpeta ya no existe");
-                else if (i.bin.empty() || !PathExists(i.bin)) fail(L"ya no está en la papelera");
+                if (PathExists(place(i))) fail(L"something with that name already exists");
+                else if (!PathExists(ParentOf(place(i)))) fail(L"its folder no longer exists");
+                else if (i.bin.empty() || !PathExists(i.bin)) fail(L"no longer in the Recycle Bin");
                 else {
                     wanted.emplace_back(i.bin, place(i));
                     ready.push_back(i);
@@ -394,7 +394,7 @@ int UndoApply(UndoEntry& e, bool undo, std::wstring& why, std::vector<std::wstri
             if (!wanted.empty()) back = BinRestore(wanted);
             for (UndoItem& i : ready) {
                 if (!back.count(Key(place(i)))) {
-                    fail(L"no se pudo recuperar de la papelera");
+                    fail(L"couldn't be restored from the Recycle Bin");
                     continue;
                 }
                 i.bin.clear();
@@ -409,8 +409,8 @@ int UndoApply(UndoEntry& e, bool undo, std::wstring& why, std::vector<std::wstri
     return failed;
 }
 
-// Una pestaña abierta adentro de lo que cambió de lugar lo sigue; si se fue a la papelera, sube a la
-// carpeta que lo contenía.
+// A tab open inside something that moved follows it; if it went to the Recycle Bin, the tab goes up to
+// the folder that contained it.
 void TabsFollow(const std::vector<std::pair<std::wstring, std::wstring>>& gone) {
     for (const auto& [src, dst] : gone) {
         const std::wstring k = Key(src) + L"\\";
@@ -423,12 +423,12 @@ void TabsFollow(const std::vector<std::pair<std::wstring, std::wstring>>& gone) 
 
 // Ctrl+Z / Ctrl+Y.
 void UndoStep(bool undo) {
-    Log(L"undo: %s (historial %zu, rehacer %zu, ocupado %d)", undo ? L"deshacer" : L"rehacer", g_undo.size(), g_redo.size(), g_undoBusy);
+    Log(L"undo: %s (history %zu, redo %zu, busy %d)", undo ? L"undo" : L"redo", g_undo.size(), g_redo.size(), g_undoBusy);
     if (g_undoBusy) return;
     auto& from = undo ? g_undo : g_redo;
     auto& to = undo ? g_redo : g_undo;
     if (from.empty()) {
-        S.message = undo ? L"No hay nada para deshacer" : L"No hay nada para rehacer";
+        S.message = undo ? L"Nothing to undo" : L"Nothing to redo";
         Invalidate();
         return;
     }
@@ -445,14 +445,14 @@ void UndoStep(bool undo) {
     if (!e.items.empty()) to.push_back(std::move(e));
     TabsFollow(gone);
 
-    const wchar_t* verb = undo ? L"Deshecho: " : L"Rehecho: ";
+    const wchar_t* verb = undo ? L"Undone: " : L"Redone: ";
     if (!failed) {
         S.message = verb + desc;
     } else if (!done) {
-        S.message = std::wstring(undo ? L"No se pudo deshacer " : L"No se pudo rehacer ") + desc + L": " + why;
+        S.message = std::wstring(undo ? L"Couldn't undo " : L"Couldn't redo ") + desc + L": " + why;
         MessageBeep(MB_ICONWARNING);
     } else {
-        S.message = verb + std::to_wstring(done) + L" de " + std::to_wstring(total) + L". El resto: " + why;
+        S.message = verb + std::to_wstring(done) + L" of " + std::to_wstring(total) + L". The rest: " + why;
         MessageBeep(MB_ICONWARNING);
     }
     Tab& t = T();

@@ -8,7 +8,7 @@
 
 namespace {
 
-// FILE_FULL_DIR_INFORMATION: nombre + tamaño + fechas + atributos en una sola pasada.
+// FILE_FULL_DIR_INFORMATION: name + size + dates + attributes in a single pass.
 struct FullDirInfo {
     ULONG NextEntryOffset;
     ULONG FileIndex;
@@ -70,7 +70,7 @@ bool EnumNt(const std::wstring& path, Listing& out) {
         out.error = GetLastError();
         return false;
     }
-    // Lotes de 64 KiB: cada llamada al kernel trae cientos de entradas.
+    // 64 KiB batches: each kernel call brings back hundreds of entries.
     alignas(8) static thread_local unsigned char buf[64 * 1024];
     IO_STATUS_BLOCK iosb{};
     BOOLEAN restart = TRUE;
@@ -183,7 +183,7 @@ void SortListing(Listing& l, SortBy by, bool asc, bool foldersFirst) {
     l.sortBy = by;
     l.sortAsc = asc;
     l.foldersFirst = foldersFirst;
-    if (l.path.empty()) return;  // las unidades ya vienen en orden
+    if (l.path.empty()) return;  // drives already come in order
     auto order = [&](const Entry& a, const Entry& b, auto byName) {
         bool da = a.isDir(), db = b.isDir();
         if (foldersFirst && da != db) return da;
@@ -191,7 +191,7 @@ void SortListing(Listing& l, SortBy by, bool asc, bool foldersFirst) {
         if (by == SortBy::Date)
             c = a.mtime < b.mtime ? -1 : (a.mtime > b.mtime ? 1 : 0);
         else if (by == SortBy::Size) {
-            // mezclados por tamaño: las carpetas (sin tamaño) van al final
+            // mixed by size: folders (which have no size) go last
             if (da != db) return asc ? da : db;
             if (!da) c = a.size < b.size ? -1 : (a.size > b.size ? 1 : 0);
         }

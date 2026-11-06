@@ -1,39 +1,39 @@
-// Modo de prueba: "jolt.exe --prueba guion.txt [--salida carpeta]".
-// La ventana no se muestra nunca (no le roba el foco a nadie): se dibuja en un bitmap en memoria,
-// las teclas y los clicks del guion se mandan directo a la ventana (con Ctrl/Shift/Alt simulados) y
-// "captura" guarda la imagen, con los menús emergentes encima. Usa una copia de la configuración en
-// %TEMP%\jolt-prueba\datos, así que no toca la sesión, los favoritos ni nada del usuario.
-// Se incluye desde app.cpp al final de los .inl.
+// Test mode: "jolt.exe --test script.txt [--output folder]".
+// The window is never shown (it steals focus from nobody): it draws into an in-memory bitmap,
+// the script's keys and clicks go straight to the window (with Ctrl/Shift/Alt simulated) and
+// "capture" saves the image, with popup menus on top. It uses a copy of the configuration in
+// %TEMP%\jolt-test\data, so it does not touch the user's session, favorites or anything else.
+// Included from app.cpp after the other .inl files.
 //
-// Guion, un paso por línea (# comenta):
-//   ir C:\carpeta            navegar ahí            tecla Ctrl+Shift+F    una tecla con modificadores
-//   escribir texto           caracteres             click 300 118         click (en DIP de la ventana)
-//   doble x y / derecho x y  doble click / derecho  mover x y             mover el mouse
-//   rueda x y -3             rueda del mouse        comando ver_carpetas  un comando por nombre
-//   esperar 300              milisegundos           captura nombre.png    guardar lo que se ve
-//   tamano 1100 700          tamaño de la ventana   eco texto             anota en log.txt
+// Script, one step per line (# comments):
+//   go C:\folder             navigate there         key Ctrl+Shift+F      a key with modifiers
+//   type text                characters             click 300 118         click (in window DIPs)
+//   double x y / right x y   double / right click   move x y              move the mouse
+//   wheel x y -3             mouse wheel            command show_folders  a command by name
+//   wait 300                 milliseconds           capture name.png      save what is visible
+//   size 1100 700            window size            echo text             writes to log.txt
 //
-// Ventanas de Windows (con --prueba-escritorio quedan en un escritorio invisible):
-//   esperar_ventana Propiedades [ms]     ventanas                 (anota las ventanas abiertas)
-//   captura_ventana Propiedades | p.png  boton Propiedades | Cancelar   (UI Automation)
-//   cerrar_ventana Propiedades
-// Arrastrar y soltar (como si viniera de otra app, o de la selección de Jolt):
-//   arrastrar_sobre 300 140 copiar C:\a.txt | C:\b.txt     arrastrar_sobre 300 140 mover seleccion
-//   existe C:\a.txt (anota si está)      tocar C:\a.txt (le agrega un byte, o lo crea)      mensaje (anota el aviso de abajo)
-//   soltar / cancelar_arrastre             sacar C:\destino copiar   (la selección soltada en otra carpeta)
-// Activación:  activar no / activar si   (la ventana pierde o recupera el foco)
-// Mouse por partes:  apretar x y / arrastrar x y / levantar x y   (mover con el botón apretado)
-// Modificadores sostenidos:  mantener Alt / mantener nada   (para rueda o clicks con Alt, Ctrl, Shift)
+// Windows windows (with --test-desktop they stay on an invisible desktop):
+//   wait_window Properties [ms]          windows                  (logs the open windows)
+//   capture_window Properties | p.png    button Properties | Cancel   (UI Automation)
+//   close_window Properties
+// Drag and drop (as if it came from another app, or from Jolt's selection):
+//   drag_over 300 140 copy C:\a.txt | C:\b.txt     drag_over 300 140 move selection
+//   exists C:\a.txt (logs whether it is there)      touch C:\a.txt (appends a byte, or creates it)      message (logs the bottom notice)
+//   drop / cancel_drag             drag_out C:\target copy   (the selection dropped on another folder)
+// Activation:  activate no / activate yes   (the window loses or regains focus)
+// Mouse in parts:  press x y / drag x y / release x y   (move with the button held)
+// Held modifiers:  hold Alt / hold none   (for wheel or clicks with Alt, Ctrl, Shift)
 
 struct TestStep {
     std::wstring cmd, arg;
 };
 std::vector<TestStep> g_testSteps;
 size_t g_testPos = 0;
-std::wstring g_testOut;  // carpeta de las capturas y el log
+std::wstring g_testOut;  // folder for the captures and the log
 constexpr UINT_PTR kTimerTest = 9, kTimerTestKill = 10;
 
-bool g_testBlocking = false;  // un paso está esperando (UI Automation): el guion no avanza
+bool g_testBlocking = false;  // a step is waiting (UI Automation): the script does not advance
 ComPtr<IDataObject> g_testDrag;
 POINTL g_testDragPt{};
 DWORD g_testDragKeys = 0;
@@ -45,11 +45,11 @@ void TestLog(const std::wstring& s) {
     out << Utf8(s) << "\n";
 }
 
-// Prepara la carpeta de datos de prueba: una copia fresca de la configuración del usuario.
+// Prepares the test data folder: a fresh copy of the user's configuration.
 void TestPrepareData() {
     wchar_t tmp[MAX_PATH];
     GetTempPathW(MAX_PATH, tmp);
-    std::wstring base = std::wstring(tmp) + L"jolt-prueba";
+    std::wstring base = std::wstring(tmp) + L"jolt-test";
     CreateDirectoryW(base.c_str(), nullptr);
     std::wstring real;
     wchar_t* appdata = nullptr;
@@ -57,12 +57,13 @@ void TestPrepareData() {
         real = std::wstring(appdata) + L"\\Jolt";
         CoTaskMemFree(appdata);
     }
-    g_dataDir = base + L"\\datos";
+    g_dataDir = base + L"\\data";
     CreateDirectoryW(g_dataDir.c_str(), nullptr);
-    DeleteFileW((g_dataDir + L"\\sesion.txt").c_str());
-    for (const wchar_t* n : {L"config.txt", L"vistas.txt", L"favoritos.txt", L"menu.txt"})
+    DeleteFileW((g_dataDir + L"\\session.txt").c_str());
+    DeleteFileW((g_dataDir + L"\\usage.txt").c_str());
+    for (const wchar_t* n : {L"config.txt", L"views.txt", L"favorites.txt", L"menu.txt"})
         CopyFileW((real + L"\\" + n).c_str(), (g_dataDir + L"\\" + n).c_str(), FALSE);
-    if (g_testOut.empty()) g_testOut = base + L"\\capturas";
+    if (g_testOut.empty()) g_testOut = base + L"\\captures";
     CreateDirectoryW(g_testOut.c_str(), nullptr);
     DeleteFileW((g_testOut + L"\\log.txt").c_str());
 }
@@ -85,7 +86,7 @@ bool TestLoadScript(const std::wstring& file) {
     return true;
 }
 
-// Ventana que recibe el teclado (la que tendría el foco).
+// Window that receives the keyboard (the one that would have focus).
 HWND TestKeyTarget() {
     if (g_renaming) return g_renameEdit;
     if (g_editing) return g_edit;
@@ -96,14 +97,14 @@ HWND TestKeyTarget() {
 void TestKey(const std::wstring& spec) {
     UINT mods, vk;
     if (!ParseKey(spec, mods, vk)) {
-        TestLog(L"tecla desconocida: " + spec);
+        TestLog(L"unknown key: " + spec);
         return;
     }
     g_testMods = mods;
     HWND h = TestKeyTarget();
     const bool alt = (mods & ModAlt) != 0;
     SendMessageW(h, alt ? WM_SYSKEYDOWN : WM_KEYDOWN, vk, 1);
-    // los caracteres que generaría TranslateMessage
+    // the characters TranslateMessage would generate
     wchar_t ch = 0;
     if (!(mods & (ModCtrl | ModAlt))) {
         if (vk == VK_RETURN) ch = L'\r';
@@ -119,7 +120,7 @@ void TestKey(const std::wstring& spec) {
 
 int TestPx(float dip) { return static_cast<int>(std::lround(dip * g_dpi / 96.f)); }
 
-// Si el punto cae en un menú emergente (o hay uno abierto y el click es afuera), los mensajes van a él.
+// If the point is on a popup menu (or one is open and the click is outside), the messages go to it.
 bool TestPopupTarget(float x, float y, HWND& h, LPARAM& lp) {
     if (!g_popup.open()) return false;
     POINT pt{TestPx(x), TestPx(y)};
@@ -132,7 +133,7 @@ bool TestPopupTarget(float x, float y, HWND& h, LPARAM& lp) {
             return true;
         }
     }
-    const PopupLevel& L = *g_popup.levels[0];  // afuera: lo recibe el menú (tiene la captura) y se cierra
+    const PopupLevel& L = *g_popup.levels[0];  // outside: the menu gets it (it has the capture) and closes
     h = L.hwnd;
     lp = MAKELPARAM(static_cast<short>(pt.x - L.rc.left), static_cast<short>(pt.y - L.rc.top));
     return true;
@@ -142,7 +143,7 @@ void TestMouse(const std::wstring& kind, const std::wstring& arg) {
     float x = 0, y = 0;
     int delta = 0;
     swscanf_s(arg.c_str(), L"%f %f %d", &x, &y, &delta);
-    Render();  // zonas clickeables al día
+    Render();  // clickable areas up to date
     HWND h = g_hwnd;
     LPARAM lp = MAKELPARAM(TestPx(x), TestPx(y));
     TestPopupTarget(x, y, h, lp);
@@ -150,15 +151,15 @@ void TestMouse(const std::wstring& kind, const std::wstring& arg) {
     if (kind == L"click") {
         SendMessageW(h, WM_LBUTTONDOWN, MK_LBUTTON, lp);
         SendMessageW(h, WM_LBUTTONUP, 0, lp);
-    } else if (kind == L"doble") {
+    } else if (kind == L"double") {
         SendMessageW(h, WM_LBUTTONDOWN, MK_LBUTTON, lp);
         SendMessageW(h, WM_LBUTTONUP, 0, lp);
         SendMessageW(h, WM_LBUTTONDBLCLK, MK_LBUTTON, lp);
         SendMessageW(h, WM_LBUTTONUP, 0, lp);
-    } else if (kind == L"derecho") {
+    } else if (kind == L"right") {
         SendMessageW(h, WM_RBUTTONDOWN, MK_RBUTTON, lp);
         SendMessageW(h, WM_RBUTTONUP, 0, lp);
-    } else if (kind == L"rueda") {
+    } else if (kind == L"wheel") {
         POINT pt{TestPx(x), TestPx(y)};
         ClientToScreen(g_hwnd, &pt);
         SendMessageW(g_hwnd, WM_MOUSEWHEEL, MAKEWPARAM(0, delta * WHEEL_DELTA), MAKELPARAM(pt.x, pt.y));
@@ -184,7 +185,7 @@ bool SaveBitmapPng(IWICBitmap* bmp, const std::wstring& file) {
 void TestCapture(const std::wstring& name) {
     Render();
     if (g_popup.open() && g_rt) {
-        // los menús emergentes se dibujan cada uno en su bitmap; se pegan encima en su lugar
+        // each popup menu draws into its own bitmap; they are pasted on top in place
         for (auto& L : g_popup.levels) DrawLevel(*L);
         g_rt->BeginDraw();
         for (auto& L : g_popup.levels) {
@@ -202,19 +203,19 @@ void TestCapture(const std::wstring& name) {
     }
     std::wstring f = g_testOut + L"\\" + name;
     bool ok = g_testBmp && SaveBitmapPng(g_testBmp.Get(), f);
-    TestLog((ok ? L"captura " : L"NO se pudo capturar ") + f);
+    TestLog((ok ? L"captured " : L"FAILED to capture ") + f);
 }
 
-// Lanzador: corre "jolt.exe --prueba guion" en un escritorio de Windows aparte y espera que termine.
+// Launcher: runs "jolt.exe --test script" on a separate Windows desktop and waits for it to finish.
 int TestOnHiddenDesktop(const std::wstring& script, const std::wstring& out) {
-    HDESK d = CreateDesktopW(L"JoltPrueba", nullptr, nullptr, 0, GENERIC_ALL, nullptr);
+    HDESK d = CreateDesktopW(L"JoltTest", nullptr, nullptr, 0, GENERIC_ALL, nullptr);
     if (!d) return 2;
     wchar_t exe[MAX_PATH];
     GetModuleFileNameW(nullptr, exe, MAX_PATH);
-    std::wstring cmd = L"\"" + std::wstring(exe) + L"\" --prueba \"" + script + L"\"";
-    if (!out.empty()) cmd += L" --salida \"" + out + L"\"";
+    std::wstring cmd = L"\"" + std::wstring(exe) + L"\" --test \"" + script + L"\"";
+    if (!out.empty()) cmd += L" --output \"" + out + L"\"";
     STARTUPINFOW si{sizeof(si)};
-    wchar_t desk[] = L"JoltPrueba";
+    wchar_t desk[] = L"JoltTest";
     si.lpDesktop = desk;
     PROCESS_INFORMATION pi{};
     if (!CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr, &si, &pi)) {
@@ -230,7 +231,7 @@ int TestOnHiddenDesktop(const std::wstring& script, const std::wstring& out) {
     return static_cast<int>(code);
 }
 
-// ---- ventanas de Windows
+// ---- Windows windows
 struct TestWinFind {
     std::wstring part;
     HWND found = nullptr;
@@ -245,7 +246,7 @@ BOOL CALLBACK TestEnumWin(HWND h, LPARAM lp) {
     if (c.list) c.list->push_back(std::wstring(title) + L"  [" + cls + L"]");
     if (!c.part.empty() && title[0] && Lower(title).find(c.part) != std::wstring::npos) {
         c.found = h;
-        return c.list != nullptr;  // al listar, seguir
+        return c.list != nullptr;  // when listing, keep going
     }
     return TRUE;
 }
@@ -277,11 +278,11 @@ void TestCaptureWindow(HWND h, const std::wstring& name) {
     DeleteObject(bm);
     DeleteDC(mdc);
     ReleaseDC(nullptr, sdc);
-    TestLog((ok ? L"captura de ventana " : L"NO se pudo capturar la ventana ") + name);
+    TestLog((ok ? L"captured window " : L"FAILED to capture window ") + name);
 }
 
-// Busca un control por nombre dentro de una ventana y lo "aprieta" (UI Automation, en otro hilo;
-// mientras tanto esta ventana sigue atendiendo mensajes, por si el control es nuestro).
+// Finds a control by name inside a window and "presses" it (UI Automation, on another thread;
+// meanwhile this window keeps handling messages, in case the control is ours).
 bool TestUiaInvoke(HWND top, const std::wstring& name) {
     bool ok = false;
     std::wstring found;
@@ -342,11 +343,11 @@ bool TestUiaInvoke(HWND top, const std::wstring& name) {
     }
     th.join();
     g_testBlocking = false;
-    TestLog(ok ? L"apretado: " + found : L"NO se encontró / no se pudo apretar: " + name);
+    TestLog(ok ? L"pressed: " + found : L"NOT found / could not press: " + name);
     return ok;
 }
 
-// ---- arrastrar y soltar
+// ---- drag and drop
 ComPtr<IDataObject> TestDataObjectForPaths(const std::wstring& list) {
     std::vector<PIDLIST_ABSOLUTE> pidls;
     std::wstring rest = list;
@@ -367,31 +368,31 @@ ComPtr<IDataObject> TestDataObjectForPaths(const std::wstring& list) {
 }
 
 DWORD TestDropKeys(const std::wstring& mode) {
-    if (mode == L"copiar") return MK_LBUTTON | MK_CONTROL;
-    if (mode == L"mover") return MK_LBUTTON | MK_SHIFT;
-    if (mode == L"vincular") return MK_LBUTTON | MK_CONTROL | MK_SHIFT;
+    if (mode == L"copy") return MK_LBUTTON | MK_CONTROL;
+    if (mode == L"move") return MK_LBUTTON | MK_SHIFT;
+    if (mode == L"link") return MK_LBUTTON | MK_CONTROL | MK_SHIFT;
     return MK_LBUTTON;
 }
 std::wstring EffectText(DWORD e) {
     std::wstring s;
-    if (e & DROPEFFECT_COPY) s += L"copiar ";
-    if (e & DROPEFFECT_MOVE) s += L"mover ";
-    if (e & DROPEFFECT_LINK) s += L"vincular ";
-    return s.empty() ? L"nada" : Trim(s);
+    if (e & DROPEFFECT_COPY) s += L"copy ";
+    if (e & DROPEFFECT_MOVE) s += L"move ";
+    if (e & DROPEFFECT_LINK) s += L"link ";
+    return s.empty() ? L"none" : Trim(s);
 }
 
-// arrastrar_sobre x y modo origen
+// drag_over x y mode source
 void TestDragOver(const std::wstring& arg) {
     float x = 0, y = 0;
     wchar_t mode[32] = {};
     int consumed = 0;
     swscanf_s(arg.c_str(), L"%f %f %31s %n", &x, &y, mode, 32, &consumed);
     std::wstring src = Trim(arg.substr(std::min<size_t>(consumed, arg.size())));
-    g_testDrag = Lower(src) == L"seleccion" ? SelectionDataObject() : TestDataObjectForPaths(src);
+    g_testDrag = Lower(src) == L"selection" ? SelectionDataObject() : TestDataObjectForPaths(src);
     g_dragFiles.clear();
-    if (Lower(src) == L"seleccion") g_dragFiles = SelectedFullPaths(T());
+    if (Lower(src) == L"selection") g_dragFiles = SelectedFullPaths(T());
     if (!g_testDrag) {
-        TestLog(L"arrastrar: no hay nada para arrastrar (" + src + L")");
+        TestLog(L"drag_over: nothing to drag (" + src + L")");
         return;
     }
     Render();
@@ -403,7 +404,7 @@ void TestDragOver(const std::wstring& arg) {
     g_dropTarget->DragEnter(g_testDrag.Get(), g_testDragKeys, g_testDragPt, &eff);
     eff = DROPEFFECT_COPY | DROPEFFECT_MOVE | DROPEFFECT_LINK;
     g_dropTarget->DragOver(g_testDragKeys, g_testDragPt, &eff);
-    TestLog(L"arrastrando sobre " + g_dropTarget->innerPath + L": ofrece " + EffectText(eff));
+    TestLog(L"dragging over " + g_dropTarget->innerPath + L": offers " + EffectText(eff));
 }
 
 void TestDrop() {
@@ -412,17 +413,17 @@ void TestDrop() {
     std::wstring where = g_dropTarget->innerPath;
     g_dropTarget->Drop(g_testDrag.Get(), g_testDragKeys, g_testDragPt, &eff);
     g_testDrag.Reset();
-    TestLog(L"soltado en " + where + L": " + EffectText(eff));
+    TestLog(L"dropped on " + where + L": " + EffectText(eff));
     RunPendingDrop();
 }
 
-// sacar carpeta modo: la selección de Jolt soltada en una carpeta "de otra app" (su IDropTarget del Shell)
+// drag_out folder mode: Jolt's selection dropped on a folder "from another app" (its Shell IDropTarget)
 void TestDragOut(const std::wstring& arg) {
     std::wstring a = Trim(arg), mode = L"normal";
     size_t sp = a.find_last_of(L' ');
     if (sp != std::wstring::npos) {
         std::wstring last = Lower(a.substr(sp + 1));
-        if (last == L"copiar" || last == L"mover" || last == L"vincular" || last == L"normal") {
+        if (last == L"copy" || last == L"move" || last == L"link" || last == L"normal") {
             mode = last;
             a = Trim(a.substr(0, sp));
         }
@@ -432,7 +433,7 @@ void TestDragOut(const std::wstring& arg) {
     ComPtr<IDropTarget> dt;
     if (!d || FAILED(SHCreateItemFromParsingName(a.c_str(), nullptr, IID_PPV_ARGS(&item))) ||
         FAILED(item->BindToHandler(nullptr, BHID_SFUIObject, IID_PPV_ARGS(&dt)))) {
-        TestLog(L"sacar: no se pudo preparar el arrastre a " + a);
+        TestLog(L"drag_out: could not prepare the drag to " + a);
         return;
     }
     DWORD keys = TestDropKeys(mode), eff = DROPEFFECT_COPY | DROPEFFECT_MOVE | DROPEFFECT_LINK;
@@ -441,7 +442,7 @@ void TestDragOut(const std::wstring& arg) {
     eff = DROPEFFECT_COPY | DROPEFFECT_MOVE | DROPEFFECT_LINK;
     dt->DragOver(keys, pt, &eff);
     dt->Drop(d.Get(), keys, pt, &eff);
-    TestLog(L"sacado a " + a + L": " + EffectText(eff));
+    TestLog(L"dragged out to " + a + L": " + EffectText(eff));
 }
 
 void TestActivate(bool on) {
@@ -453,71 +454,71 @@ void TestActivate(bool on) {
     g_testActive = on;
     SendMessageW(g_hwnd, WM_ACTIVATE, on ? WA_ACTIVE : WA_INACTIVE, 0);
     SendMessageW(g_hwnd, on ? WM_SETFOCUS : WM_KILLFOCUS, 0, 0);
-    TestLog(on ? L"ventana activa" : L"ventana inactiva");
+    TestLog(on ? L"window active" : L"window inactive");
 }
 
-// Ejecuta pasos hasta el próximo "esperar" (o uno solo, para dejar correr la cola de mensajes).
-// El próximo paso se programa ANTES de ejecutar este: si el paso abre algo modal (copiar con conflicto,
-// por ejemplo), el guion sigue corriendo adentro de esa espera y puede apretar sus botones.
+// Runs steps up to the next "wait" (or just one, to let the message queue run).
+// The next step is scheduled BEFORE running this one: if the step opens something modal (a copy with a conflict,
+// for example), the script keeps running inside that wait and can press its buttons.
 void TestRunStep() {
     while (g_testPos < g_testSteps.size()) {
         const TestStep s = g_testSteps[g_testPos++];
         UINT next = 40;
-        if (s.cmd == L"esperar") next = static_cast<UINT>(std::max(1, _wtoi(s.arg.c_str())));
-        if (s.cmd == L"eco") {
+        if (s.cmd == L"wait") next = static_cast<UINT>(std::max(1, _wtoi(s.arg.c_str())));
+        if (s.cmd == L"echo") {
             TestLog(s.arg);
             continue;
         }
-        if (s.cmd == L"salir") {
+        if (s.cmd == L"quit") {
             g_testPos = g_testSteps.size();
             continue;
         }
-        if (s.cmd == L"esperar_ventana") {
-            // se repite este mismo paso hasta que aparezca la ventana (o se acabe el tiempo)
+        if (s.cmd == L"wait_window") {
+            // this same step repeats until the window appears (or time runs out)
             auto [name, msTxt] = TestSplitBar(s.arg);
             if (g_testWaitUntil == 0) g_testWaitUntil = NowMs() + (msTxt.empty() ? 5000 : _wtoi(msTxt.c_str()));
             if (TestFindWindow(name)) {
-                TestLog(L"apareció: " + name);
+                TestLog(L"appeared: " + name);
                 g_testWaitUntil = 0;
             } else if (NowMs() < g_testWaitUntil) {
                 --g_testPos;
                 next = 50;
             } else {
-                TestLog(L"NO apareció: " + name);
+                TestLog(L"did NOT appear: " + name);
                 g_testWaitUntil = 0;
             }
             SetTimer(g_hwnd, kTimerTest, next, nullptr);
             return;
         }
         SetTimer(g_hwnd, kTimerTest, next, nullptr);
-        if (s.cmd == L"esperar") {
-        } else if (s.cmd == L"ventanas") {
+        if (s.cmd == L"wait") {
+        } else if (s.cmd == L"windows") {
             std::vector<std::wstring> list;
             TestWinFind c;
             c.list = &list;
             EnumWindows(TestEnumWin, reinterpret_cast<LPARAM>(&c));
-            TestLog(L"ventanas abiertas: " + std::to_wstring(list.size()));
+            TestLog(L"open windows: " + std::to_wstring(list.size()));
             for (auto& w : list) TestLog(L"  " + w);
-        } else if (s.cmd == L"captura_ventana") {
+        } else if (s.cmd == L"capture_window") {
             auto [name, file] = TestSplitBar(s.arg);
-            if (HWND h = TestFindWindow(name)) TestCaptureWindow(h, file.empty() ? L"ventana.png" : file);
-            else TestLog(L"captura_ventana: no está " + name);
-        } else if (s.cmd == L"boton") {
+            if (HWND h = TestFindWindow(name)) TestCaptureWindow(h, file.empty() ? L"window.png" : file);
+            else TestLog(L"capture_window: not found: " + name);
+        } else if (s.cmd == L"button") {
             auto [name, button] = TestSplitBar(s.arg);
             if (HWND h = TestFindWindow(name)) TestUiaInvoke(h, button);
-            else TestLog(L"boton: no está la ventana " + name);
-        } else if (s.cmd == L"cerrar_ventana") {
+            else TestLog(L"button: window not found: " + name);
+        } else if (s.cmd == L"close_window") {
             if (HWND h = TestFindWindow(s.arg)) PostMessageW(h, WM_CLOSE, 0, 0);
-            else TestLog(L"cerrar_ventana: no está " + s.arg);
-        } else if (s.cmd == L"existe") {
-            TestLog((PathExists(s.arg) ? L"existe: " : L"NO existe: ") + s.arg);
-        } else if (s.cmd == L"tocar") {
+            else TestLog(L"close_window: not found: " + s.arg);
+        } else if (s.cmd == L"exists") {
+            TestLog((PathExists(s.arg) ? L"exists: " : L"does NOT exist: ") + s.arg);
+        } else if (s.cmd == L"touch") {
             HANDLE h = CreateFileW(s.arg.c_str(), FILE_APPEND_DATA, FILE_SHARE_READ, nullptr, OPEN_ALWAYS, 0, nullptr);
             DWORD w = 0;
             if (h != INVALID_HANDLE_VALUE) WriteFile(h, "x", 1, &w, nullptr), CloseHandle(h);
-        } else if (s.cmd == L"mensaje") {
-            TestLog(L"mensaje: " + S.message);
-        } else if (s.cmd == L"medir") {
+        } else if (s.cmd == L"message") {
+            TestLog(L"message: " + S.message);
+        } else if (s.cmd == L"measure") {
             const int n = std::max(1, _wtoi(s.arg.c_str()));
             std::vector<double> ms;
             for (int i = 0; i < n; ++i) {
@@ -527,88 +528,100 @@ void TestRunStep() {
             }
             std::sort(ms.begin(), ms.end());
             wchar_t b[160];
-            swprintf(b, 160, L"medir: primer cuadro %.0f ms | cuadro mediana %.2f ms, p95 %.2f ms, max %.2f ms", g_firstFrameMs,
+            swprintf(b, 160, L"measure: first frame %.0f ms | median frame %.2f ms, p95 %.2f ms, max %.2f ms", g_firstFrameMs,
                      ms[ms.size() / 2], ms[ms.size() * 95 / 100], ms.back());
             TestLog(b);
             for (const auto& [what, at] : g_bootMarks) {
                 swprintf(b, 160, L"  %.0f ms: %s", at, what);
                 TestLog(b);
             }
-        } else if (s.cmd == L"atajo") {
+        } else if (s.cmd == L"hotkey") {
             SendMessageW(g_hwnd, WM_HOTKEY, kHotkeyId, 0);
-        } else if (s.cmd == L"alternar") {
+        } else if (s.cmd == L"usage") {
+            std::wstring all;
+            for (const HotItem& h : g_hot) all += L" | " + h.name + L" " + std::to_wstring(static_cast<int>(h.heat * 100));
+            TestLog(L"usage:" + all);
+        } else if (s.cmd == L"usage_set") {  // path | points | how many days ago
+            const size_t bar = s.arg.find(L'|'), bar2 = s.arg.find(L'|', bar + 1);
+            HeatAdd(Trim(s.arg.substr(0, bar)), _wtof(s.arg.c_str() + bar + 1), time(nullptr) - _wtoi(s.arg.c_str() + bar2 + 1) * 86400LL);
+            HeatRefresh();
+        } else if (s.cmd == L"favorites") {
+            std::wstring all;
+            for (const Favorite& v : g_favs) all += L" | " + v.name;
+            TestLog(L"favorites:" + all);
+        } else if (s.cmd == L"toggle") {
             COPYDATASTRUCT cd{2, sizeof(wchar_t), const_cast<wchar_t*>(L"")};
             SendMessageW(g_hwnd, WM_COPYDATA, 0, reinterpret_cast<LPARAM>(&cd));
-        } else if (s.cmd == L"abrir_ruta") {
+        } else if (s.cmd == L"open_path") {
             COPYDATASTRUCT cd{1, static_cast<DWORD>((s.arg.size() + 1) * sizeof(wchar_t)), const_cast<wchar_t*>(s.arg.c_str())};
             SendMessageW(g_hwnd, WM_COPYDATA, 0, reinterpret_cast<LPARAM>(&cd));
-        } else if (s.cmd == L"pestanas") {
+        } else if (s.cmd == L"tabs") {
             std::wstring all;
             for (auto& t : g_tabs) all += L" | " + t->path;
-            TestLog(L"pestanas:" + all + L" | activa " + T().path);
-        } else if (s.cmd == L"disco") {
-            g_cfg.openDrives = s.arg.find(L"si") != std::wstring::npos;
+            TestLog(L"tabs:" + all + L" | active " + T().path);
+        } else if (s.cmd == L"disk") {
+            g_cfg.openDrives = s.arg.find(L"yes") != std::wstring::npos;
             DEV_BROADCAST_VOLUME v{sizeof(v), DBT_DEVTYP_VOLUME, 0, 1u << (towupper(s.arg[0]) - L'A'), 0};
             SendMessageW(g_hwnd, WM_DEVICECHANGE, DBT_DEVICEARRIVAL, reinterpret_cast<LPARAM>(&v));
-        } else if (s.cmd == L"explorador") {
+        } else if (s.cmd == L"explorer") {
             int found = 0;
             for (HWND w = FindWindowW(L"CabinetWClass", nullptr); w; w = FindWindowExW(nullptr, w, L"CabinetWClass", nullptr)) {
-                TestLog(L"explorador: " + ExplorerFolder(w));
+                TestLog(L"explorer: " + ExplorerFolder(w));
                 ++found;
             }
-            TestLog(L"ventanas del explorador: " + std::to_wstring(found));
-        } else if (s.cmd == L"estado") {
-            TestLog(std::wstring(L"estado: instalado ") + (InstIsInstalled() ? L"si" : L"no") + L", path " + (InstInPath() ? L"si" : L"no") +
-                    L", predeterminado " + (InstIsDefault() ? L"si" : L"no") + L", inicio " + (InstStartsWithWindows() ? L"si" : L"no") +
-                    L", atajo " + (g_hotkeyOk ? L"si" : L"no") + L", visible " + (g_testShown ? L"si" : L"no"));
+            TestLog(L"explorer windows: " + std::to_wstring(found));
+        } else if (s.cmd == L"status") {
+            TestLog(std::wstring(L"status: installed ") + (InstIsInstalled() ? L"yes" : L"no") + L", path " + (InstInPath() ? L"yes" : L"no") +
+                    L", default " + (InstIsDefault() ? L"yes" : L"no") + L", startup " + (InstStartsWithWindows() ? L"yes" : L"no") +
+                    L", hotkey " + (g_hotkeyOk ? L"yes" : L"no") + L", visible " + (g_testShown ? L"yes" : L"no"));
         } else if (s.cmd == L"reg") {
             const size_t bar = s.arg.find(L'|');
             const std::wstring sub = Trim(s.arg.substr(0, bar)), name = bar == std::wstring::npos ? L"" : Trim(s.arg.substr(bar + 1));
             std::wstring v;
             const bool ok = RegRead(sub, name.empty() ? nullptr : name.c_str(), v);
-            TestLog(L"reg " + sub + L" [" + name + L"]: " + (ok ? v : L"(no existe)"));
-        } else if (s.cmd == L"regponer") {
+            TestLog(L"reg " + sub + L" [" + name + L"]: " + (ok ? v : L"(does not exist)"));
+        } else if (s.cmd == L"regset") {
             const size_t bar = s.arg.find(L'|');
             const size_t bar2 = s.arg.find(L'|', bar + 1);
             const std::wstring sub = Trim(s.arg.substr(0, bar)), name = Trim(s.arg.substr(bar + 1, bar2 - bar - 1)), val = Trim(s.arg.substr(bar2 + 1));
             RegWrite(sub, name.empty() ? nullptr : name.c_str(), val);
-        } else if (s.cmd == L"seleccion") {
+        } else if (s.cmd == L"selection") {
             std::wstring names;
             for (const auto& n : SelectedNames(T())) names += L" " + n;
-            TestLog(L"seleccion: " + std::to_wstring(SelCount(T())) + names + L" | cursor " + std::to_wstring(T().sel) +
+            TestLog(L"selection: " + std::to_wstring(SelCount(T())) + names + L" | cursor " + std::to_wstring(T().sel) +
                     L" scroll " + std::to_wstring(static_cast<int>(T().scroll)));
-        } else if (s.cmd == L"arrastrar_sobre") {
+        } else if (s.cmd == L"drag_over") {
             TestDragOver(s.arg);
-        } else if (s.cmd == L"soltar") {
+        } else if (s.cmd == L"drop") {
             TestDrop();
-        } else if (s.cmd == L"cancelar_arrastre") {
+        } else if (s.cmd == L"cancel_drag") {
             if (g_testDrag) g_dropTarget->DragLeave();
             g_testDrag.Reset();
-        } else if (s.cmd == L"sacar") {
+        } else if (s.cmd == L"drag_out") {
             TestDragOut(s.arg);
-        } else if (s.cmd == L"activar") {
+        } else if (s.cmd == L"activate") {
             TestActivate(Lower(Trim(s.arg)) != L"no");
-        } else if (s.cmd == L"ir") {
+        } else if (s.cmd == L"go") {
             Navigate(T(), Normalize(s.arg), true);
-        } else if (s.cmd == L"tecla") {
+        } else if (s.cmd == L"key") {
             TestKey(s.arg);
-        } else if (s.cmd == L"escribir") {
+        } else if (s.cmd == L"type") {
             for (wchar_t c : s.arg) SendMessageW(TestKeyTarget(), WM_CHAR, c, 1);
-        } else if (s.cmd == L"click" || s.cmd == L"doble" || s.cmd == L"derecho" || s.cmd == L"rueda") {
+        } else if (s.cmd == L"click" || s.cmd == L"double" || s.cmd == L"right" || s.cmd == L"wheel") {
             TestMouse(s.cmd, s.arg);
-        } else if (s.cmd == L"apretar" || s.cmd == L"arrastrar" || s.cmd == L"levantar") {
+        } else if (s.cmd == L"press" || s.cmd == L"drag" || s.cmd == L"release") {
             float x = 0, y = 0;
             swscanf_s(s.arg.c_str(), L"%f %f", &x, &y);
             Render();
             const LPARAM lp = MAKELPARAM(TestPx(x), TestPx(y));
-            if (s.cmd == L"apretar") SendMessageW(g_hwnd, WM_MOUSEMOVE, 0, lp);
-            SendMessageW(g_hwnd, s.cmd == L"apretar" ? WM_LBUTTONDOWN : s.cmd == L"arrastrar" ? WM_MOUSEMOVE : WM_LBUTTONUP,
-                         s.cmd == L"levantar" ? 0 : MK_LBUTTON, lp);
-        } else if (s.cmd == L"mantener") {
+            if (s.cmd == L"press") SendMessageW(g_hwnd, WM_MOUSEMOVE, 0, lp);
+            SendMessageW(g_hwnd, s.cmd == L"press" ? WM_LBUTTONDOWN : s.cmd == L"drag" ? WM_MOUSEMOVE : WM_LBUTTONUP,
+                         s.cmd == L"release" ? 0 : MK_LBUTTON, lp);
+        } else if (s.cmd == L"hold") {
             const std::wstring a = Lower(s.arg);
             g_testMods = (a.find(L"ctrl") != std::wstring::npos ? 1 : 0) | (a.find(L"shift") != std::wstring::npos ? 2 : 0) |
                          (a.find(L"alt") != std::wstring::npos ? 4 : 0);
-        } else if (s.cmd == L"mover") {
+        } else if (s.cmd == L"move") {
             float x = 0, y = 0;
             swscanf_s(s.arg.c_str(), L"%f %f", &x, &y);
             Render();
@@ -616,25 +629,25 @@ void TestRunStep() {
             LPARAM lp = MAKELPARAM(TestPx(x), TestPx(y));
             TestPopupTarget(x, y, h, lp);
             SendMessageW(h, WM_MOUSEMOVE, 0, lp);
-        } else if (s.cmd == L"comando") {
+        } else if (s.cmd == L"command") {
             bool found = false;
             for (const CmdDef& c : kCommands)
                 if (s.arg == c.name) {
                     RunCommand(c.cmd);
                     found = true;
                 }
-            if (!found) TestLog(L"comando desconocido: " + s.arg);
-        } else if (s.cmd == L"captura") {
-            TestCapture(s.arg.empty() ? L"captura.png" : s.arg);
-        } else if (s.cmd == L"tamano") {
+            if (!found) TestLog(L"unknown command: " + s.arg);
+        } else if (s.cmd == L"capture") {
+            TestCapture(s.arg.empty() ? L"capture.png" : s.arg);
+        } else if (s.cmd == L"size") {
             int w = 1100, h = 700;
             swscanf_s(s.arg.c_str(), L"%d %d", &w, &h);
             SetWindowPos(g_hwnd, nullptr, 0, 0, MulDiv(w, g_dpi, 96), MulDiv(h, g_dpi, 96), SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
         } else {
-            TestLog(L"paso desconocido: " + s.cmd);
+            TestLog(L"unknown step: " + s.cmd);
         }
         return;
     }
-    TestLog(L"fin");
+    TestLog(L"end");
     ExitProcess(0);
 }

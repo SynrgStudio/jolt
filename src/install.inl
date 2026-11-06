@@ -1,14 +1,15 @@
-// Instalación al estilo File Pilot: el mismo .exe es el instalador. Abierto desde otro lado ofrece copiarse a
-// %LOCALAPPDATA%\Jolt, y desde el panel se prenden y apagan el PATH, el explorador predeterminado y el inicio con Windows.
-// Todo es del usuario actual (HKCU): no pide permisos de administrador.
-// En el modo de prueba, el registro y las carpetas se redirigen: nunca se toca el sistema real.
+// File Pilot style install: the same .exe is the installer. Opened from elsewhere, it offers to copy itself to
+// %LOCALAPPDATA%\Jolt, and the panel turns PATH, the default file explorer and start with Windows on and off.
+// Everything belongs to the current user (HKCU): it does not ask for admin rights.
+// In test mode, the registry and folders are redirected: the real system is never touched.
 
 constexpr wchar_t kRegUninstall[] = L"Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Jolt";
 constexpr wchar_t kRegRun[] = L"Software\\Microsoft\\Windows\\CurrentVersion\\Run";
+// This key and the value names under it stay in Spanish: existing installs wrote them and need them to restore.
 constexpr wchar_t kRegBackup[] = L"Software\\Jolt\\Anterior";
 constexpr wchar_t kRegEnv[] = L"Environment";
 const wchar_t* const kFolderClasses[] = {L"Directory", L"Drive"};
-// Win+E no pasa por Directory ni Drive: Windows abre este objeto, el de la vista de inicio del Explorador.
+// Win+E does not go through Directory or Drive: Windows opens this object, File Explorer's home view.
 constexpr wchar_t kRegWinE[] = L"Software\\Classes\\CLSID\\{52205fd8-5dfb-447d-801a-d0b52f2e83e1}";
 
 std::wstring ExePath() {
@@ -17,7 +18,7 @@ std::wstring ExePath() {
     return p;
 }
 
-std::wstring RegKey(const std::wstring& sub) { return g_test ? L"Software\\JoltPrueba\\" + sub : sub; }
+std::wstring RegKey(const std::wstring& sub) { return g_test ? L"Software\\JoltTest\\" + sub : sub; }
 
 bool RegRead(const std::wstring& sub, const wchar_t* name, std::wstring& out, DWORD* type = nullptr) {
     const std::wstring k = RegKey(sub);
@@ -52,13 +53,13 @@ void RegRemoveValue(const std::wstring& sub, const wchar_t* name) {
 }
 
 void RegRemoveTree(const std::wstring& sub) { RegDeleteTreeW(HKEY_CURRENT_USER, RegKey(sub).c_str()); }
-void RegRemoveIfEmpty(const std::wstring& sub) { RegDeleteKeyW(HKEY_CURRENT_USER, RegKey(sub).c_str()); }  // con subclaves, falla y queda
+void RegRemoveIfEmpty(const std::wstring& sub) { RegDeleteKeyW(HKEY_CURRENT_USER, RegKey(sub).c_str()); }  // with subkeys, it fails and stays
 
 std::wstring InstDir() {
     if (g_test) {
         wchar_t tmp[MAX_PATH];
         GetTempPathW(MAX_PATH, tmp);
-        return std::wstring(tmp) + L"jolt-prueba\\instalado";
+        return std::wstring(tmp) + L"jolt-test\\installed";
     }
     return LocalDataDir();
 }
@@ -76,7 +77,7 @@ std::wstring InstShortcut() {
 bool InstIsInstalled() { return PathExists(InstExe()); }
 bool InstRunningInstalled() { return Key(ExePath()) == Key(InstExe()); }
 
-// ¿Este ejecutable es distinto del instalado?
+// Does this executable differ from the installed one?
 bool InstDiffers() {
     if (!InstIsInstalled() || InstRunningInstalled()) return false;
     WIN32_FILE_ATTRIBUTE_DATA a{}, b{};
@@ -85,14 +86,14 @@ bool InstDiffers() {
     return a.nFileSizeLow != b.nFileSizeLow || CompareFileTime(&a.ftLastWriteTime, &b.ftLastWriteTime) != 0;
 }
 
-// Las compilaciones de desarrollo llevan "jolt.dev" al lado: no ofrecen instalarse solas.
+// Development builds have "jolt.dev" next to them: they do not offer to install themselves.
 bool InstShouldOffer() {
     const std::wstring exe = ExePath();
     if (InstRunningInstalled() || PathExists(exe.substr(0, exe.find_last_of(L'\\')) + L"\\jolt.dev")) return false;
     return !InstIsInstalled() || InstDiffers();
 }
 
-// ---- PATH del usuario
+// ---- user PATH
 
 void InstEnvChanged() {
     if (g_test) return;
@@ -137,12 +138,13 @@ void InstSetPath(bool on) {
     InstEnvChanged();
 }
 
-// ---- explorador predeterminado
+// ---- default file explorer
 
 std::wstring InstOpenCommand() { return L"\"" + InstExe() + L"\" \"%1\""; }
 std::wstring InstClassShell(const wchar_t* cls) { return std::wstring(L"Software\\Classes\\") + cls + L"\\shell"; }
 std::wstring InstWinEVerb() { return std::wstring(kRegWinE) + L"\\shell\\opennewwindow"; }
-std::wstring InstWinECommand() { return L"\"" + InstExe() + L"\" --alternar"; }
+std::wstring InstWinECommand() { return L"\"" + InstExe() + L"\" --toggle"; }
+std::wstring InstWinECommandOld() { return L"\"" + InstExe() + L"\" --alternar"; }
 
 bool InstIsDefault() {
     for (const wchar_t* cls : kFolderClasses) {
@@ -150,10 +152,10 @@ bool InstIsDefault() {
         if (!RegRead(InstClassShell(cls) + L"\\open\\command", nullptr, cmd) || Key(cmd) != Key(InstOpenCommand())) return false;
     }
     std::wstring cmd;
-    return RegRead(InstWinEVerb() + L"\\command", nullptr, cmd) && Key(cmd) == Key(InstWinECommand());
+    return RegRead(InstWinEVerb() + L"\\command", nullptr, cmd) && (Key(cmd) == Key(InstWinECommand()) || Key(cmd) == Key(InstWinECommandOld()));
 }
 
-// DelegateExecute vacío hace que Windows use este comando y no el manejador propio del Explorador.
+// An empty DelegateExecute makes Windows use this command instead of File Explorer's own handler.
 void InstSetWinE(bool on) {
     const std::wstring verb = InstWinEVerb(), command = verb + L"\\command";
     std::wstring v;
@@ -182,7 +184,7 @@ void InstSetWinE(bool on) {
     RegRemoveValue(kRegBackup, L"WinE.delegado");
 }
 
-// Antes de pisar nada se guarda lo que había, una sola vez: al apagar la opción vuelve exactamente eso.
+// Before overwriting anything, what was there is saved, only once: turning the option off restores exactly that.
 void InstSetDefault(bool on) {
     for (const wchar_t* cls : kFolderClasses) {
         const std::wstring shell = InstClassShell(cls), command = shell + L"\\open\\command", c = cls;
@@ -211,7 +213,7 @@ void InstSetDefault(bool on) {
     if (!g_test) SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, nullptr, nullptr);
 }
 
-// ---- inicio con Windows
+// ---- start with Windows
 
 bool InstStartsWithWindows() {
     std::wstring v;
@@ -219,22 +221,22 @@ bool InstStartsWithWindows() {
 }
 
 void InstSetStartup(bool on) {
-    if (on) RegWrite(kRegRun, L"Jolt", L"\"" + InstExe() + L"\" --oculto");
+    if (on) RegWrite(kRegRun, L"Jolt", L"\"" + InstExe() + L"\" --hidden");
     else RegRemoveValue(kRegRun, L"Jolt");
 }
 
-// ---- instalar y desinstalar
+// ---- install and uninstall
 
 bool InstMakeShortcut() {
     ComPtr<IShellLinkW> link;
     ComPtr<IPersistFile> file;
     if (FAILED(CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&link)))) return false;
     link->SetPath(InstExe().c_str());
-    link->SetDescription(L"Explorador de archivos");
+    link->SetDescription(L"File explorer");
     return SUCCEEDED(link.As(&file)) && SUCCEEDED(file->Save(InstShortcut().c_str(), TRUE));
 }
 
-// Copia este ejecutable a la carpeta de instalación. Si ya hay uno, lo reemplaza.
+// Copies this executable to the install folder. If there is one already, replaces it.
 bool InstInstall() {
     const std::wstring exe = InstExe(), tmp = exe + L".tmp";
     CreateDirectoryW(InstDir().c_str(), nullptr);
@@ -247,14 +249,14 @@ bool InstInstall() {
     RegWrite(kRegUninstall, L"Publisher", L"Jolt");
     RegWrite(kRegUninstall, L"InstallLocation", InstDir());
     RegWrite(kRegUninstall, L"DisplayIcon", exe);
-    RegWrite(kRegUninstall, L"UninstallString", L"\"" + exe + L"\" --desinstalar");
+    RegWrite(kRegUninstall, L"UninstallString", L"\"" + exe + L"\" --uninstall");
     RegWriteDword(kRegUninstall, L"NoModify", 1);
     RegWriteDword(kRegUninstall, L"NoRepair", 1);
     return true;
 }
 
-// Deshace todo. El ejecutable en uso no se puede borrar: lo borra un proceso aparte un momento después.
-// Los datos del usuario (configuración, favoritos, índices) quedan.
+// Undoes everything. The running executable cannot be deleted: a separate process deletes it a moment later.
+// The user's data (settings, favorites, indexes) stays.
 void InstUninstall() {
     InstSetDefault(false);
     InstSetPath(false);
@@ -316,9 +318,9 @@ void DrawInstallPanel(float W, float H) {
     Color(0xFFB23A);
     Glyph(0xE945, g_fmtIcon.Get(), x + 20, y + 16, x + 44, y + 44);
     Color(cText);
-    Text(L"Instalación de Jolt", g_fmtName.Get(), x + 50, y + 12, x + kW - 20, y + 32);
+    Text(L"Install Jolt", g_fmtName.Get(), x + 50, y + 12, x + kW - 20, y + 32);
     Color(cDim);
-    Text(installed ? (InstRunningInstalled() ? L"Instalado en tu carpeta de usuario" : L"Ya hay un Jolt instalado") : L"Sin permisos de administrador: es solo para tu usuario",
+    Text(installed ? (InstRunningInstalled() ? L"Installed in your user folder" : L"Jolt is already installed") : L"No admin rights needed: it is just for your user",
          g_fmtName.Get(), x + 50, y + 30, x + kW - 20, y + 50);
 
     auto row = [&](int i, const wchar_t* title, const wchar_t* help, bool on, InstK k, bool enabled) {
@@ -327,7 +329,7 @@ void DrawInstallPanel(float W, float H) {
         Color(cText, a);
         Text(title, g_fmtName.Get(), x + 20, ry + 10, x + kW - 90, ry + 30);
         Color(cDim, a);
-        Text(enabled ? help : L"Primero instalá Jolt", g_fmtName.Get(), x + 20, ry + 29, x + kW - 90, ry + 49);
+        Text(enabled ? help : L"Install Jolt first", g_fmtName.Get(), x + 20, ry + 29, x + kW - 90, ry + 49);
         const D2D1_RECT_F t = D2D1::RectF(x + kW - 62, ry + 19, x + kW - 20, ry + 41);
         Round(t, 11, on ? cAccent : 0xFFFFFF, on ? a : 0.12f * a);
         const float kx = on ? t.right - 19 : t.left + 3;
@@ -339,9 +341,9 @@ void DrawInstallPanel(float W, float H) {
         const bool update = InstDiffers();
         Fill(D2D1::RectF(x + 20, ry, x + kW - 20, ry + 1), cBorder);
         Color(cText);
-        Text(L"Instalar", g_fmtName.Get(), x + 20, ry + 10, x + kW - 130, ry + 30);
+        Text(L"Install", g_fmtName.Get(), x + 20, ry + 10, x + kW - 130, ry + 30);
         Color(cDim);
-        Text(update ? L"Este archivo es distinto del instalado" : L"Copia Jolt a tu usuario y lo suma al menú Inicio", g_fmtName.Get(), x + 20, ry + 29,
+        Text(update ? L"This file differs from the installed one" : L"Copies Jolt to your user and adds it to Start", g_fmtName.Get(), x + 20, ry + 29,
              x + kW - 130, ry + 49);
         const bool can = !InstRunningInstalled() && (!installed || update);
         const D2D1_RECT_F b = D2D1::RectF(x + kW - 118, ry + 15, x + kW - 20, ry + 45);
@@ -352,11 +354,11 @@ void DrawInstallPanel(float W, float H) {
         } else {
             Color(cDim);
         }
-        Text(can ? (update ? L"Actualizar" : L"Instalar") : L"Instalado", g_fmtCenter.Get(), b.left, b.top, b.right, b.bottom);
+        Text(can ? (update ? L"Update" : L"Install") : L"Installed", g_fmtCenter.Get(), b.left, b.top, b.right, b.bottom);
     }
-    row(1, L"Agregar al PATH", L"Para abrirlo desde la terminal escribiendo jolt", installed && InstInPath(), InstK::Path, installed);
-    row(2, L"Explorador predeterminado", L"Las carpetas se abren con Jolt; se puede volver atrás", installed && InstIsDefault(), InstK::Default, installed);
-    row(3, L"Iniciar con Windows", L"Arranca escondido, listo para el atajo", installed && InstStartsWithWindows(), InstK::Startup, installed);
+    row(1, L"Add to PATH", L"To open it from the terminal by typing jolt", installed && InstInPath(), InstK::Path, installed);
+    row(2, L"Default file explorer", L"Folders open with Jolt; this can be undone", installed && InstIsDefault(), InstK::Default, installed);
+    row(3, L"Start with Windows", L"Starts hidden, ready for the shortcut", installed && InstStartsWithWindows(), InstK::Startup, installed);
 
     const float fy = y + kHead + 4 * kRowH;
     Fill(D2D1::RectF(x + 20, fy, x + kW - 20, fy + 1), cBorder);
@@ -367,13 +369,13 @@ void DrawInstallPanel(float W, float H) {
         const D2D1_RECT_F u = D2D1::RectF(x + 12, fy + 12, x + 104, fy + 40);
         if (g_inst.hover == InstK::Uninstall) Round(u, 7, 0xFFFFFF, 0.06f);
         Color(cDim);
-        Text(L"Desinstalar", g_fmtCenter.Get(), u.left, u.top, u.right, u.bottom);
+        Text(L"Uninstall", g_fmtCenter.Get(), u.left, u.top, u.right, u.bottom);
         g_inst.hits.push_back({u, InstK::Uninstall});
     }
     const D2D1_RECT_F c = D2D1::RectF(x + kW - 104, fy + 12, x + kW - 20, fy + 40);
     Round(c, 7, 0xFFFFFF, g_inst.hover == InstK::Close ? 0.14f : 0.08f);
     Color(cText);
-    Text(L"Cerrar", g_fmtCenter.Get(), c.left, c.top, c.right, c.bottom);
+    Text(L"Close", g_fmtCenter.Get(), c.left, c.top, c.right, c.bottom);
     g_inst.hits.push_back({c, InstK::Close});
 }
 
@@ -396,11 +398,11 @@ void InstClick(float x, float y) {
     switch (InstHitAt(x, y)) {
         case InstK::Install:
             if (!InstInstall()) {
-                g_inst.note = L"No se pudo copiar el ejecutable";
+                g_inst.note = L"Could not copy the executable";
             } else if (g_test) {
-                g_inst.note = L"Instalado";
+                g_inst.note = L"Installed";
             } else {
-                g_relaunch = InstExe();  // sigue desde el instalado, con el panel abierto
+                g_relaunch = InstExe();  // continues from the installed copy, with the panel open
                 g_relaunchArgs = L"--panel";
                 BgQuit();
             }
@@ -409,9 +411,9 @@ void InstClick(float x, float y) {
         case InstK::Default: InstSetDefault(!InstIsDefault()); break;
         case InstK::Startup: InstSetStartup(!InstStartsWithWindows()); break;
         case InstK::Uninstall:
-            if (g_test || MessageBoxW(g_hwnd, L"¿Desinstalar Jolt? Tu configuración y tus favoritos quedan guardados.", L"Jolt", MB_YESNO | MB_ICONQUESTION) == IDYES) {
+            if (g_test || MessageBoxW(g_hwnd, L"Uninstall Jolt? Your settings and favorites will be kept.", L"Jolt", MB_YESNO | MB_ICONQUESTION) == IDYES) {
                 InstUninstall();
-                if (g_test) g_inst.note = L"Desinstalado";
+                if (g_test) g_inst.note = L"Uninstalled";
                 else BgQuit();
             }
             break;
@@ -421,9 +423,9 @@ void InstClick(float x, float y) {
     Invalidate();
 }
 
-// "jolt.exe --desinstalar", desde Aplicaciones instaladas de Windows.
+// "jolt.exe --uninstall", from Windows Installed apps.
 void InstUninstallMain() {
-    if (MessageBoxW(nullptr, L"¿Desinstalar Jolt? Tu configuración y tus favoritos quedan guardados.", L"Jolt", MB_YESNO | MB_ICONQUESTION) != IDYES) return;
+    if (MessageBoxW(nullptr, L"Uninstall Jolt? Your settings and favorites will be kept.", L"Jolt", MB_YESNO | MB_ICONQUESTION) != IDYES) return;
     BgSendQuit();
     InstUninstall();
 }

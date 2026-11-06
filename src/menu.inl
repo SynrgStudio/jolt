@@ -1,8 +1,8 @@
-// Menús emergentes propios, menú contextual del Shell y su editor.
-// Se incluye desde app.cpp (dentro del namespace anónimo) para compartir el dibujo.
+// Custom popup menus, the Shell context menu and its editor.
+// Included from app.cpp (inside the anonymous namespace) to share the drawing code.
 
-// ================================================================ dibujo en otra ventana
-// Los helpers de dibujo usan g_rt/g_brush; para dibujar en un popup se intercambian por un rato.
+// ================================================================ drawing in another window
+// The drawing helpers use g_rt/g_brush; to draw in a popup they are swapped for a while.
 struct TargetScope {
     ComPtr<ID2D1RenderTarget> rt;
     ComPtr<ID2D1SolidColorBrush> br;
@@ -32,10 +32,10 @@ bool CreateTargetFor(HWND hwnd, ComPtr<ID2D1HwndRenderTarget>& rt, ComPtr<ID2D1S
     return true;
 }
 
-// HBITMAP (de un HMENU) -> bitmap Direct2D para el render target actual.
+// HBITMAP (from an HMENU) -> Direct2D bitmap for the current render target.
 ComPtr<ID2D1Bitmap> BitmapFromHBitmap(HBITMAP hbm) {
     ComPtr<ID2D1Bitmap> out;
-    if (!hbm || reinterpret_cast<ULONG_PTR>(hbm) <= 11) return out;  // HBMMENU_* no son bitmaps reales
+    if (!hbm || reinterpret_cast<ULONG_PTR>(hbm) <= 11) return out;  // HBMMENU_* are not real bitmaps
     BITMAP bm{};
     GetObjectW(hbm, sizeof(bm), &bm);
     ComPtr<IWICBitmap> wb;
@@ -52,15 +52,15 @@ ComPtr<ID2D1Bitmap> BitmapFromHBitmap(HBITMAP hbm) {
     return out;
 }
 
-// ================================================================ menú emergente
+// ================================================================ popup menu
 struct MenuItem {
     std::wstring text, shortcut, key;
-    UINT id = 0;  // 0 = sin acción
+    UINT id = 0;  // 0 = no action
     bool sep = false, enabled = true, checked = false, bold = false;
-    HMENU hsub = nullptr;        // submenú del Shell (se lee al abrirlo)
-    std::vector<MenuItem> sub;   // submenú propio
-    HBITMAP hbm = nullptr;       // icono (lo posee el HMENU o el ShellMenu)
-    bool ownerDrawn = false;     // hbm es la fila entera, dibujada por la extensión
+    HMENU hsub = nullptr;        // Shell submenu (read when opened)
+    std::vector<MenuItem> sub;   // own submenu
+    HBITMAP hbm = nullptr;       // icon (owned by the HMENU or the ShellMenu)
+    bool ownerDrawn = false;     // hbm is the whole row, drawn by the extension
     bool hasSub() const { return hsub != nullptr || !sub.empty(); }
 };
 
@@ -69,11 +69,11 @@ constexpr float kMenuRow = 26.f, kMenuSep = 9.f, kMenuPad = 6.f, kMenuIconX = 12
 struct PopupLevel {
     HWND hwnd = nullptr;
     ComPtr<ID2D1RenderTarget> rt;
-    ComPtr<IWICBitmap> wic;  // modo de prueba: el menú se dibuja en un bitmap
+    ComPtr<IWICBitmap> wic;  // test mode: the menu is drawn into a bitmap
     ComPtr<ID2D1SolidColorBrush> brush;
     std::vector<MenuItem> items;
     int hover = -1;
-    int openSub = -1;  // ítem cuyo submenú está abierto
+    int openSub = -1;  // item whose submenu is open
     RECT rc{};
     std::unordered_map<HBITMAP, ComPtr<ID2D1Bitmap>> bmps;
 };
@@ -257,7 +257,7 @@ void PopupShowLevel(std::vector<MenuItem> items, const RECT& anchor, bool isSub)
         if (x + pw > wa.right && !g_test) x = std::max<LONG>(wa.left, anchor.left - pw);
         if (y + ph > wa.bottom && !g_test) y = std::max<LONG>(wa.top, anchor.top - ph);
     }
-    if (!g_test) {  // en las pruebas la ventana está fuera de la pantalla: el menú se queda junto a ella
+    if (!g_test) {  // in tests the window is off screen: the menu stays next to it
         if (y + ph > wa.bottom) y = std::max(static_cast<int>(wa.top), static_cast<int>(wa.bottom) - ph);
         if (x < wa.left) x = wa.left;
     }
@@ -295,7 +295,7 @@ void PopupOpenSub(int level, int item) {
     PopupShowLevel(std::move(items), anchor, true);
 }
 
-// Devuelve el nivel bajo el punto de pantalla (el más profundo primero), o -1.
+// Returns the level under the screen point (deepest first), or -1.
 int PopupLevelAt(POINT pt) {
     for (int i = static_cast<int>(g_popup.levels.size()) - 1; i >= 0; --i)
         if (PtInRect(&g_popup.levels[i]->rc, pt)) return i;
@@ -374,7 +374,7 @@ LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             POINT pt{GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
             ClientToScreen(hwnd, &pt);
             static POINT last{LONG_MIN, LONG_MIN};
-            if (pt.x == last.x && pt.y == last.y) return 0;  // el cursor no se movió: no pisar el hover del teclado
+            if (pt.x == last.x && pt.y == last.y) return 0;  // the cursor did not move: do not overwrite the keyboard hover
             last = pt;
             int li = PopupLevelAt(pt);
             for (int i = 0; i < static_cast<int>(g_popup.levels.size()); ++i) {
@@ -388,7 +388,7 @@ LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             }
             if (li >= 0) {
                 PopupLevel& L = *g_popup.levels[li];
-                // abrir el submenú del ítem bajo el cursor (o cerrar el que estaba) con una pequeña demora
+                // open the submenu of the item under the cursor (or close the previous one) after a short delay
                 if (L.hover >= 0 && L.hover != L.openSub) {
                     g_popup.pendingLevel = li;
                     g_popup.pendingItem = L.hover;
@@ -417,7 +417,7 @@ LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case WM_RBUTTONDOWN: {
             POINT pt{GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
             ClientToScreen(hwnd, &pt);
-            if (PopupLevelAt(pt) < 0) PopupClose();  // click afuera: se cierra y el click no pasa
+            if (PopupLevelAt(pt) < 0) PopupClose();  // click outside: it closes and the click does not pass through
             return 0;
         }
         case WM_LBUTTONUP:
@@ -449,8 +449,8 @@ void RegisterPopupClass(HINSTANCE inst) {
     RegisterClassExW(&wc);
 }
 
-// ================================================================ menú contextual del Shell
-constexpr UINT kCmdFirst = 1, kCmdLast = 0x6FFF;
+// ================================================================ Shell context menu
+constexpr UINT kCmdFirst = 1, kCmdLast = 0x6FFF, kCmdFav = 0x7000;
 
 struct ShellMenu {
     ComPtr<IShellFolder> psf;
@@ -458,8 +458,9 @@ struct ShellMenu {
     ComPtr<IContextMenu2> cm2;
     ComPtr<IContextMenu3> cm3;
     HMENU hmenu = nullptr;
+    std::wstring folder;  // what the chosen command starts in
     std::vector<PIDLIST_RELATIVE> pidls;
-    std::vector<HBITMAP> ownBitmaps;  // filas dibujadas por extensiones (owner-draw)
+    std::vector<HBITMAP> ownBitmaps;  // rows drawn by extensions (owner-draw)
     ~ShellMenu() {
         if (hmenu) DestroyMenu(hmenu);
         for (auto p : pidls) CoTaskMemFree(p);
@@ -486,11 +487,12 @@ bool BindFolder(const std::wstring& path, ComPtr<IShellFolder>& psf) {
     return SUCCEEDED(hr) && psf;
 }
 
-// names vacío = menú del fondo de la carpeta.
+// empty names = the folder background menu.
 std::unique_ptr<ShellMenu> CreateShellMenu(const std::wstring& folder, const std::vector<std::wstring>& names,
                                            bool extended) {
     auto m = std::make_unique<ShellMenu>();
     if (!BindFolder(folder, m->psf)) return nullptr;
+    m->folder = folder;
     if (names.empty()) {
         m->psf->CreateViewObject(g_hwnd, IID_PPV_ARGS(&m->cm));
     } else {
@@ -522,6 +524,7 @@ void ShellInvoke(ShellMenu& m, UINT id, POINT pt) {
     ici.hwnd = g_hwnd;
     ici.lpVerb = MAKEINTRESOURCEA(id - kCmdFirst);
     ici.lpVerbW = MAKEINTRESOURCEW(id - kCmdFirst);
+    ici.lpDirectoryW = m.folder.c_str();
     ici.nShow = SW_SHOWNORMAL;
     ici.ptInvoke = pt;
     m.cm->InvokeCommand(reinterpret_cast<CMINVOKECOMMANDINFO*>(&ici));
@@ -542,7 +545,7 @@ std::wstring StripAmp(const std::wstring& s) {
     return out;
 }
 
-// Extensiones que dibujan sus ítems a mano (p. ej. "Enviar a"): se les pide que dibujen en un bitmap nuestro.
+// Extensions that draw their items by hand (e.g. "Send to"): they are asked to draw into a bitmap of ours.
 HBITMAP RenderOwnerDrawn(ShellMenu& m, HMENU hmenu, UINT id, ULONG_PTR data) {
     if (!m.cm2 && !m.cm3) return nullptr;
     MEASUREITEMSTRUCT mis{};
@@ -617,7 +620,7 @@ std::vector<MenuItem> ReadMenu(ShellMenu& m, HMENU h) {
         if ((mii.fType & MFT_OWNERDRAW) && !it.sep) {
             it.ownerDrawn = true;
             it.hbm = RenderOwnerDrawn(m, h, mii.wID, mii.dwItemData);
-            if (!it.hbm) it.text = L"(elemento sin nombre)";
+            if (!it.hbm) it.text = L"(unnamed item)";
         }
         if (!it.sep && !it.hsub && mii.wID >= kCmdFirst && mii.wID <= kCmdLast) {
             wchar_t verb[128] = {};
@@ -627,10 +630,10 @@ std::vector<MenuItem> ReadMenu(ShellMenu& m, HMENU h) {
                 it.key = Lower(verb);
         }
         if (it.key.empty()) it.key = it.sep ? L"---" : Lower(it.text);
-        if (it.key == L"rename") continue;  // todavía no renombramos en la lista; después va el nuestro
+        if (it.key == L"rename") continue;  // we do not rename in the list yet; ours goes here later
         out.push_back(std::move(it));
     }
-    // sin separadores al principio, al final ni repetidos
+    // no separators at the start, at the end, or repeated
     std::vector<MenuItem> clean;
     for (auto& it : out) {
         if (it.sep && (clean.empty() || clean.back().sep)) continue;
@@ -640,9 +643,9 @@ std::vector<MenuItem> ReadMenu(ShellMenu& m, HMENU h) {
     return clean;
 }
 
-// ================================================================ configuración del menú
-// %APPDATA%\Jolt\menu.txt: secciones [fondo] [archivo] [carpeta]; una opción por línea en el
-// orden deseado; "-" adelante = oculta; "---" = separador. Lo que no figura va al final.
+// ================================================================ menu settings
+// %APPDATA%\Jolt\menu.txt: sections [background] [file] [folder]; one option per line in the
+// desired order; "-" in front = hidden; "---" = separator. Anything not listed goes at the end.
 struct MenuCfgItem {
     std::wstring key;
     bool visible;
@@ -684,10 +687,10 @@ void LoadMenuCfg() {
 
 void SaveMenuCfg() {
     std::ofstream out(MenuCfgFile(), std::ios::binary);
-    out << "# Menu contextual de Jolt. Secciones: [fondo] [archivo] [carpeta].\n"
-           "# Una opcion por linea, en el orden en que aparecen. \"-\" adelante = oculta. \"---\" = separador.\n"
-           "# Lo que no figure aca se agrega al final, en el orden que lo da Windows.\n";
-    for (const wchar_t* ctx : {L"fondo", L"archivo", L"carpeta"}) {
+    out << "# Jolt context menu. Sections: [background] [file] [folder].\n"
+           "# One option per line, in the order they appear. \"-\" in front = hidden. \"---\" = separator.\n"
+           "# Anything not listed here is added at the end, in the order Windows gives it.\n";
+    for (const wchar_t* ctx : {L"background", L"file", L"folder"}) {
         auto it = g_menuCfg.find(ctx);
         if (it == g_menuCfg.end()) continue;
         out << "\n[" << Utf8(ctx) << "]\n";
@@ -695,8 +698,8 @@ void SaveMenuCfg() {
     }
 }
 
-// Ordena/filtra según la configuración. Con includeHidden=true devuelve todo (para el editor),
-// marcando lo oculto como deshabilitado.
+// Sorts/filters according to the settings. With includeHidden=true returns everything (for the editor),
+// marking hidden items as disabled.
 std::vector<MenuItem> ApplyMenuCfg(const std::wstring& ctx, std::vector<MenuItem> raw, bool includeHidden,
                                    std::vector<bool>* visibleOut = nullptr) {
     if (!g_menuCfgLoaded) LoadMenuCfg();
@@ -755,14 +758,14 @@ std::vector<MenuItem> ApplyMenuCfg(const std::wstring& ctx, std::vector<MenuItem
     return out;
 }
 
-// ================================================================ abrir menús desde la app
-// Ejecuta un verbo del Shell ("copy", "cut", "paste", "delete"…) sobre nombres de la carpeta
-// actual; con names vacío actúa sobre la carpeta misma (p. ej. "paste").
+// ================================================================ opening menus from the app
+// Runs a Shell verb ("copy", "cut", "paste", "delete"…) on names in the current
+// folder; with empty names it acts on the folder itself (e.g. "paste").
 bool ShellVerb(const std::vector<std::wstring>& names, const char* verb) {
     Tab& t = T();
     if (!t.list || t.list->error) return false;
     if (t.path.empty() && names.empty()) return false;
-    if (names.empty() && strcmp(verb, "paste") != 0) return false;  // nada seleccionado: nada que hacer
+    if (names.empty() && strcmp(verb, "paste") != 0) return false;  // nothing selected: nothing to do
     auto m = CreateShellMenu(names.empty() ? t.path : SelDir(t), names, false);
     if (!m) return false;
     CMINVOKECOMMANDINFOEX ici{};
@@ -773,11 +776,11 @@ bool ShellVerb(const std::vector<std::wstring>& names, const char* verb) {
     ici.lpVerb = verb;
     ici.nShow = SW_SHOWNORMAL;
     HRESULT hr = m->cm->InvokeCommand(reinterpret_cast<CMINVOKECOMMANDINFO*>(&ici));
-    g_shellMenu = std::move(m);  // algunos handlers siguen trabajando después de volver
+    g_shellMenu = std::move(m);  // some handlers keep working after returning
     return SUCCEEDED(hr);
 }
 
-// ---- portapapeles compatible con el Explorador: CF_HDROP + "Preferred DropEffect"
+// ---- clipboard compatible with File Explorer: CF_HDROP + "Preferred DropEffect"
 bool ClipboardSetFiles(const std::vector<std::wstring>& fullPaths, bool cut) {
     if (fullPaths.empty()) return false;
     size_t chars = 1;
@@ -813,8 +816,8 @@ bool ClipboardSetFiles(const std::vector<std::wstring>& fullPaths, bool cut) {
     return true;
 }
 
-// Pega lo que haya en el portapapeles en destFolder, con IFileOperation (progreso, conflictos y deshacer
-// como en el Explorador). Si todo viene de la misma carpeta, se crean copias con otro nombre.
+// Pastes the clipboard contents into destFolder, with IFileOperation (progress, conflicts and undo
+// as in File Explorer). If everything comes from the same folder, copies with another name are created.
 bool ClipboardPaste(const std::wstring& destFolder) {
     if (destFolder.empty() || !IsClipboardFormatAvailable(CF_HDROP)) return false;
     std::vector<std::wstring> files;
@@ -838,7 +841,7 @@ bool ClipboardPaste(const std::wstring& destFolder) {
     bool sameFolder = true;
     for (const auto& f : files)
         if (Key(ParentOf(f)) != Key(destFolder)) sameFolder = false;
-    if (move && sameFolder) return false;  // mover a la misma carpeta: nada que hacer
+    if (move && sameFolder) return false;  // moving to the same folder: nothing to do
     ComPtr<IFileOperation> op;
     if (FAILED(CoCreateInstance(CLSID_FileOperation, nullptr, CLSCTX_ALL, IID_PPV_ARGS(&op)))) return false;
     op->SetOwnerWindow(g_hwnd);
@@ -870,7 +873,7 @@ bool ClipboardPaste(const std::wstring& destFolder) {
     rec->Release();
     BOOL aborted = FALSE;
     op->GetAnyOperationsAborted(&aborted);
-    if (SUCCEEDED(hr) && move && !aborted && OpenClipboard(g_hwnd)) {  // lo cortado ya se movió
+    if (SUCCEEDED(hr) && move && !aborted && OpenClipboard(g_hwnd)) {  // what was cut has already moved
         EmptyClipboard();
         CloseClipboard();
     }
@@ -883,24 +886,37 @@ void OpenShellMenu(POINT screenPt, int row) {
     Tab& t = T();
     if (!t.list || t.list->error) return;
     std::vector<std::wstring> names;
-    std::wstring ctx = L"fondo", folder = t.path;
+    std::wstring ctx = L"background", folder = t.path;
     if (row >= 0 && row < Count()) {
         folder = SelDir(t);
-        names = SelectedNames(t);  // el click derecho ya dejó la fila dentro de la selección
+        names = SelectedNames(t);  // the right click already put the row in the selection
         bool allDirs = true;
         for (int i = 0; i < RowCount(t); ++i)
             if (IsSel(t, i) && !EntryAt(t, i).isDir()) allDirs = false;
-        ctx = allDirs ? L"carpeta" : L"archivo";
+        ctx = allDirs ? L"folder" : L"file";
     }
     g_shellMenu = CreateShellMenu(folder, names, KeyDown(VK_SHIFT));
     if (!g_shellMenu) return;
     std::vector<MenuItem> items = ApplyMenuCfg(ctx, ReadMenu(*g_shellMenu, g_shellMenu->hmenu), false);
+    std::wstring favPath;  // on a single folder, it can be added to favorites without entering it
+    if (ctx == L"folder" && SelCount(t) == 1) {
+        favPath = RowPath(t, t.sel);
+        MenuItem fav, sep;
+        fav.text = L"Add to favorites";
+        fav.id = kCmdFav;
+        sep.sep = true;
+        items.insert(items.begin(), {fav, sep});
+    }
     RECT anchor{screenPt.x, screenPt.y, screenPt.x, screenPt.y};
     PopupOpen(
         std::move(items), anchor,
-        [screenPt](UINT id) {
+        [screenPt, favPath](UINT id) {
+            if (id == kCmdFav) {
+                FavAdd(favPath);
+                return;
+            }
             if (!g_shellMenu) return;
-            // Eliminar pasa por Jolt para que quede en el historial de Ctrl+Z
+            // Delete goes through Jolt so it stays in the Ctrl+Z history
             char verb[32] = "";
             if (id >= kCmdFirst && !SelectedNames(T()).empty() &&
                 SUCCEEDED(g_shellMenu->cm->GetCommandString(id - kCmdFirst, GCS_VERBA, nullptr, verb, sizeof(verb))) &&
@@ -937,13 +953,13 @@ void OpenAppMenu(const RECT& anchorScreen) {
         m.sep = true;
         items.push_back(m);
     };
-    add(L"Menú contextual…", L"", CmdMenuEditor);
-    add(L"Carpeta de configuración", L"", CmdConfigFolder);
-    add(L"Instalación…", L"", CmdInstall);
+    add(L"Context menu…", L"", CmdMenuEditor);
+    add(L"Config folder", L"", CmdConfigFolder);
+    add(L"Install…", L"", CmdInstall);
     sep();
-    add(L"Acerca de Jolt", L"", CmdAbout);
+    add(L"About Jolt", L"", CmdAbout);
     sep();
-    add(L"Salir", L"", CmdQuit);
+    add(L"Quit", L"", CmdQuit);
     PopupOpen(std::move(items), anchorScreen, [](UINT id) {
         switch (id) {
             case CmdMenuEditor: OpenMenuEditor(); break;
@@ -954,9 +970,9 @@ void OpenAppMenu(const RECT& anchorScreen) {
             }
             case CmdAbout:
                 MessageBoxW(g_hwnd,
-                            L"Jolt — explorador de archivos.\n\nC++ · Win32 · Direct2D.\n"
-                            L"Pensado para que abrir carpetas se sienta instantáneo.",
-                            L"Acerca de Jolt", MB_OK | MB_ICONINFORMATION);
+                            L"Jolt — file explorer.\n\nC++ · Win32 · Direct2D.\n"
+                            L"Built so that opening folders feels instant.",
+                            L"About Jolt", MB_OK | MB_ICONINFORMATION);
                 break;
             case CmdInstall: InstPanelOpen(); break;
             case CmdQuit: BgQuit(); break;
@@ -964,17 +980,17 @@ void OpenAppMenu(const RECT& anchorScreen) {
     });
 }
 
-// ================================================================ editor del menú contextual
-// Muestra el menú real de Windows para tres contextos y deja ocultar (casilla) y reordenar (arrastrar).
+// ================================================================ context menu editor
+// Shows the real Windows menu for three contexts and lets you hide (checkbox) and reorder (drag).
 constexpr wchar_t kEditorClass[] = L"JoltMenuEditor";
 constexpr float kEdTop = 54.f, kEdFoot = 44.f, kEdRow = 28.f;
-const wchar_t* kEdTabNames[3] = {L"Fondo de la carpeta", L"Archivo", L"Carpeta"};
+const wchar_t* kEdTabNames[3] = {L"Folder background", L"File", L"Folder"};
 
 struct EditorCtx {
-    std::wstring ctx;        // fondo / archivo / carpeta
-    std::wstring sample;     // descripción de la muestra usada
+    std::wstring ctx;        // background / file / folder
+    std::wstring sample;     // description of the sample used
     std::unique_ptr<ShellMenu> sm;
-    std::vector<MenuItem> items;  // orden actual (incluye ocultos)
+    std::vector<MenuItem> items;  // current order (includes hidden items)
     std::vector<bool> visible;
     bool loaded = false;
 };
@@ -987,8 +1003,8 @@ struct Editor {
     EditorCtx ctxs[3];
     int cur = 0;
     int hover = -1, sel = -1;
-    int drag = -1;       // ítem que se arrastra
-    float dragY = 0;     // posición del cursor mientras se arrastra
+    int drag = -1;       // item being dragged
+    float dragY = 0;     // cursor position while dragging
     bool dragging = false;
     float scroll = 0;
     int hoverTab = -1;
@@ -1010,10 +1026,10 @@ void EditorLoadCtx(EditorCtx& c) {
     Tab& t = T();
     std::wstring folder = t.path;
     std::vector<std::wstring> names;
-    if (c.ctx == L"fondo") {
-        c.sample = t.path.empty() ? L"Este equipo" : t.path;
+    if (c.ctx == L"background") {
+        c.sample = t.path.empty() ? L"This PC" : t.path;
     } else {
-        bool wantDir = c.ctx == L"carpeta";
+        bool wantDir = c.ctx == L"folder";
         int pick = -1;
         if (t.list && !t.list->error) {
             if (t.sel >= 0 && t.sel < Count() && EntryAt(t, t.sel).isDir() == wantDir) pick = t.sel;
@@ -1071,7 +1087,7 @@ void EditorDraw() {
     g_rt->BeginDraw();
     g_rt->Clear(D2D1::ColorF(cBg));
 
-    // selector de contexto
+    // context selector
     const wchar_t* const* names = kEdTabNames;
     float x = kPad;
     for (int i = 0; i < 3; ++i) {
@@ -1087,12 +1103,12 @@ void EditorDraw() {
     }
     HLine(0, W, kEdTop - 1);
 
-    // lista
+    // list
     const float listTop = kEdTop, listBot = H - kEdFoot;
     g_rt->PushAxisAlignedClip(D2D1::RectF(0, listTop, W, listBot), D2D1_ANTIALIAS_MODE_ALIASED);
     if (c.sample.empty()) {
         Color(cDim);
-        Text(L"No hay un elemento de muestra de este tipo en la carpeta actual.\nAbrí una carpeta que tenga uno y volvé a entrar.",
+        Text(L"There is no sample item of this type in the current folder.\nOpen a folder that has one and come back.",
              g_fmtCenter.Get(), kPad, listTop, W - kPad, listTop + 80);
     } else {
         const int n = static_cast<int>(c.items.size());
@@ -1109,14 +1125,14 @@ void EditorDraw() {
                 Round(row, 5, cAccent, 0.18f);
             else if (i == g_ed.hover)
                 Round(row, 5, 0xFFFFFF, 0.05f);
-            // casilla
+            // checkbox
             Color(vis ? cAccent : cFaint);
             Glyph(vis ? 0xE73A : 0xE739, g_fmtIcon.Get(), 16, y, 40, y + kEdRow);
             const float a = vis ? 1.f : 0.45f;
             if (m.sep) {
                 Color(cFaint, a);
                 HLine(72, W - 40, y + kEdRow / 2, cBorder);
-                Text(L"separador", g_fmtRight.Get(), 44, y, 70 + 60, y + kEdRow);
+                Text(L"separator", g_fmtRight.Get(), 44, y, 70 + 60, y + kEdRow);
             } else {
                 if (m.hbm) {
                     auto it = g_ed.bmps.find(m.hbm);
@@ -1136,7 +1152,7 @@ void EditorDraw() {
                 Color(cFaint, a);
                 Text(m.key, g_fmtRight.Get(), W - 220, y, W - 40, y + kEdRow);
             }
-            // agarradera
+            // handle
             Color(cFaint, 0.8f);
             Glyph(0xE700, g_fmtIconSm.Get(), W - 34, y, W - 14, y + kEdRow);
         }
@@ -1149,15 +1165,15 @@ void EditorDraw() {
     }
     g_rt->PopAxisAlignedClip();
 
-    // pie
+    // footer
     HLine(0, W, listBot);
     Color(cDim);
-    Text(L"Casilla: mostrar u ocultar  ·  Arrastrá para reordenar  ·  Espacio y Ctrl+↑/↓ con el teclado",
+    Text(L"Checkbox: show or hide  ·  Drag to reorder  ·  Space and Ctrl+↑/↓ on the keyboard",
          g_fmtStatus.Get(), kPad, listBot, W - 130, H);
     D2D1_RECT_F rb = D2D1::RectF(W - 118, listBot + 9, W - kPad, H - 9);
     Round(rb, 5, g_ed.hoverReset ? 0xFFFFFF : cTop, g_ed.hoverReset ? 0.12f : 1.f);
     Color(cText);
-    Text(L"Restablecer", g_fmtCrumb.Get(), rb.left, rb.top, rb.right, rb.bottom);
+    Text(L"Reset", g_fmtCrumb.Get(), rb.left, rb.top, rb.right, rb.bottom);
 
     if (g_rt->EndDraw() == D2DERR_RECREATE_TARGET) {
         g_ed.bmps.clear();
@@ -1366,17 +1382,17 @@ void OpenMenuEditor() {
         return;
     }
     g_ed = Editor{};
-    g_ed.ctxs[0].ctx = L"fondo";
-    g_ed.ctxs[1].ctx = L"archivo";
-    g_ed.ctxs[2].ctx = L"carpeta";
+    g_ed.ctxs[0].ctx = L"background";
+    g_ed.ctxs[1].ctx = L"file";
+    g_ed.ctxs[2].ctx = L"folder";
     RECT prc;
     GetWindowRect(g_hwnd, &prc);
     int w = MulDiv(640, g_dpi, 96), h = MulDiv(620, g_dpi, 96);
     int x = prc.left + ((prc.right - prc.left) - w) / 2, y = prc.top + ((prc.bottom - prc.top) - h) / 2;
-    g_ed.hwnd = CreateWindowExW(0, kEditorClass, L"Menú contextual — Jolt", WS_OVERLAPPEDWINDOW & ~WS_MINIMIZEBOX, x, y, w,
+    g_ed.hwnd = CreateWindowExW(0, kEditorClass, L"Context menu — Jolt", WS_OVERLAPPEDWINDOW & ~WS_MINIMIZEBOX, x, y, w,
                                 h, g_hwnd, nullptr, GetModuleHandleW(nullptr), nullptr);
     if (!g_ed.hwnd) {
-        S.message = L"No se pudo abrir el editor del menú (error " + std::to_wstring(GetLastError()) + L")";
+        S.message = L"Could not open the menu editor (error " + std::to_wstring(GetLastError()) + L")";
         Invalidate();
         return;
     }
