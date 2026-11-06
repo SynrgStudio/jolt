@@ -1,7 +1,71 @@
+<div align="center">
+
+<img src="assets/jolt-256.png" alt="Jolt logo" width="128">
+
 # Jolt
 
-File explorer for Windows, built so that opening folders feels instant.
-C++20 + Win32 + Direct2D/DirectWrite, no external dependencies.
+**The file explorer for Windows that keeps up with you.**<br>
+Folders open instantly. One small file, no dependencies, no telemetry.
+
+[![Latest release](https://img.shields.io/github/v/release/SynrgStudio/jolt?style=flat-square&color=ff9f2e&label=release)](https://github.com/SynrgStudio/jolt/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/SynrgStudio/jolt/total?style=flat-square&color=ff9f2e)](https://github.com/SynrgStudio/jolt/releases)
+[![Build](https://img.shields.io/github/actions/workflow/status/SynrgStudio/jolt/build.yml?branch=master&style=flat-square&label=build)](https://github.com/SynrgStudio/jolt/actions/workflows/build.yml)
+[![License: GPL v3](https://img.shields.io/badge/license-GPLv3-blue?style=flat-square)](LICENSE)
+![Windows 10 and 11](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4?style=flat-square)
+
+<a href="https://github.com/SynrgStudio/jolt/releases/latest/download/jolt.exe"><img src="https://img.shields.io/badge/Download-jolt.exe-ff9f2e?style=for-the-badge" alt="Download jolt.exe" height="36"></a>
+
+[Features](#features) &nbsp;·&nbsp; [Install](#install) &nbsp;·&nbsp; [Shortcuts](#keyboard-and-mouse) &nbsp;·&nbsp; [Configuration](#configuration) &nbsp;·&nbsp; [For developers](#for-developers)
+
+<br>
+
+<img src="docs/media/tour.gif" alt="A tour of Jolt: tabs, preview, filter, command palette, split view and drive space" width="860">
+
+<sub>A scripted tour with demo files. The pacing is set by the script, so it doesn't show real speed.</sub>
+
+</div>
+
+---
+
+## Features
+
+<table>
+<tr>
+<td width="33%" valign="top"><b>⚡ Instant folders</b><br>Lists with the fastest Windows API and keeps visited folders in memory, so going back takes no time.</td>
+<td width="33%" valign="top"><b>🔎 Find anything</b><br>Ctrl+P searches everything on your drives. Just start typing to fuzzy-filter any folder.</td>
+<td width="33%" valign="top"><b>🖼️ Preview</b><br>Space shows images, code, folder contents and thumbnails right next to the list.</td>
+</tr>
+<tr>
+<td valign="top"><b>🗂️ Tabs and split view</b><br>Simple tabs and two panes, each with its own, restored just as you left them.</td>
+<td valign="top"><b>🔥 Recents that learn</b><br>Folders rise by how much you really use them, not by what you opened last.</td>
+<td valign="top"><b>💽 Live drive space</b><br>Hover a drive to see its free and total space, updated every second.</td>
+</tr>
+<tr>
+<td valign="top"><b>🎛️ Views per folder</b><br>Sort, group and filter each folder its own way, with rules applied instantly.</td>
+<td valign="top"><b>⌨️ Keyboard first</b><br>A command palette, and any shortcut can be changed with one click.</td>
+<td valign="top"><b>↩️ Undo</b><br>Rename, move, copy, create or delete by mistake? Ctrl+Z.</td>
+</tr>
+<tr>
+<td valign="top"><b>🎨 Yours to customize</b><br>Colors, font, sizes and columns in one plain text file that reloads on save.</td>
+<td valign="top"><b>🧩 The real context menu</b><br>Windows' own menu with your extensions, which you can trim and reorder.</td>
+<td valign="top"><b>🔒 Private</b><br>Jolt doesn't connect to the network. Your files stay yours.</td>
+</tr>
+</table>
+
+<table>
+<tr>
+<td width="33%"><img src="docs/media/preview.png" alt="Image preview"></td>
+<td width="33%"><img src="docs/media/split.png" alt="Two panes side by side"></td>
+<td width="33%"><img src="docs/media/palette.png" alt="Command palette"></td>
+</tr>
+<tr>
+<td align="center"><sub>Preview</sub></td>
+<td align="center"><sub>Split view</sub></td>
+<td align="center"><sub>Command palette</sub></td>
+</tr>
+</table>
+
+---
 
 ## Install
 
@@ -10,8 +74,7 @@ Windows SmartScreen may warn you the first time: More info → Run anyway. See t
 
 The same `jolt.exe` is the installer. Copy it anywhere and open it: it offers to install itself to `%LOCALAPPDATA%\Jolt`
 without asking for administrator rights. From ☰ → Install you can turn PATH, default file explorer and
-start with Windows on and off. Making it the default saves what was there before, and turning it off restores it. Builds
-with `jolt.dev` next to them don't offer this on their own.
+start with Windows on and off. Making it the default saves what was there before, and turning it off restores it. 
 
 To uninstall it, use ☰ → Install, Windows Settings → Apps, or `jolt.exe --uninstall`. Your settings and favorites are
 kept in `%APPDATA%\Jolt`.
@@ -23,23 +86,25 @@ opening `jolt.exe folder`, which uses the running instance. ☰ → Quit and `jo
 `jolt.exe --hidden` starts without showing the window. Options in `config.txt`: `run_in_background`, `global_hotkey`,
 `tray_icon`, `open_drives`.
 
-## Build
+---
 
-```
-build.bat           optimized (/O2)          ~2 s
-build.bat fast      unoptimized (/Od)        ~1 s, for iterating
-build.bat clean     deletes build\
-```
+## Keyboard and mouse
 
-Requires Visual Studio 2022 with the C++ workload. Produces `build\jolt.exe` and `build\bench.exe`.
+| Key | Action |
+|---|---|
+| type letters | fuzzy filter |
+| Ctrl+P | go to anything on your drives |
+| Ctrl+K | command palette |
+| Space | preview |
+| Ctrl+S | split view |
+| Ctrl+T / Ctrl+W | new tab / close tab |
+| Ctrl+Z | undo |
+| Win+J | show or hide Jolt from any app |
 
-The first time takes longer: it saves the compiler environment in `build\env.bat` (so `vcvars64.bat` doesn't run
-on every build) and generates the precompiled header with everything from the system (`src\pch.h`, ~580k lines that are
-processed only once this way). If you add a new system header, put it in `src\pch.h` and run `build.bat clean`.
+<details>
+<summary><b>All shortcuts</b></summary>
 
-## Use
-
-`build\jolt.exe [folder]`
+<br>
 
 | Key / mouse | Action |
 |---|---|
@@ -100,10 +165,14 @@ processed only once this way). If you add a new system header, put it in `src\pc
 | Ctrl+R | reload |
 | F12 | show/hide timings |
 
+</details>
+
 On close, it saves each pane's tabs, split view, preview, window position,
 sidebar and sort order (`%APPDATA%\Jolt\session.txt`), and the recent folders for Ctrl+P (`recents.txt`). If a
 folder is passed on the command line, it opens in a new tab in addition to the restored ones. With `JOLT_DEBUG=1`
 in the environment, it writes a log to `%TEMP%\jolt.log`.
+
+## Sidebar
 
 **Favorites:** drag them to reorder, or drag a folder from Recents or Drives to add it. Right click to rename or remove one; on a folder in the list, right click → Add to favorites. They are saved in `%APPDATA%\Jolt\favorites.txt`, one line per folder (`Name|Path`).
 
@@ -111,6 +180,8 @@ in the environment, it writes a log to `%TEMP%\jolt.log`.
 
 **Recents:** below the drives, sorted by use rather than by last opened. Each folder earns a point if you stay at least 1.5 seconds, and its heat halves every 30 days. Set how many with `recents` in `config.txt` (0 hides the section).
 It can be edited by hand; it is read at startup.
+
+---
 
 ## Configuration
 
@@ -184,7 +255,51 @@ properties
 Each option is identified by its "verb" (what the editor's gray column shows). Whatever isn't listed in the
 file is added at the end, in the order Windows gives it. Submenus can't be customized yet.
 
-## Testing without touching anything (test mode)
+---
+
+## For developers
+
+C++20, Win32 and Direct2D/DirectWrite, with no external dependencies.
+
+### How it stays fast
+
+- Lists with `NtQueryDirectoryFile` in 64 KiB batches, on a separate thread.
+- Every visited folder stays in memory; going back shows it instantly and rechecks it in the background.
+- Watches the current folder and updates itself if something changes.
+- Preloads the selected folder (local drives) so Enter doesn't have to read the disk.
+- Icons: those that depend only on the extension are resolved on the spot without touching the disk; those that depend
+  on the file (folders, .exe, shortcuts) are requested from another thread and only for visible rows.
+- Draws only what is visible.
+
+### Build
+
+```
+build.bat           optimized (/O2)          ~2 s
+build.bat fast      unoptimized (/Od)        ~1 s, for iterating
+build.bat clean     deletes build\
+```
+
+Requires Visual Studio 2022 with the C++ workload. Produces `build\jolt.exe` and `build\bench.exe`.
+
+The first time takes longer: it saves the compiler environment in `build\env.bat` (so `vcvars64.bat` doesn't run
+on every build) and generates the precompiled header with everything from the system (`src\pch.h`, ~580k lines that are
+processed only once this way). If you add a new system header, put it in `src\pch.h` and run `build.bat clean`.
+
+### Release
+
+Change the version in `src/version.h` and push to master. GitHub Actions builds `jolt.exe`, creates the tag and publishes
+the release. Pushes that keep the same version only build. The latest version is always at
+<https://github.com/SynrgStudio/jolt/releases/latest/download/jolt.exe>.
+
+### Benchmark
+
+`build\bench.exe <folder> [iterations]` compares how long it takes to list the folder with
+`NtQueryDirectoryFile` (what Jolt uses), `FindFirstFileEx` and the Windows Shell.
+
+<details>
+<summary><b>Test mode: run Jolt without showing a window</b></summary>
+
+<br>
 
 `build\jolt.exe --test script.txt [--output folder]` runs Jolt without showing the window (it steals focus from nobody):
 it draws into an in-memory bitmap, runs the script and saves PNG captures (with popup menus on top). It uses a copy
@@ -218,33 +333,15 @@ Buttons are pressed with UI Automation, found by their text (in the Windows lang
 modal (a copy with a conflict), the script keeps running inside that wait. The only thing that can't be automated is
 the administrator prompt: Windows shows it on a secure desktop, deliberately out of reach of programs.
 
-## Benchmark
+</details>
 
-`build\bench.exe <folder> [iterations]` compares how long it takes to list the folder with
-`NtQueryDirectoryFile` (what Jolt uses), `FindFirstFileEx` and the Windows Shell.
-
-## How it stays fast
-
-- Lists with `NtQueryDirectoryFile` in 64 KiB batches, on a separate thread.
-- Every visited folder stays in memory; going back shows it instantly and rechecks it in the background.
-- Watches the current folder and updates itself if something changes.
-- Preloads the selected folder (local drives) so Enter doesn't have to read the disk.
-- Icons: those that depend only on the extension are resolved on the spot without touching the disk; those that depend
-  on the file (folders, .exe, shortcuts) are requested from another thread and only for visible rows.
-- Draws only what is visible.
-
-## Release
-
-Change the version in `src/version.h` and push to master. GitHub Actions builds `jolt.exe`, creates the tag and publishes
-the release. Pushes that keep the same version only build. The latest version is always at
-<https://github.com/SynrgStudio/jolt/releases/latest/download/jolt.exe>.
+---
 
 ## Code signing policy
 
 Releases are built by [GitHub Actions](.github/workflows/build.yml) from this repository's source, on GitHub's own
-machines. They aren't signed yet: the project is applying to the SignPath Foundation. Once approved, this will apply:
-Free code signing provided by [SignPath.io](https://about.signpath.io), certificate by
-[SignPath Foundation](https://signpath.org).
+machines. They aren't signed yet. The plan is to apply to the [SignPath Foundation](https://signpath.org), which offers free
+code signing to open source projects, once Jolt is more widely used.
 
 Team roles:
 
@@ -257,3 +354,9 @@ by the user or the person installing or operating it.
 ## License
 
 Jolt is free software under the [GNU GPL v3](LICENSE): you can use, modify and distribute it, as long as anyone who distributes a modified version publishes its source code under the same license.
+
+---
+
+<div align="center">
+<sub>Made for people who open a lot of folders.</sub>
+</div>
