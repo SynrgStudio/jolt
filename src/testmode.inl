@@ -166,7 +166,7 @@ void TestMouse(const std::wstring& kind, const std::wstring& arg) {
     }
 }
 
-bool SaveBitmapPng(IWICBitmap* bmp, const std::wstring& file) {
+bool SaveBitmapPng(IWICBitmapSource* bmp, const std::wstring& file) {
     ComPtr<IWICStream> st;
     ComPtr<IWICBitmapEncoder> enc;
     ComPtr<IWICBitmapFrameEncode> fr;

@@ -64,7 +64,7 @@ void CopyPathText(CopyWhat what) {
     Invalidate();
 }
 
-bool SaveBitmapPng(IWICBitmap* bmp, const std::wstring& file);  // testmode.inl
+bool SaveBitmapPng(IWICBitmapSource* bmp, const std::wstring& file);  // testmode.inl
 
 // Ctrl+V without files on the clipboard: an image becomes a PNG in the folder, text a .txt (UTF-8),
 // named by the moment, and ready to rename.
@@ -83,11 +83,45 @@ void PasteClipboardAsFile() {
     bool ok = false;
     if (!OpenClipboard(g_hwnd)) return;
     if (image) {
-        if (HBITMAP hbm = static_cast<HBITMAP>(GetClipboardData(CF_BITMAP))) {
+        // Preferred: the "PNG" format many apps add (keeps transparency, written as is). Then the DIB,
+        // decoded by WIC as a BMP file. CF_BITMAP last: with OLE clipboards it is often announced but not delivered.
+        auto bytes = [&](UINT fmt, const BYTE*& data, size_t& size) {
+            HGLOBAL h = GetClipboardData(fmt);
+            data = h ? static_cast<const BYTE*>(GlobalLock(h)) : nullptr;
+            size = data ? GlobalSize(h) : 0;
+            return h;
+        };
+        const BYTE* data = nullptr;
+        size_t size = 0;
+        if (HGLOBAL h = bytes(RegisterClipboardFormatW(L"PNG"), data, size); h && size > 8 && memcmp(data, "PNG", 4) == 0) {
+            HANDLE f = CreateFileW(ToExtendedPath(full).c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+            if (f != INVALID_HANDLE_VALUE) {
+                DWORD n = 0;
+                ok = WriteFile(f, data, static_cast<DWORD>(size), &n, nullptr) && n == size;
+                CloseHandle(f);
+                if (!ok) DeleteFileW(ToExtendedPath(full).c_str());
+            }
+            GlobalUnlock(h);
+        } else if (HGLOBAL h2 = bytes(CF_DIB, data, size); h2 && size > sizeof(BITMAPINFOHEADER)) {
+            const auto* bi = reinterpret_cast<const BITMAPINFOHEADER*>(data);
+            DWORD colors = bi->biClrUsed ? bi->biClrUsed : bi->biBitCount <= 8 ? 1u << bi->biBitCount : 0;
+            DWORD masks = bi->biCompression == BI_BITFIELDS && bi->biSize == sizeof(BITMAPINFOHEADER) ? 12 : 0;
+            std::vector<BYTE> bmp(sizeof(BITMAPFILEHEADER) + size);
+            auto* fh = reinterpret_cast<BITMAPFILEHEADER*>(bmp.data());
+            fh->bfType = 0x4D42;
+            fh->bfSize = static_cast<DWORD>(bmp.size());
+            fh->bfOffBits = static_cast<DWORD>(sizeof(BITMAPFILEHEADER) + bi->biSize + masks + colors * 4);
+            memcpy(bmp.data() + sizeof(BITMAPFILEHEADER), data, size);
+            GlobalUnlock(h2);
+            ComPtr<IWICStream> st;
+            ComPtr<IWICBitmapDecoder> dec;
+            ComPtr<IWICBitmapFrameDecode> fr;
+            if (SUCCEEDED(g_wic->CreateStream(&st)) && SUCCEEDED(st->InitializeFromMemory(bmp.data(), static_cast<DWORD>(bmp.size()))) &&
+                SUCCEEDED(g_wic->CreateDecoderFromStream(st.Get(), nullptr, WICDecodeMetadataCacheOnDemand, &dec)) && SUCCEEDED(dec->GetFrame(0, &fr)))
+                ok = SaveBitmapPng(fr.Get(), ToExtendedPath(full));
+        } else if (HBITMAP hbm = static_cast<HBITMAP>(GetClipboardData(CF_BITMAP))) {
             ComPtr<IWICBitmap> wb;
-            // the alpha channel of a clipboard bitmap is rarely meaningful: a screenshot would come out blank
-            if (SUCCEEDED(g_wic->CreateBitmapFromHBITMAP(hbm, nullptr, WICBitmapIgnoreAlpha, &wb)))
-                ok = SaveBitmapPng(wb.Get(), ToExtendedPath(full));
+            if (SUCCEEDED(g_wic->CreateBitmapFromHBITMAP(hbm, nullptr, WICBitmapIgnoreAlpha, &wb))) ok = SaveBitmapPng(wb.Get(), ToExtendedPath(full));
         }
     } else if (HGLOBAL h = GetClipboardData(CF_UNICODETEXT)) {
         if (const wchar_t* w = static_cast<const wchar_t*>(GlobalLock(h))) {
