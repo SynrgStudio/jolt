@@ -1947,7 +1947,7 @@ void CreateTextParams() {
                                       def->GetPixelGeometry(), DWRITE_RENDERING_MODE_GDI_CLASSIC, &g_textParams);
 }
 ComPtr<IDWriteTextFormat> g_fmtName, g_fmtNameBold, g_fmtRight, g_fmtIcon, g_fmtIconSm, g_fmtCap, g_fmtCrumb, g_fmtTab, g_fmtSide,
-    g_fmtSection, g_fmtHeader, g_fmtStatus, g_fmtStatusR, g_fmtCenter, g_fmtMono, g_fmtMonoR, g_fmtCell, g_fmtTag;
+    g_fmtSection, g_fmtHeader, g_fmtStatus, g_fmtStatusR, g_fmtCenter, g_fmtMono, g_fmtMonoR, g_fmtCell, g_fmtTag, g_fmtMonoWrap;
 
 bool FontExists(const wchar_t* family) {
     ComPtr<IDWriteFontCollection> fc;
@@ -2006,6 +2006,9 @@ void CreateFormats() {
     const wchar_t* mono = FontExists(L"Cascadia Mono") ? L"Cascadia Mono" : L"Consolas";
     g_fmtMono = MakeFormat(mono, 12.f, DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_FONT_WEIGHT_NORMAL, false);
     g_fmtMonoR = MakeFormat(mono, 12.f, DWRITE_TEXT_ALIGNMENT_TRAILING, DWRITE_FONT_WEIGHT_NORMAL, false);
+    g_fmtMonoWrap = MakeFormat(mono, 12.f, DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_FONT_WEIGHT_NORMAL, false);
+    g_fmtMonoWrap->SetWordWrapping(DWRITE_WORD_WRAPPING_CHARACTER);  // by character: the row count is then len / columns
+    g_fmtMonoWrap->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
 }
 
 void PreviewReleaseBitmap();  // preview.inl
@@ -3434,6 +3437,7 @@ void ViewEditorOpen(int pane);
 #include "viewedit.inl"
 #include "ops.inl"
 #include "search.inl"
+#include "syntax.inl"
 #include "grep.inl"
 #include "preview.inl"
 void PreviewReleaseBitmap() { g_pv.d2d.Reset(); }
@@ -3808,6 +3812,13 @@ void RunCommand(Cmd cmd) {
         case Cmd::ZoomReset: SetUiZoom(12); break;
         case Cmd::RowsTaller: SetRowHeight(kRow + 1); break;
         case Cmd::RowsShorter: SetRowHeight(kRow - 1); break;
+        case Cmd::PreviewWrap:
+            g_cfg.previewWrap = !g_cfg.previewWrap;
+            ConfigSetValue(L"general", L"preview_wrap", g_cfg.previewWrap ? L"yes" : L"no");
+            RefreshConfigSig();
+            S.message = g_cfg.previewWrap ? L"Preview: long lines wrap" : L"Preview: long lines run off the edge";
+            Invalidate();
+            break;
         case Cmd::Tag: TagPaletteOpen(); break;
         case Cmd::ViewList: SetLayout(0); break;
         case Cmd::ViewGrid: if (!LayoutOf(t)) SetLayout(144); break;
