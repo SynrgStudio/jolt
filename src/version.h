@@ -2,6 +2,6 @@
 // the tag and publishes the release.
 #pragma once
 
-#define JOLT_VERSION_NUM 0, 1, 1, 0
-#define JOLT_VERSION "0.1.1"
-#define JOLT_VERSION_W L"0.1.1"
+#define JOLT_VERSION_NUM 0, 2, 0, 0
+#define JOLT_VERSION "0.2.0"
+#define JOLT_VERSION_W L"0.2.0"
