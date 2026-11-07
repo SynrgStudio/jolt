@@ -477,6 +477,9 @@ struct Tab {
     int recDirs = 0;
     std::vector<std::shared_ptr<const Listing>> rec;
     float scroll = 0;
+    // grid view: one rect per row in content coordinates (see RowRect), rebuilt when the rows or the width change
+    std::vector<D2D1_RECT_F> cells;
+    uint64_t cellsKey = 0, rowsGen = 0;
     std::vector<std::wstring> back, fwd;
     float slide = 0;     // initial animation offset, in tab places
     double slideAt = 0;  // when it started
@@ -737,6 +740,7 @@ bool FilterPass(const FilterSpec& s, const Entry& e, const wchar_t* name, size_t
 
 void BuildRows(Tab& t) {
     t.rows.clear();
+    ++t.rowsGen;
     if (!t.list) return;
     if (t.recursive) {
         const bool hide = !g_cfg.showHidden;
@@ -828,16 +832,111 @@ int PaneAt(float x, float y) {
     return -1;
 }
 
+// ---- row geometry: the list (one row per item) or the grid of thumbnails (cells along lines, with the
+// group titles on full-width rows). Rects are in content coordinates: x on screen, y from the top of
+// the content; the scroll is subtracted when drawing.
+constexpr int kGridSizes[] = {0, 80, 112, 144, 192, 256};  // the view scale: the list, then bigger cells
+constexpr float kCellPadX = 20.f, kCellText = 40.f;      // around the image; the two lines of name below
+
+int LayoutOf(const Tab& t) { return t.path.empty() || t.recursive ? 0 : ViewFor(t.path)->layout; }
+
+struct Geo {
+    bool grid = false;
+    int size = 0, cols = 1;
+    float cellW = 0, cellH = 0, x0 = 0;
+};
+Geo GeoFor(const Tab& t) {
+    Geo g;
+    g.size = LayoutOf(t);
+    if (!g.size) return g;
+    const PaneX p = PaneGeo(t.pane);
+    g.grid = true;
+    g.cellW = g.size + kCellPadX;
+    g.cellH = g.size + kCellText + 8;
+    const float room = p.R - p.L - 16;
+    g.cols = std::max(1, static_cast<int>(room / g.cellW));
+    g.x0 = p.L + 8 + std::floor((room - g.cols * g.cellW) / 2);
+    return g;
+}
+
+void EnsureGeo(Tab& t) {
+    const Geo g = GeoFor(t);
+    if (!g.grid) {
+        t.cells.clear();
+        t.cellsKey = 0;
+        return;
+    }
+    const uint64_t key = (t.rowsGen << 24) ^ (static_cast<uint64_t>(g.cols) << 16) ^ static_cast<uint64_t>(g.size) ^
+                         (static_cast<uint64_t>(std::lround(g.x0)) << 44) ^ (static_cast<uint64_t>(std::lround(kRow)) << 56);
+    if (key == t.cellsKey && t.cells.size() == t.rows.size()) return;
+    t.cellsKey = key;
+    t.cells.resize(t.rows.size());
+    float y = 4;
+    int col = 0;
+    for (size_t i = 0; i < t.rows.size(); ++i) {
+        if (t.rows[i].e < 0) {  // a group title takes a whole line
+            if (col) {
+                y += g.cellH;
+                col = 0;
+            }
+            t.cells[i] = D2D1::RectF(g.x0 - 8, y, g.x0 + g.cols * g.cellW + 8, y + kRow);
+            y += kRow;
+        } else {
+            t.cells[i] = D2D1::RectF(g.x0 + col * g.cellW, y, g.x0 + (col + 1) * g.cellW, y + g.cellH);
+            if (++col == g.cols) {
+                col = 0;
+                y += g.cellH;
+            }
+        }
+    }
+}
+
+D2D1_RECT_F RowRect(Tab& t, int i) {
+    EnsureGeo(t);
+    if (!t.cells.empty() && i >= 0 && i < static_cast<int>(t.cells.size())) return t.cells[i];
+    const PaneX p = PaneGeo(t.pane);
+    return D2D1::RectF(p.L, i * kRow, p.R, (i + 1) * kRow);
+}
+
+float ContentHeight(Tab& t) {
+    EnsureGeo(t);
+    const int n = RowCount(t);
+    if (t.cells.empty()) return n * kRow;
+    return n ? t.cells[n - 1].bottom + 8 : 0;
+}
+
+// The row under a point (x on screen, y in the content), or -1.
+int RowAtContent(Tab& t, float x, float y) {
+    EnsureGeo(t);
+    const int n = RowCount(t);
+    if (t.cells.empty()) {
+        const int r = static_cast<int>(std::floor(y / kRow));
+        return r >= 0 && r < n ? r : -1;
+    }
+    // the first row whose line reaches below y, then along that line
+    int i = static_cast<int>(std::partition_point(t.cells.begin(), t.cells.end(), [&](const D2D1_RECT_F& r) { return r.bottom <= y; }) - t.cells.begin());
+    for (; i < n && t.cells[i].top <= y; ++i)
+        if (x >= t.cells[i].left && x < t.cells[i].right) return i;
+    return -1;
+}
+
+// What the arrows and Page Up/Down move by.
+int RowsPerLine(const Tab& t) { return GeoFor(t).cols; }
+int RowsPerPage(const Tab& t) {
+    const Geo g = GeoFor(t);
+    return g.grid ? std::max(1, static_cast<int>(ListHeight() / g.cellH)) * g.cols : std::max(1, static_cast<int>(ListHeight() / kRow) - 1);
+}
+
 void ClampScroll(Tab& t) {
-    int n = RowCount(t);
-    float maxS = std::max(0.f, n * kRow - ListHeight());
+    float maxS = std::max(0.f, ContentHeight(t) - ListHeight());
     t.scroll = std::clamp(t.scroll, 0.f, maxS);
 }
 
 void EnsureVisible(Tab& t) {
-    float top = t.sel * kRow, h = ListHeight();
-    if (top < t.scroll) t.scroll = top;
-    if (top + kRow > t.scroll + h) t.scroll = top + kRow - h;
+    const D2D1_RECT_F r = RowRect(t, t.sel);
+    const float h = ListHeight();
+    if (r.top < t.scroll) t.scroll = r.top;
+    if (r.bottom > t.scroll + h) t.scroll = r.bottom - h;
     ClampScroll(t);
 }
 
@@ -972,12 +1071,13 @@ void Rebuild(Tab& t, const Place* keep, const std::wstring& prefer) {
         int old = t.sel;
         t.sel = idx >= 0 ? idx : std::min(t.sel, n - 1);
         if (t.sel < 0) t.sel = 0;
-        if (idx >= 0 && keep->row >= 0) t.scroll += (t.sel - keep->row) * kRow;  // so it doesn't jump on screen
+        if (idx >= 0 && keep->row >= 0) t.scroll += RowRect(t, t.sel).top - RowRect(t, std::min(keep->row, std::max(0, n - 1))).top;  // so it doesn't jump on screen
         (void)old;
         ClampScroll(t);
     } else {
         t.sel = idx >= 0 ? idx : 0;
-        t.scroll = t.sel * kRow - ListHeight() / 2 + kRow / 2;  // the selection ends up centered
+        const D2D1_RECT_F r = RowRect(t, t.sel);
+        t.scroll = r.top - ListHeight() / 2 + (r.bottom - r.top) / 2;  // the selection ends up centered
         ClampScroll(t);
     }
     if (n > 0) t.sel = SkipHeader(t, t.sel, 1);
@@ -1584,6 +1684,32 @@ void SetGroup(int gb) {
     t.fold.clear();
     ViewsChanged();
 }
+// The folder's layout: 0 = list, otherwise a grid with cells of that size. Per folder, like grouping.
+void SetLayout(int size) {
+    Tab& t = T();
+    if (t.path.empty()) return;
+    View* v = ViewFor(t.path);
+    if (v == &g_viewAll) {
+        View own = *v;
+        own.path = t.path;
+        own.sub = false;
+        v = &(g_views[Key(t.path)] = std::move(own));
+    }
+    v->layout = size;
+    S.message = size ? L"Grid, " + std::to_wstring(size) + L" px cells   \u00b7   Ctrl+Alt+wheel changes the size" : L"List";
+    ViewsChanged();
+    EnsureVisible(t);
+    Invalidate();
+}
+// Ctrl+Alt+wheel: one step along the view scale (list, then bigger and bigger cells).
+void StepLayout(int dir) {
+    const int cur = LayoutOf(T());
+    int i = 0;
+    for (int k = 0; k < static_cast<int>(std::size(kGridSizes)); ++k)
+        if (kGridSizes[k] <= cur) i = k;
+    i = std::clamp(i + dir, 0, static_cast<int>(std::size(kGridSizes)) - 1);
+    if (kGridSizes[i] != cur) SetLayout(kGridSizes[i]);
+}
 void SetSort(SortBy by) {
     SortBy cur;
     bool asc;
@@ -1742,6 +1868,8 @@ ComPtr<ID2D1HwndRenderTarget> g_hwndRt;   // the window's
 ComPtr<IWICBitmap> g_testBmp;             // the test mode bitmap
 ComPtr<ID2D1SolidColorBrush> g_brush, g_brushAccent;
 ComPtr<IDWriteRenderingParams> g_textParams;
+#include "thumbs.inl"
+
 // defined in palette.inl
 void TextHighlighted(const std::wstring& s, const std::wstring& patLower, IDWriteTextFormat* fmt, float l, float t,
                      float r, float b, UINT32 color, UINT32 hiColor, float alpha = 1.f);
@@ -1754,7 +1882,7 @@ void CreateTextParams() {
                                       def->GetPixelGeometry(), DWRITE_RENDERING_MODE_GDI_CLASSIC, &g_textParams);
 }
 ComPtr<IDWriteTextFormat> g_fmtName, g_fmtNameBold, g_fmtRight, g_fmtIcon, g_fmtIconSm, g_fmtCap, g_fmtCrumb, g_fmtTab, g_fmtSide,
-    g_fmtSection, g_fmtHeader, g_fmtStatus, g_fmtStatusR, g_fmtCenter, g_fmtMono, g_fmtMonoR;
+    g_fmtSection, g_fmtHeader, g_fmtStatus, g_fmtStatusR, g_fmtCenter, g_fmtMono, g_fmtMonoR, g_fmtCell;
 
 bool FontExists(const wchar_t* family) {
     ComPtr<IDWriteFontCollection> fc;
@@ -1805,6 +1933,9 @@ void CreateFormats() {
     g_fmtStatus = MakeFormat(ui, sz, DWRITE_TEXT_ALIGNMENT_LEADING);
     g_fmtStatusR = MakeFormat(ui, sz, DWRITE_TEXT_ALIGNMENT_TRAILING);
     g_fmtCenter = MakeFormat(ui, sz, DWRITE_TEXT_ALIGNMENT_CENTER);
+    g_fmtCell = MakeFormat(ui, sz, DWRITE_TEXT_ALIGNMENT_CENTER);  // grid names: centered, up to two lines
+    g_fmtCell->SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP);
+    g_fmtCell->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
     // text preview: monospaced, not trimmed with "…"
     const wchar_t* mono = FontExists(L"Cascadia Mono") ? L"Cascadia Mono" : L"Consolas";
     g_fmtMono = MakeFormat(mono, 12.f, DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_FONT_WEIGHT_NORMAL, false);
@@ -2477,6 +2608,38 @@ void DrawHeader(int pane) {
 
 void DrawBox(int pane, float listTop, float listBot);  // boxselect.inl
 
+// A grid cell: the thumbnail (the small icon until it arrives) and the name under it, two lines at most.
+void DrawGridCell(const Entry& e, const wchar_t* name, const std::wstring& full, const D2D1_RECT_F& cell, float y, const Geo& geo,
+                  float a, const std::wstring& filterPat) {
+    const float box = static_cast<float>(geo.size), boxL = cell.left + kCellPadX / 2, boxT = y + 6;
+    bool drawn = false;
+    if (Thumb* th = ThumbGet(full, geo.size, e.mtime)) {
+        if (ID2D1Bitmap* bmp = ThumbBitmap(*th); bmp && th->w && th->h) {
+            const float sc = std::min(1.f, std::min(box / th->w, box / th->h));  // never enlarged: it would blur
+            const float w = std::floor(th->w * sc), h = std::floor(th->h * sc);
+            const float x0 = std::floor(boxL + (box - w) / 2), y0 = std::floor(boxT + (box - h) / 2);
+            if (!th->isIcon) Round(D2D1::RectF(x0 - 1, y0 - 1, x0 + w + 1, y0 + h + 1), 3, 0x000000, 0.35f * a);
+            g_rt->DrawBitmap(bmp, D2D1::RectF(x0, y0, x0 + w, y0 + h), a, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
+            drawn = true;
+        }
+    }
+    if (!drawn) DrawIcon(full, &e, name, e.nameLen, false, std::floor(boxL + (box - kIcon) / 2), std::floor(boxT + (box - kIcon) / 2), a * 0.8f);
+    UINT32 shownLen = e.nameLen;
+    if (g_hideExt && !e.isDir())
+        for (UINT32 k = e.nameLen; k > 1; --k)
+            if (name[k - 1] == L'.') {
+                shownLen = k - 1;
+                break;
+            }
+    const D2D1_RECT_F tr = D2D1::RectF(cell.left + 4, boxT + box + 4, cell.right - 4, y + geo.cellH - 4);
+    if (!filterPat.empty()) {
+        TextHighlighted(std::wstring(name, shownLen), filterPat, g_fmtCell.Get(), tr.left, tr.top, tr.right, tr.bottom, cText, cAccent, a);
+    } else {
+        Color(cText, a);
+        Text(name, shownLen, g_fmtCell.Get(), tr.left, tr.top, tr.right, tr.bottom);
+    }
+}
+
 void DrawList(int pane, float H) {
     const float listTop = ListTop(), listBot = H - kStatus;
     Tab& t = PT(pane);
@@ -2502,8 +2665,15 @@ void DrawList(int pane, float H) {
         const int hoverHeader = g_hoverHeader;
         const std::wstring filterPat = ParseFilter(t.filter).fuzzy;  // only the words light up in the names
         wchar_t buf[64];
-        for (int i = std::max(0, static_cast<int>(t.scroll / kRow)); i < n; ++i) {
-            const float y = listTop + i * kRow - t.scroll;
+        const Geo geo = GeoFor(t);
+        int first = std::max(0, static_cast<int>(t.scroll / kRow));
+        if (geo.grid) {
+            EnsureGeo(t);
+            first = static_cast<int>(std::partition_point(t.cells.begin(), t.cells.end(), [&](const D2D1_RECT_F& r) { return r.bottom <= t.scroll; }) - t.cells.begin());
+        }
+        for (int i = first; i < n; ++i) {
+            const D2D1_RECT_F cell = RowRect(t, i);
+            const float y = listTop + cell.top - t.scroll;
             if (y >= listBot) break;
             const Row& row = t.rows[i];
             if (row.e < 0) {
@@ -2529,7 +2699,7 @@ void DrawList(int pane, float H) {
             const Entry& e = row.l->entries[row.e];
             const wchar_t* name = row.l->name(e);
             const bool drives = row.l->path.empty();
-            const D2D1_RECT_F rr = D2D1::RectF(L + 6, y + 1, R - 8, y + kRow - 1);
+            const D2D1_RECT_F rr = geo.grid ? D2D1::RectF(cell.left + 2, y + 2, cell.right - 2, y + geo.cellH - 2) : D2D1::RectF(L + 6, y + 1, R - 8, y + kRow - 1);
             const bool selected = IsSel(t, i);
             const bool hover = i == g_hoverRow && pane == g_hoverPane;
             if (selected)
@@ -2546,6 +2716,10 @@ void DrawList(int pane, float H) {
             if (i == g_dropRow && pane == g_dropPane) {
                 Color(cAccent, 0.9f);
                 g_rt->DrawRoundedRectangle(D2D1::RoundedRect(D2D1::RectF(rr.left + 0.5f, rr.top + 0.5f, rr.right - 0.5f, rr.bottom - 0.5f), 5, 5), g_brush.Get(), 1.5f);
+            }
+            if (geo.grid) {
+                DrawGridCell(e, name, full, cell, y, geo, a, filterPat);
+                continue;
             }
             const float indent = flat ? 0.f : row.depth * kIndent;
             const float chevX = c.nameL + indent;
@@ -2612,7 +2786,7 @@ void DrawList(int pane, float H) {
             }
         }
         // thin scrollbar, only when needed
-        const float contentH = n * kRow, viewH = listBot - listTop;
+        const float contentH = ContentHeight(t), viewH = listBot - listTop;
         if (contentH > viewH) {
             const float thumbH = std::max(24.f, viewH * viewH / contentH);
             const float thumbY = listTop + (viewH - thumbH) * (t.scroll / (contentH - viewH));
@@ -2917,11 +3091,21 @@ void LayoutRename() {
     Tab& t = T();
     if (t.sel < 0 || t.sel >= Count()) return;
     Columns c = Cols(g_act);
-    float y = ListTop() + t.sel * kRow - t.scroll;
-    int rowTop = px(y), rowH = px(kRow);
-    int top = rowTop + (rowH - editH) / 2;
-    int left = px(RowTextX(c, t, t.sel) - 2), right = px(c.nameR);
-    bool visible = y + kRow > ListTop() && y < ListBottom();
+    const Geo geo = GeoFor(t);
+    const D2D1_RECT_F cell = RowRect(t, t.sel);
+    float y = ListTop() + cell.top - t.scroll;
+    int top, left, right;
+    if (geo.grid) {  // under the image, as wide as the cell
+        top = px(y + 6 + geo.size + 4);
+        left = px(cell.left + 4);
+        right = px(cell.right - 4);
+    } else {
+        int rowTop = px(y), rowH = px(kRow);
+        top = rowTop + (rowH - editH) / 2;
+        left = px(RowTextX(c, t, t.sel) - 2);
+        right = px(c.nameR);
+    }
+    bool visible = y + (cell.bottom - cell.top) > ListTop() && y < ListBottom();
     SetWindowPos(g_renameEdit, nullptr, left, top, std::max(40, right - left), editH,
                  SWP_NOZORDER | (visible ? SWP_SHOWWINDOW : SWP_HIDEWINDOW));
 }
@@ -3096,7 +3280,6 @@ void ViewEditorOpen(int pane);
 #include "viewedit.inl"
 #include "ops.inl"
 #include "search.inl"
-#include "thumbs.inl"
 #include "preview.inl"
 void PreviewReleaseBitmap() { g_pv.d2d.Reset(); }
 #include "background.inl"
@@ -3392,7 +3575,7 @@ void RunCommand(Cmd cmd) {
             break;
         case Cmd::ContextMenu: {
             int r = Count() > 0 ? t.sel : -1;
-            float y = r >= 0 ? ListTop() + r * kRow - t.scroll + kRow / 2 : ListTop() + 40;
+            float y = r >= 0 ? ListTop() + (RowRect(t, r).top + RowRect(t, r).bottom) / 2 - t.scroll : ListTop() + 40;
             float x = PaneGeo(g_act).L + 60;
             RECT sr = ScreenRect(D2D1::RectF(x, y, x, y));
             OpenShellMenu(POINT{sr.left, sr.top}, r);
@@ -3469,6 +3652,10 @@ void RunCommand(Cmd cmd) {
         case Cmd::ZoomReset: SetUiZoom(12); break;
         case Cmd::RowsTaller: SetRowHeight(kRow + 1); break;
         case Cmd::RowsShorter: SetRowHeight(kRow - 1); break;
+        case Cmd::ViewList: SetLayout(0); break;
+        case Cmd::ViewGrid: if (!LayoutOf(t)) SetLayout(144); break;
+        case Cmd::ViewBigger: StepLayout(1); break;
+        case Cmd::ViewSmaller: StepLayout(-1); break;
         case Cmd::EmptyRecycleBin: EmptyRecycleBin(); break;
     }
 }
@@ -3492,8 +3679,7 @@ int RawRowIn(int pane, float x, float y) {
     PaneX g = PaneGeo(pane);
     if (x < g.L || x >= g.R || y < ListTop() || y >= ListBottom()) return -1;
     Tab& t = PT(pane);
-    int r = static_cast<int>(std::floor((y - ListTop() + t.scroll) / kRow));
-    return r >= 0 && r < RowCount(t) ? r : -1;
+    return RowAtContent(t, x, y - ListTop() + t.scroll);
 }
 int HitRowIn(int pane, float x, float y) {
     int r = RawRowIn(pane, x, y);
@@ -3529,7 +3715,7 @@ void ToggleGroup(Tab& t, int row) {
                 break;
             }
         if (h >= 0) {
-            const float top = h * kRow, bottom = e * kRow, view = ListHeight();
+            const float top = RowRect(t, h).top, bottom = e < RowCount(t) ? RowRect(t, e).top : ContentHeight(t), view = ListHeight();
             if (top < t.scroll) t.scroll = top;
             if (bottom > t.scroll + view) t.scroll = std::min(top, bottom - view);
         }
@@ -4069,6 +4255,11 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 StopRecursive(T(), true);
                 return 0;
             }
+            // in the grid the plain arrows walk the line; with modifiers they keep their commands
+            if (!ctrl && !alt && (wp == VK_LEFT || wp == VK_RIGHT) && RowsPerLine(T()) > 1) {
+                MoveCursor(T().sel + (wp == VK_RIGHT ? 1 : -1), shift);
+                return 0;
+            }
             // configurable shortcuts first (config.txt)
             const UINT mods = (ctrl ? ModCtrl : 0) | (shift ? ModShift : 0) | (alt ? ModAlt : 0);
             Cmd cmd = FindCommand(mods, static_cast<UINT>(wp));
@@ -4087,10 +4278,10 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             }
             if (msg == WM_SYSKEYDOWN) break;  // Alt+F4, Alt+Space, etc. still belong to the system
             // fixed keys: cursor and selection
-            const int page = std::max(1, static_cast<int>(ListHeight() / kRow) - 1);
+            const int page = RowsPerPage(T()), line = RowsPerLine(T());
             switch (wp) {
-                case VK_UP: MoveCursor(T().sel - 1, shift); break;
-                case VK_DOWN: MoveCursor(T().sel + 1, shift); break;
+                case VK_UP: MoveCursor(T().sel - line, shift); break;
+                case VK_DOWN: MoveCursor(T().sel + line, shift); break;
                 case VK_PRIOR: MoveCursor(T().sel - page, shift); break;
                 case VK_NEXT: MoveCursor(T().sel + page, shift); break;
                 case VK_HOME: MoveCursor(0, shift); break;
@@ -4267,6 +4458,18 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             ScreenToClient(hwnd, &pt);
             const float x = pt.x * 96.f / g_dpi, y = pt.y * 96.f / g_dpi;
             const int delta = GET_WHEEL_DELTA_WPARAM(wp);
+            // Ctrl+Alt+wheel: the view of the pane underneath, from the list to bigger and bigger cells.
+            if (((GET_KEYSTATE_WPARAM(wp) & MK_CONTROL) || (g_test && KeyDown(VK_CONTROL))) && KeyDown(VK_MENU)) {
+                if ((g_tabWheelAcc > 0) != (delta > 0)) g_tabWheelAcc = 0;
+                g_tabWheelAcc += delta;
+                const int steps = g_tabWheelAcc / WHEEL_DELTA;
+                g_tabWheelAcc -= steps * WHEEL_DELTA;
+                if (steps) {
+                    ActivatePane(PaneAt(x, y));
+                    StepLayout(steps > 0 ? 1 : -1);
+                }
+                return 0;
+            }
             // Ctrl+wheel: tabs of the pane underneath (up = next, down = previous).
             // Ctrl comes in the wheel message itself, so it doesn't depend on focus.
             if ((GET_KEYSTATE_WPARAM(wp) & MK_CONTROL) || (g_test && KeyDown(VK_CONTROL))) {

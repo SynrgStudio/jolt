@@ -154,6 +154,7 @@ works too). Options in `config.txt`: `run_in_background`, `global_hotkey`, `tray
 | Ctrl+wheel | switch tab in the pane underneath: up, the next one; down, the previous one |
 | Win+J (from any app) | open Jolt; if it is already in front, hide it. With File Explorer in front, it opens its folder. Change it with `global_hotkey` |
 | Ctrl+Shift+wheel | move the active tab of the pane underneath: up, to the right; down, to the left |
+| Ctrl+Alt+wheel | **view**: up, a grid of thumbnails with bigger and bigger cells (80 to 256 px); down, back to the list. Per folder, saved in `views.txt` (`layout = grid 144`). In the grid, ← → ↑ ↓ walk the cells. Also Ctrl+K → "view: list / grid / bigger / smaller" |
 | Ctrl+Alt+T / Ctrl+Alt+E | open the terminal (Windows Terminal, or cmd) / File Explorer in this folder |
 | Ctrl+Alt+L | go to the real location of a shortcut (also symbolic links and junctions) |
 | Ctrl+B or the button to the left of the tabs | show / hide the sidebar |
@@ -249,6 +250,9 @@ hide = extension tmp part crdownload
 ```
 
 Clicking a group's title collapses or expands it.
+
+Each folder can also be a **grid of thumbnails** instead of a list: Ctrl+Alt+wheel up makes the cells bigger, down goes back to the list
+(`layout = grid 144` in `views.txt`). Thumbnails come from the Shell and are cached on disk.
 
 ## Drive index (Ctrl+P)
 
