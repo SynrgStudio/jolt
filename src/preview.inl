@@ -134,56 +134,16 @@ bool PvImage(IWICImagingFactory* wic, const std::wstring& path, PreviewResult& r
     return true;
 }
 
+// The Shell's thumbnail or icon, through the thumbnail cache (thumbs.inl): instant the second time.
 bool PvThumb(IWICImagingFactory* wic, const std::wstring& path, PreviewResult& r) {
-    ComPtr<IShellItemImageFactory> f;
-    if (FAILED(SHCreateItemFromParsingName(path.c_str(), nullptr, IID_PPV_ARGS(&f)))) return false;
-    HBITMAP hb = nullptr;
-    // A real thumbnail (PDF, video...) if there is one; otherwise the icon at its largest real size: asking
-    // for more makes Windows stretch it.
-    if (FAILED(f->GetImage(SIZE{512, 512}, SIIGBF_BIGGERSIZEOK | SIIGBF_THUMBNAILONLY, &hb)) || !hb) {
-        hb = nullptr;
-        if (FAILED(f->GetImage(SIZE{256, 256}, SIIGBF_ICONONLY, &hb)) || !hb) return false;
-    }
-    BITMAP bm{};
-    GetObjectW(hb, sizeof(bm), &bm);
-    bool ok = false;
-    if (bm.bmWidth > 0 && bm.bmHeight != 0) {
-        const int w = bm.bmWidth, h = std::abs(bm.bmHeight);
-        std::vector<uint8_t> px(static_cast<size_t>(w) * h * 4);
-        BITMAPINFO bi{};
-        bi.bmiHeader.biSize = sizeof(bi.bmiHeader);
-        bi.bmiHeader.biWidth = w;
-        bi.bmiHeader.biHeight = -h;  // top-down
-        bi.bmiHeader.biPlanes = 1;
-        bi.bmiHeader.biBitCount = 32;
-        HDC dc = GetDC(nullptr);
-        if (GetDIBits(dc, hb, 0, h, px.data(), &bi, DIB_RGB_COLORS) == h) {
-            bool anyAlpha = false, straight = false;
-            for (size_t i = 0; i + 3 < px.size(); i += 4) {
-                anyAlpha |= px[i + 3] != 0;
-                straight |= px[i] > px[i + 3] || px[i + 1] > px[i + 3] || px[i + 2] > px[i + 3];
-            }
-            if (!anyAlpha) {
-                for (size_t i = 3; i < px.size(); i += 4) px[i] = 255;
-            } else if (straight) {
-                // Icons come with straight alpha and Direct2D wants it premultiplied (a channel above the
-                // alpha gives it away): otherwise the soft edges turn into bright specks.
-                for (size_t i = 0; i + 3 < px.size(); i += 4)
-                    for (size_t c = 0; c < 3; ++c) px[i + c] = static_cast<uint8_t>((px[i + c] * px[i + 3] + 127) / 255);
-            }
-            ok = SUCCEEDED(wic->CreateBitmapFromMemory(w, h, GUID_WICPixelFormat32bppPBGRA, w * 4,
-                                                       static_cast<UINT>(px.size()), px.data(), &r.bmp));
-            if (ok) {
-                r.kind = 1;
-                r.thumb = true;
-                r.imgW = w;
-                r.imgH = h;
-            }
-        }
-        ReleaseDC(nullptr, dc);
-    }
-    DeleteObject(hb);
-    return ok;
+    UINT w = 0, h = 0;
+    bool isIcon = false;
+    if (!ThumbProduce(wic, path, 512, 0, r.bmp, w, h, isIcon)) return false;
+    r.kind = 1;
+    r.thumb = true;
+    r.imgW = w;
+    r.imgH = h;
+    return true;
 }
 
 bool PvText(const std::wstring& path, PreviewResult& r) {

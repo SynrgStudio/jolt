@@ -1812,8 +1812,10 @@ void CreateFormats() {
 }
 
 void PreviewReleaseBitmap();  // preview.inl
+void ThumbsReleaseBitmaps();  // thumbs.inl
 void ReleaseTarget() {
     PreviewReleaseBitmap();
+    ThumbsReleaseBitmaps();
     g_iconBmp.clear();
     g_brushAccent.Reset();
     g_brush.Reset();
@@ -3094,6 +3096,7 @@ void ViewEditorOpen(int pane);
 #include "viewedit.inl"
 #include "ops.inl"
 #include "search.inl"
+#include "thumbs.inl"
 #include "preview.inl"
 void PreviewReleaseBitmap() { g_pv.d2d.Reset(); }
 #include "background.inl"
@@ -3972,6 +3975,10 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return 0;
         case WM_APP_REC:
             ApplyRecBatch(reinterpret_cast<RecBatch*>(lp));
+            return 0;
+        case WM_APP_THUMB:
+            g_thumbDirty = false;
+            Invalidate();
             return 0;
         case WM_APP_IDXMSG: {
             std::unique_ptr<std::wstring> m(reinterpret_cast<std::wstring*>(lp));

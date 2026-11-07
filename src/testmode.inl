@@ -588,6 +588,15 @@ void TestRunStep() {
             const size_t bar2 = s.arg.find(L'|', bar + 1);
             const std::wstring sub = Trim(s.arg.substr(0, bar)), name = Trim(s.arg.substr(bar + 1, bar2 - bar - 1)), val = Trim(s.arg.substr(bar2 + 1));
             RegWrite(sub, name.empty() ? nullptr : name.c_str(), val);
+        } else if (s.cmd == L"thumb") {  // thumb C:\\a.jpg | 128: asks for it and logs its state
+            size_t bar = s.arg.find(L'|');
+            const std::wstring path = Trim(s.arg.substr(0, bar));
+            const int size = bar == std::wstring::npos ? 128 : _wtoi(s.arg.c_str() + bar + 1);
+            const int64_t mt = ThumbMtimeOf(path);
+            Thumb* th = ThumbGet(path, size, mt);
+            TestLog(th ? L"thumb: ready " + std::to_wstring(th->w) + L"x" + std::to_wstring(th->h) + (th->isIcon ? L" icon" : L" image") +
+                             (PathExists(ThumbFile(path, size, mt)) ? L" cached" : L" not cached")
+                       : L"thumb: loading");
         } else if (s.cmd == L"rows") {  // what the list shows, in order
             std::wstring names;
             for (int i = 0; i < RowCount(T()) && i < 40; ++i) names += L" " + (IsHeader(T(), i) ? L"[" + RowName(T(), i) + L"]" : RowName(T(), i));
