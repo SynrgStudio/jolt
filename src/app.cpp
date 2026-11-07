@@ -81,6 +81,7 @@ constexpr wchar_t gBack = 0xE72B, gFwd = 0xE72A, gUp = 0xE74A, gAdd = 0xE710, gC
 
 constexpr UINT WM_APP_RESULT = WM_APP + 1, WM_APP_CHANGED = WM_APP + 2, WM_APP_ICON = WM_APP + 3;
 constexpr UINT_PTR kTimerRevalidate = 1, kTimerPrefetch = 2, kTimerTabSlide = 12;
+constexpr UINT_PTR kTimerRecCheck = 15;  // a Windows command or a drag may have changed what the results show
 
 HWND g_hwnd = nullptr;
 HWND g_edit = nullptr;
@@ -538,6 +539,7 @@ struct Tab {
     uint64_t recGen = 0;
     int recDirs = 0;
     std::vector<std::shared_ptr<const Listing>> rec;
+    std::unordered_set<std::wstring> recKeys;  // the folders in rec, by key
     float scroll = 0;
     // grid view: one rect per row in content coordinates (see RowRect), rebuilt when the rows or the width change
     std::vector<D2D1_RECT_F> cells;
@@ -919,8 +921,15 @@ int FindRow(const Tab& t, const std::wstring& s) {
     if (s.empty()) return -1;
     const int n = RowCount(t);
     if (s.find(L'\\') == std::wstring::npos) {
+        const Listing* here = t.list.get();
+        if (t.recursive)
+            for (const auto& l : t.rec)
+                if (Key(l->path) == Key(t.path)) {
+                    here = l.get();
+                    break;
+                }
         for (int i = 0; i < n; ++i)
-            if (t.rows[i].l == t.list.get() && _wcsicmp(RowNameP(t, i), s.c_str()) == 0) return i;
+            if (t.rows[i].l == here && _wcsicmp(RowNameP(t, i), s.c_str()) == 0) return i;
         return -1;
     }
     std::wstring p = Normalize(s), leaf = LeafOf(p), dirKey = Key(ParentOf(p));
@@ -1120,8 +1129,11 @@ void SelectToggle(Tab& t, int i) {
     t.sel = t.anchor = i;
 }
 
+// With a filter, the close names below the real matches stay out: Ctrl+A and then Del must not take a file
+// that only looks like what was typed. If there is nothing but close names, those are what there is.
 void SelectAll(Tab& t) {
-    for (int i = 0; i < static_cast<int>(t.selMask.size()); ++i) t.selMask[i] = !IsHeader(t, i);
+    const bool onlyReal = t.nearRows > 0 && t.nearRows < RowCount(t);
+    for (int i = 0; i < static_cast<int>(t.selMask.size()); ++i) t.selMask[i] = !IsHeader(t, i) && !(onlyReal && t.rows[i].closeness);
 }
 
 // If i lands on a group title, the nearest content row in that direction (or the other one).
@@ -1163,6 +1175,15 @@ std::vector<std::wstring> SelectedFullPaths(const Tab& t) {
     return out;
 }
 
+// Is the selection spread over several folders? (subfolder search results, or the tree)
+bool SelSpansFolders(const Tab& t) {
+    if (t.sel < 0 || t.sel >= RowCount(t)) return false;
+    const Listing* here = t.rows[t.sel].l;
+    for (int i = 0; i < RowCount(t); ++i)
+        if (IsSel(t, i) && t.rows[i].l != here && Key(RowDir(t, i)) != Key(here->path)) return true;
+    return false;
+}
+
 // Listing ready to show: with its folder's view applied (filters, sort, groups) and without
 // hidden items if so requested. Stored with the listing: while nothing changes, it isn't recomputed.
 std::shared_ptr<const Listing> Prepared(std::shared_ptr<const Listing> l) {
@@ -1201,7 +1222,7 @@ void Rebuild(Tab& t, const Place* keep, const std::wstring& prefer) {
         idx = FindRow(t, t.pendingSelect);
         if (idx >= 0 || !keep) t.pendingSelect.clear();
     }
-    if (idx < 0 && keep && !keep->cur.empty()) {
+    if (idx < 0 && keep && !keep->cur.empty() && !t.recursive) {
         // if the item is gone (e.g. its folder was collapsed), the nearest visible ancestor
         for (std::wstring p = keep->cur; idx < 0 && !p.empty() && Key(p) != Key(t.path); p = ParentOf(p)) {
             idx = FindRow(t, p);
@@ -1279,6 +1300,7 @@ bool CantEnter(const std::wstring& path);
 void TreeFollow(Tab& t, const std::wstring& from, const std::wstring& to);
 void TouchSession();
 void StopRecursive(Tab& t, bool rebuild);
+bool RecTake(Tab& t, const std::shared_ptr<const Listing>& l);  // search.inl
 std::wstring g_renameAfterSelect;  // new folder or file: start renaming when it appears in the list
 
 // Loads (or takes from memory) the listing of an expanded subfolder.
@@ -1388,6 +1410,7 @@ void ApplyJob(const std::shared_ptr<Job>& j) {
     bool changed = g_preview;
     for (auto& tp : g_tabs) {
         Tab& t = *tp;
+        if (t.recursive && RecTake(t, l)) changed = true;
         if (t.expanded.count(k) && !t.recursive) {
             auto pl = Prepared(l);
             auto it = t.kids.find(k);
@@ -3986,6 +4009,10 @@ void RunCommand(Cmd cmd) {
             break;
         case Cmd::SelectAll:
             SelectAll(t);
+            if (t.nearRows > 0 && t.nearRows < Count())
+                S.message = Thousands(Count() - t.nearRows) + L" selected; the close names stay out";
+            else if (S.message.ends_with(L"the close names stay out"))
+                S.message.clear();
             Invalidate();
             break;
         case Cmd::Favorite: ToggleFavorite(); break;
@@ -4563,6 +4590,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             break;
         case WM_ACTIVATE:
             if (LOWORD(wp) == WA_INACTIVE) PopupClose();
+            else RecRevalidateShown();  // something may have been done to the results elsewhere
             Invalidate();
             break;
         case WM_PAINT: {
@@ -4660,6 +4688,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case WM_TIMER:
             KillTimer(hwnd, wp);
             if (wp == kTimerRevalidate) RevalidateVisible();
+            if (wp == kTimerRecCheck) RecRevalidateShown();
             if (wp == kTimerPreview) PreviewLoad();
             if (wp == kTimerTest) {
                 if (g_testBlocking) SetTimer(hwnd, kTimerTest, 30, nullptr);  // a step is still waiting

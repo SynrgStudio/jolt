@@ -457,6 +457,7 @@ void TestDragOut(const std::wstring& arg) {
     dt->DragOver(keys, pt, &eff);
     dt->Drop(d.Get(), keys, pt, &eff);
     TestLog(L"dragged out to " + a + L": " + EffectText(eff));
+    if (T().recursive) SetTimer(g_hwnd, kTimerRecCheck, 800, nullptr);  // as after a real drag (StartDrag)
 }
 
 void TestActivate(bool on) {
@@ -631,7 +632,10 @@ void TestRunStep() {
         } else if (s.cmd == L"rows") {  // what the list shows, in order
             std::wstring names;
             for (int i = 0; i < RowCount(T()) && i < 40; ++i) {
-                names += L" " + (IsHeader(T(), i) ? L"[" + RowName(T(), i) + L"]" : RowName(T(), i));
+                std::wstring n = IsHeader(T(), i) ? L"[" + RowName(T(), i) + L"]" : RowName(T(), i);
+                if (T().recursive && Key(RowDir(T(), i)) != Key(T().path))  // results: where it is, below the root
+                    n = RowPath(T(), i).substr(T().path.size() + (T().path.back() == L'\\' ? 0 : 1));
+                names += L" " + n;
                 if (T().rows[i].closeness) names += L"(" + std::to_wstring(T().rows[i].closeness) + L"%)";
             }
             TestLog(L"rows: " + std::to_wstring(RowCount(T())) + names);

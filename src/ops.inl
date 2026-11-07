@@ -8,7 +8,8 @@ void DeleteSelection() {
     std::vector<std::wstring> all = SelectedFullPaths(t);
     std::vector<std::wstring> names = SelectedNames(t);
     const bool permanent = KeyDown(VK_SHIFT);
-    if (all.empty() || (permanent && names.size() == all.size())) {
+    // in search results Jolt deletes it too (it also asks), so the results know what went
+    if (all.empty() || (permanent && names.size() == all.size() && !t.recursive)) {
         ShellVerb(names, "delete");
         return;
     }
@@ -20,7 +21,6 @@ void DeleteSelection() {
         if (ss.fNoConfirmRecycle) flags |= FOF_NOCONFIRMATION;
     }
     FileOp(FileOpKind::Delete, all, L"", flags);
-    for (const auto& f : all) Enqueue(ParentOf(f), JobKind::Revalidate);
 }
 
 bool SetClipboardText(const std::wstring& s) {

@@ -651,6 +651,8 @@ bool BindFolder(const std::wstring& path, ComPtr<IShellFolder>& psf) {
     return SUCCEEDED(hr) && psf;
 }
 
+std::unique_ptr<ShellMenu> FinishShellMenu(std::unique_ptr<ShellMenu> m, bool extended);
+
 // empty names = the folder background menu.
 std::unique_ptr<ShellMenu> CreateShellMenu(const std::wstring& folder, const std::vector<std::wstring>& names,
                                            bool extended) {
@@ -670,6 +672,33 @@ std::unique_ptr<ShellMenu> CreateShellMenu(const std::wstring& folder, const std
         m->psf->GetUIObjectOf(g_hwnd, static_cast<UINT>(m->pidls.size()), (PCUITEMID_CHILD_ARRAY)m->pidls.data(),
                               IID_IContextMenu, nullptr, reinterpret_cast<void**>(m->cm.GetAddressOf()));
     }
+    return FinishShellMenu(std::move(m), extended);
+}
+
+// Items from several folders (search results): the desktop takes full ID lists as its items, so a single menu
+// holds files from anywhere. folder: where the chosen command starts.
+std::unique_ptr<ShellMenu> CreateShellMenuPaths(const std::wstring& folder, const std::vector<std::wstring>& paths, bool extended) {
+    auto m = std::make_unique<ShellMenu>();
+    if (FAILED(SHGetDesktopFolder(&m->psf))) return nullptr;
+    m->folder = folder;
+    for (const std::wstring& p : paths) {
+        PIDLIST_ABSOLUTE full = nullptr;
+        if (SUCCEEDED(SHParseDisplayName(p.c_str(), nullptr, &full, 0, nullptr)) && full)
+            m->pidls.push_back(reinterpret_cast<PIDLIST_RELATIVE>(full));
+    }
+    if (m->pidls.empty()) return nullptr;
+    m->psf->GetUIObjectOf(g_hwnd, static_cast<UINT>(m->pidls.size()), (PCUITEMID_CHILD_ARRAY)m->pidls.data(), IID_IContextMenu,
+                          nullptr, reinterpret_cast<void**>(m->cm.GetAddressOf()));
+    return FinishShellMenu(std::move(m), extended);
+}
+
+// The menu for the selection, wherever its items are.
+std::unique_ptr<ShellMenu> SelectionShellMenu(const Tab& t, bool extended) {
+    if (SelSpansFolders(t)) return CreateShellMenuPaths(SelDir(t), SelectedFullPaths(t), extended);
+    return CreateShellMenu(SelDir(t), SelectedNames(t), extended);
+}
+
+std::unique_ptr<ShellMenu> FinishShellMenu(std::unique_ptr<ShellMenu> m, bool extended) {
     if (!m->cm) return nullptr;
     m->cm.As(&m->cm2);
     m->cm.As(&m->cm3);
@@ -932,7 +961,7 @@ bool ShellVerb(const std::vector<std::wstring>& names, const char* verb) {
     if (t.path.empty() && names.empty()) return false;
     if (names.empty() && strcmp(verb, "paste") != 0) return false;  // nothing selected: nothing to do
     if (TestRefuses(names.empty() ? t.path : SelDir(t))) return false;
-    auto m = CreateShellMenu(names.empty() ? t.path : SelDir(t), names, false);
+    auto m = names.empty() ? CreateShellMenu(t.path, names, false) : SelectionShellMenu(t, false);
     if (!m) return false;
     CMINVOKECOMMANDINFOEX ici{};
     ici.cbSize = sizeof(ici);
@@ -1098,7 +1127,7 @@ void OpenShellMenu(POINT screenPt, int row) {
             if (IsSel(t, i) && !EntryAt(t, i).isDir()) allDirs = false;
         ctx = allDirs ? L"folder" : L"file";
     }
-    g_shellMenu = CreateShellMenu(folder, names, KeyDown(VK_SHIFT));
+    g_shellMenu = names.empty() ? CreateShellMenu(folder, names, KeyDown(VK_SHIFT)) : SelectionShellMenu(t, KeyDown(VK_SHIFT));
     if (!g_shellMenu) return;
     std::vector<MenuItem> items = ApplyMenuCfg(ctx, WithCustomCommands(ReadMenu(*g_shellMenu, g_shellMenu->hmenu)), false);
     if (row >= 0) {  // Tags: the known ones (checked when the whole selection has one) and a new one
@@ -1166,6 +1195,7 @@ void OpenShellMenu(POINT screenPt, int row) {
                 return;
             }
             ShellInvoke(*g_shellMenu, id, screenPt);
+            if (T().recursive) SetTimer(g_hwnd, kTimerRecCheck, 800, nullptr);  // it may have changed what the results show
         },
         [](HMENU h, int pos, std::vector<MenuItem>& out) {
             if (!g_shellMenu) return;

@@ -170,6 +170,20 @@ ComPtr<IDataObject> SelectionDataObject() {
     Tab& t = T();
     ComPtr<IDataObject> pdo;
     if (t.path.empty() || !t.list) return pdo;
+    if (SelSpansFolders(t)) {
+        // from several folders (search results): a Shell item array makes the data object, so all of them travel
+        std::vector<PIDLIST_ABSOLUTE> full;
+        for (const std::wstring& p : SelectedFullPaths(t)) {
+            PIDLIST_ABSOLUTE f = nullptr;
+            if (SUCCEEDED(SHParseDisplayName(p.c_str(), nullptr, &f, 0, nullptr)) && f) full.push_back(f);
+        }
+        ComPtr<IShellItemArray> items;
+        if (!full.empty() &&
+            SUCCEEDED(SHCreateShellItemArrayFromIDLists(static_cast<UINT>(full.size()), (PCIDLIST_ABSOLUTE_ARRAY)full.data(), &items)))
+            items->BindToHandler(nullptr, BHID_DataObject, IID_PPV_ARGS(&pdo));
+        for (auto f : full) CoTaskMemFree(f);
+        return pdo;
+    }
     std::vector<std::wstring> names = SelectedNames(t);
     if (names.empty()) return pdo;
     const std::wstring dir = SelDir(t);
@@ -205,8 +219,6 @@ void RunPendingDrop() {
     // copying onto its own folder creates copies with another name, as in File Explorer
     if (d.move) FileOp(FileOpKind::Move, elsewhere, d.dest);
     else FileOp(FileOpKind::Copy, files, d.dest, elsewhere.size() == files.size() ? 0 : FOF_RENAMEONCOLLISION);
-    Enqueue(d.dest, JobKind::Revalidate);
-    for (const auto& f : files) Enqueue(ParentOf(f), JobKind::Revalidate);
 }
 
 // Drags the current selection.
@@ -218,6 +230,7 @@ void StartDrag() {
     DWORD effect = DROPEFFECT_NONE;
     HRESULT hr = SHDoDragDrop(g_hwnd, pdo.Get(), nullptr, DROPEFFECT_COPY | DROPEFFECT_MOVE | DROPEFFECT_LINK, &effect);
     Log(L"SHDoDragDrop hr=0x%08X effect=%u", static_cast<unsigned>(hr), effect);
+    if (T().recursive) SetTimer(g_hwnd, kTimerRecCheck, 800, nullptr);  // dropped in another app, it may have moved them
     RunPendingDrop();
 }
 
