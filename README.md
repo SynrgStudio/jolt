@@ -128,6 +128,7 @@ works too). Options in `config.txt`: `run_in_background`, `global_hotkey`, `tray
 | F2 | rename (the name without the extension is selected); **Tab / Shift+Tab** saves and moves to the next / previous one |
 | Ctrl+N / Ctrl+Shift+N | new file / new folder, ready to rename |
 | Ctrl+Shift+D | duplicate ("name - Copy.ext") |
+| Ctrl+Shift+G | **group in a new folder**: moves the selection into a new folder next to it (named after the item if there is one) and starts renaming it. Ctrl+Z undoes it in two steps |
 | Ctrl+Shift+C | copy the path of the selection (or of the folder), with quotes only if needed |
 | Alt+Enter | Windows properties |
 | Ctrl+C / Ctrl+X / Ctrl+V | copy, cut and paste, compatible with File Explorer (Windows progress, conflicts and undo) |

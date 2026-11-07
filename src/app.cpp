@@ -3233,6 +3233,7 @@ void RunCommand(Cmd cmd) {
         case Cmd::MoveToOther: TransferToOther(true); break;
         case Cmd::CopyPath: CopyPathText(); break;
         case Cmd::Duplicate: Duplicate(); break;
+        case Cmd::GroupInFolder: GroupInFolder(); break;
         case Cmd::Install: InstPanelOpen(); break;
         case Cmd::Quit: BgQuit(); break;
         case Cmd::Undo: UndoStep(true); break;

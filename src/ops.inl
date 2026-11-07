@@ -108,6 +108,53 @@ void Properties() {
     ShellVerb(names, "properties");
 }
 
+// Ctrl+Shift+G: moves the selection into a new folder next to it and starts renaming the folder.
+// One item: the folder takes its name (without the extension). Several: "New folder".
+void GroupInFolder() {
+    Tab& t = T();
+    std::vector<std::wstring> files = SelectedFullPaths(t);
+    if (files.empty()) return;
+    const std::wstring dir = ParentOf(files[0]);
+    for (const std::wstring& f : files)
+        if (Key(ParentOf(f)) != Key(dir)) {
+            S.message = L"Select items from a single folder to group them";
+            Invalidate();
+            return;
+        }
+    std::wstring base = L"New folder";
+    if (files.size() == 1) {
+        base = LeafOf(files[0]);
+        DWORD a = GetFileAttributesW(ToExtendedPath(files[0]).c_str());
+        size_t dot = base.find_last_of(L'.');
+        if (a != INVALID_FILE_ATTRIBUTES && !(a & FILE_ATTRIBUTE_DIRECTORY) && dot != std::wstring::npos && dot > 0) base.resize(dot);
+        while (!base.empty() && (base.back() == L' ' || base.back() == L'.')) base.pop_back();
+        if (base.empty()) base = L"New folder";
+    }
+    const std::wstring name = FreeName(dir, base, L""), folder = Join(dir, name.c_str());
+    if (!CreateDirectoryW(ToExtendedPath(folder).c_str(), nullptr)) {
+        S.message = L"Couldn't create the folder: " + ErrorText(GetLastError());
+        Invalidate();
+        return;
+    }
+    UndoRecordCreate(folder);
+    if (!FileOp(FileOpKind::Move, files, folder)) {
+        RemoveDirectoryW(ToExtendedPath(folder).c_str());  // nothing moved: leave no empty folder behind
+        Enqueue(dir, JobKind::Revalidate);
+        return;
+    }
+    if (Key(dir) == Key(t.path)) {
+        if (!t.filter.empty()) {
+            t.filter.clear();
+            BuildRows(t);
+        }
+        t.pendingSelect = name;
+        g_renameAfterSelect = name;
+    }
+    S.message = Thousands(static_cast<int>(files.size())) + (files.size() == 1 ? L" item moved into " : L" items moved into ") + name;
+    Enqueue(dir, JobKind::Revalidate);
+    Invalidate();
+}
+
 // F5 / F6 with split view: copy / move the selection to the other pane's folder.
 void TransferToOther(bool move) {
     if (!g_split) {
