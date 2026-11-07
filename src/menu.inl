@@ -1182,6 +1182,39 @@ void OpenAppMenu(const RECT& anchorScreen) {
     });
 }
 
+// ================================================================ tab menu
+std::wstring ShortcutFor(Cmd cmd);  // palette.inl
+
+void OpenTabMenu(int i, POINT screenPt) {
+    if (i < 0 || i >= static_cast<int>(g_tabs.size())) return;
+    Tab* const tab = g_tabs[i].get();
+    auto add = [](std::vector<MenuItem>& items, const wchar_t* text, UINT id, Cmd cmd, bool enabled = true) {
+        MenuItem m;
+        m.text = text;
+        m.shortcut = ShortcutFor(cmd);
+        m.id = id;
+        m.enabled = enabled;
+        items.push_back(std::move(m));
+    };
+    std::vector<MenuItem> items;
+    add(items, tab->pinned ? L"Unpin tab" : L"Pin tab", 1, Cmd::PinTab);
+    add(items, L"Close tab", 2, Cmd::CloseTab, !tab->pinned);
+    add(items, L"Close other tabs", 3, Cmd::CloseOthers);
+    const RECT anchor{screenPt.x, screenPt.y, screenPt.x, screenPt.y};
+    PopupOpen(std::move(items), anchor, [tab](UINT id) {
+        int at = -1;
+        for (int k = 0; k < static_cast<int>(g_tabs.size()); ++k)
+            if (g_tabs[k].get() == tab) at = k;
+        if (at < 0) return;
+        if (id == 1) SetPinned(at, !tab->pinned);
+        if (id == 2) CloseTab(at);
+        if (id == 3) {
+            SelectTab(at);
+            CloseOtherTabs();
+        }
+    });
+}
+
 // ================================================================ breadcrumb dropdown
 // The folders inside a folder, from the chevron after its segment; a right click on a segment lists that segment's
 // siblings, which is the same list one level up. It opens on the folder you are in, or on the way to it.

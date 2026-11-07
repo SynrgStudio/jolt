@@ -524,6 +524,7 @@ void SetSplit(bool on) {
         for (auto& t : g_tabs) t->pane = 0;
         g_act = 0;
         g_paneCur[0] = g_paneCur[1] = g_cur;
+        KeepPinnedFirst();
     }
     for (auto& tp : g_tabs) ClampScroll(*tp);
     SetWatchAll();
