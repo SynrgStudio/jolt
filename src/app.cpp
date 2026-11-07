@@ -513,7 +513,7 @@ bool g_ignoreClipUpdate = false;
 int g_dropRow = -1, g_dropPane = 0, g_dropSide = -1, g_dropTab = -1;  // target highlighted during a drag
 
 // Clickable areas, recomputed on every draw.
-enum class HitKind { None, Tab, TabClose, TabNew, SideToggle, AppMenu, Back, Fwd, Up, Crumb, PathEmpty, Side, Header, Divider, ViewBtn, FoldBtn, ColEdge, PreviewEdge };
+enum class HitKind { None, Tab, TabClose, TabNew, SideToggle, AppMenu, Back, Fwd, Up, Crumb, CrumbChev, PathEmpty, Side, Header, Divider, ViewBtn, FoldBtn, ColEdge, PreviewEdge };
 struct Hit {
     D2D1_RECT_F r;
     HitKind kind;
@@ -521,6 +521,9 @@ struct Hit {
 };
 std::vector<Hit> g_hits;
 std::vector<std::wstring> g_crumbPaths;
+bool g_crumbMenuOpen = false;  // the breadcrumb dropdown, and the folder it lists (menu.inl)
+std::wstring g_crumbMenuDir;
+D2D1_RECT_F g_crumbLast[2]{};  // each pane's last segment: the keyboard opens the dropdown there
 std::vector<std::wstring> g_sidePaths;
 Hit g_hover{{}, HitKind::None, -1};
 bool g_sideVisible = true;
@@ -1188,6 +1191,7 @@ void CancelRename();
 void BeginRename();
 void UndoRecordRename(const std::wstring& from, const std::wstring& to);
 void UndoRecordCreate(const std::wstring& path);
+void CrumbMenuListed(const Listing& l);  // menu.inl
 void TreeFollow(Tab& t, const std::wstring& from, const std::wstring& to);
 void TouchSession();
 void StopRecursive(Tab& t, bool rebuild);
@@ -1292,6 +1296,7 @@ void ApplyJob(const std::shared_ptr<Job>& j) {
     auto l = j->result;
     const std::wstring k = Key(l->path);
     if (l->error == 0) g_cache[k] = l;
+    CrumbMenuListed(*l);
     if (j->kind == JobKind::Prefetch) {
         if (g_preview) Invalidate();  // a folder's preview may be waiting for it
         return;
@@ -2061,11 +2066,10 @@ void EnsureImageList() {
     g_iconBmp.clear();
 }
 
-ID2D1Bitmap* IconBitmap(int idx) {
-    if (idx < 0 || !g_imgList) return nullptr;
-    auto it = g_iconBmp.find(idx);
-    if (it != g_iconBmp.end()) return it->second.Get();
+// A system icon as a bitmap of the current render target.
+ComPtr<ID2D1Bitmap> MakeIconBitmap(int idx) {
     ComPtr<ID2D1Bitmap> bmp;
+    if (idx < 0 || !g_imgList) return bmp;
     HICON hi = nullptr;
     if (SUCCEEDED(g_imgList->GetIcon(idx, ILD_TRANSPARENT, &hi)) && hi) {
         ComPtr<IWICBitmap> wb;
@@ -2076,8 +2080,14 @@ ID2D1Bitmap* IconBitmap(int idx) {
             g_rt->CreateBitmapFromWicBitmap(conv.Get(), nullptr, &bmp);
         DestroyIcon(hi);
     }
-    g_iconBmp[idx] = bmp;
-    return bmp.Get();
+    return bmp;
+}
+
+ID2D1Bitmap* IconBitmap(int idx) {
+    if (idx < 0 || !g_imgList) return nullptr;
+    auto it = g_iconBmp.find(idx);
+    if (it != g_iconBmp.end()) return it->second.Get();
+    return (g_iconBmp[idx] = MakeIconBitmap(idx)).Get();
 }
 
 void Color(UINT32 rgb, float a = 1.f) { g_brush->SetColor(D2D1::ColorF(rgb, a)); }
@@ -2412,6 +2422,17 @@ void DrawToolbar(int pane) {
     }
     const UINT32 lastColor = activePane ? cText : 0xB9B9C2;
     float cx = crumbL + 4;
+    // the chevron after a segment opens the list of the folders inside it; idx: that segment
+    auto chevron = [&](int idx) {
+        const D2D1_RECT_F r = D2D1::RectF(cx, cy - 12, cx + chevW, cy + 12);
+        const bool open = g_crumbMenuOpen && activePane && Key(g_crumbPaths[idx]) == Key(g_crumbMenuDir);
+        const bool hot = open || IsHover(HitKind::CrumbChev, idx);
+        if (hot) Round(r, 4, 0xFFFFFF, 0.08f);
+        Color(hot ? cDim : cFaint);
+        Glyph(open ? 0xE70D : gChevron, g_fmtIconSm.Get(), cx, cy - 8, cx + chevW, cy + 8);
+        g_hits.push_back({r, HitKind::CrumbChev, idx});
+        cx += chevW;
+    };
     g_rt->PushAxisAlignedClip(bar, D2D1_ANTIALIAS_MODE_ALIASED);
     if (first > 0) {
         D2D1_RECT_F r = D2D1::RectF(cx, cy - 12, cx + 24, cy + 12);
@@ -2421,9 +2442,7 @@ void DrawToolbar(int pane) {
         g_hits.push_back({r, HitKind::Crumb, static_cast<int>(g_crumbPaths.size())});
         g_crumbPaths.push_back(crumbs[first - 1].path);
         cx += 24;
-        Color(cFaint);
-        Glyph(gChevron, g_fmtIconSm.Get(), cx, cy - 8, cx + chevW, cy + 8);
-        cx += chevW;
+        chevron(static_cast<int>(g_crumbPaths.size()) - 1);
     }
     for (size_t i = first; i < crumbs.size(); ++i) {
         const Crumb& c = crumbs[i];
@@ -2438,11 +2457,8 @@ void DrawToolbar(int pane) {
         g_hits.push_back({r, HitKind::Crumb, static_cast<int>(g_crumbPaths.size())});
         g_crumbPaths.push_back(c.path);
         cx += c.w;
-        if (!last) {
-            Color(cFaint);
-            Glyph(gChevron, g_fmtIconSm.Get(), cx, cy - 8, cx + chevW, cy + 8);
-            cx += chevW;
-        }
+        if (last) g_crumbLast[pane] = r;
+        else chevron(static_cast<int>(g_crumbPaths.size()) - 1);
     }
     g_rt->PopAxisAlignedClip();
     if (cx < bar.right) g_hits.push_back({D2D1::RectF(cx, bar.top, bar.right, bar.bottom), HitKind::PathEmpty, pane});
@@ -3812,6 +3828,7 @@ void RunCommand(Cmd cmd) {
         case Cmd::ZoomReset: SetUiZoom(12); break;
         case Cmd::RowsTaller: SetRowHeight(kRow + 1); break;
         case Cmd::RowsShorter: SetRowHeight(kRow - 1); break;
+        case Cmd::FolderSiblings: CrumbMenu(CrumbSiblingsDir(t.path), g_crumbLast[g_act]); break;
         case Cmd::PreviewWrap:
             g_cfg.previewWrap = !g_cfg.previewWrap;
             ConfigSetValue(L"general", L"preview_wrap", g_cfg.previewWrap ? L"yes" : L"no");
@@ -4013,6 +4030,9 @@ void OnClick(float x, float y, bool middle) {
             else
                 Navigate(T(), g_crumbPaths[h.idx], true);
             return;
+        case HitKind::CrumbChev:
+            if (!middle) CrumbMenu(g_crumbPaths[h.idx], h.r);
+            return;
         case HitKind::PathEmpty: ShowPathEdit(); return;
         case HitKind::Side:
             if (middle)
@@ -4158,7 +4178,15 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             PopupKey(wp);
             return 0;
         }
-        if (msg == WM_CHAR || msg == WM_SYSKEYDOWN) return 0;
+        if (msg == WM_CHAR) {
+            PopupChar(static_cast<wchar_t>(wp));
+            return 0;
+        }
+        if (msg == WM_MOUSEWHEEL) {
+            PopupWheel(GET_WHEEL_DELTA_WPARAM(wp), POINT{GET_X_LPARAM(lp), GET_Y_LPARAM(lp)});
+            return 0;
+        }
+        if (msg == WM_SYSKEYDOWN) return 0;
     }
     // with the view editor open, the list's mouse and keyboard belong to the editor
     if (g_ve.open) {
@@ -4363,6 +4391,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case WM_APP_ICON:
             g_iconDirty = false;
             Invalidate();
+            for (auto& L : g_popup.levels) InvalidateRect(L->hwnd, nullptr, FALSE);  // a menu may be showing them too
             return 0;
         case WM_TIMER:
             KillTimer(hwnd, wp);
@@ -4580,6 +4609,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             ClientToScreen(hwnd, &pt);
             const Hit side = HitAt(x, y);
             if (side.kind == HitKind::Side) OpenSideMenu(side.idx, pt);
+            else if (side.kind == HitKind::Crumb) CrumbMenu(CrumbSiblingsDir(g_crumbPaths[side.idx]), side.r);
+            else if (side.kind == HitKind::CrumbChev) CrumbMenu(g_crumbPaths[side.idx], side.r);
             else if (PaneAt(x, y) == g_act && y >= ListTop() && y < ListBottom()) OpenShellMenu(pt, HitRow(x, y));
             return 0;
         }

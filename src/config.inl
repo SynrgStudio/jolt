@@ -10,7 +10,7 @@ enum class Cmd {
     Terminal, OpenExplorer, RealLocation, CollapseGroups, ExpandGroups, GroupByDay, GroupByType, NoGroups,
     SortByType, ZoomIn, ZoomOut, ZoomReset, RowsTaller, RowsShorter, EmptyRecycleBin,
     Undo, Redo,
-    Install, Quit, RenameMany, ViewList, ViewGrid, ViewBigger, ViewSmaller, Tag, PreviewWrap,
+    Install, Quit, RenameMany, FolderSiblings, ViewList, ViewGrid, ViewBigger, ViewSmaller, Tag, PreviewWrap,
     CustomFirst = 1000  // + index into g_cfg.custom: the user's own commands
 };
 inline bool IsCustom(Cmd c) { return static_cast<int>(c) >= static_cast<int>(Cmd::CustomFirst); }
@@ -54,6 +54,7 @@ struct CmdDef {
 };
 const CmdDef kCommands[] = {
     {L"up", Cmd::Up, L"Backspace, Left, Alt+Up", L"go to the parent folder"},
+    {L"folder_siblings", Cmd::FolderSiblings, L"Alt+Down", L"list the folders next to this one, to jump to one"},
     {L"enter", Cmd::Enter, L"Right", L"enter the highlighted folder (does not open files)"},
     {L"open", Cmd::Open, L"Enter", L"open the highlighted item (folder or file)"},
     {L"open_tab", Cmd::OpenTab, L"Ctrl+Enter", L"open the highlighted folder in a new tab"},

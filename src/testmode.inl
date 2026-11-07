@@ -12,6 +12,8 @@
 //   wheel x y -3             mouse wheel            command show_folders  a command by name
 //   wait 300                 milliseconds           capture name.png      save what is visible
 //   size 1100 700            window size            echo text             writes to log.txt
+//   middle x y               middle click           popup                 logs the open menu
+//   crumbs                   logs where the path segments and chevrons are, to click them
 //
 // Windows windows (with --test-desktop they stay on an invisible desktop):
 //   wait_window Properties [ms]          windows                  (logs the open windows)
@@ -161,6 +163,9 @@ void TestMouse(const std::wstring& kind, const std::wstring& arg) {
     } else if (kind == L"right") {
         SendMessageW(h, WM_RBUTTONDOWN, MK_RBUTTON, lp);
         SendMessageW(h, WM_RBUTTONUP, 0, lp);
+    } else if (kind == L"middle") {
+        SendMessageW(h, WM_MBUTTONDOWN, MK_MBUTTON, lp);
+        SendMessageW(h, WM_MBUTTONUP, 0, lp);
     } else if (kind == L"wheel") {
         POINT pt{TestPx(x), TestPx(y)};
         ClientToScreen(g_hwnd, &pt);
@@ -645,7 +650,26 @@ void TestRunStep() {
             TestKey(s.arg);
         } else if (s.cmd == L"type") {
             for (wchar_t c : s.arg) SendMessageW(TestKeyTarget(), WM_CHAR, c, 1);
-        } else if (s.cmd == L"click" || s.cmd == L"double" || s.cmd == L"right" || s.cmd == L"wheel") {
+        } else if (s.cmd == L"popup") {  // the open menu: items, the marked one, the hovered one, the scroll
+            if (!g_popup.open()) {
+                TestLog(L"popup: closed");
+            } else {
+                const PopupLevel& L = *g_popup.levels.back();
+                std::wstring out = L"popup: " + std::to_wstring(L.items.size()) + L" items, mark " +
+                                   (L.mark >= 0 ? L.items[L.mark].text : L"-") + L", hover " + (L.hover >= 0 ? L.items[L.hover].text : L"-") +
+                                   L", scroll " + std::to_wstring(static_cast<int>(L.scroll)) + L" of " + std::to_wstring(static_cast<int>(MaxScroll(L))) + L":";
+                for (size_t i = 0; i < L.items.size() && i < 12; ++i) out += L" | " + L.items[i].text;
+                TestLog(out);
+            }
+        } else if (s.cmd == L"crumbs") {  // where the segments and chevrons are, to click them
+            Render();
+            std::wstring out = L"crumbs:";
+            for (const Hit& h : g_hits)
+                if (h.kind == HitKind::Crumb || h.kind == HitKind::CrumbChev)
+                    out += (h.kind == HitKind::Crumb ? L" | " + g_crumbPaths[h.idx] + L" @" : L" > @") + std::to_wstring(static_cast<int>((h.r.left + h.r.right) / 2)) +
+                           L"," + std::to_wstring(static_cast<int>((h.r.top + h.r.bottom) / 2));
+            TestLog(out);
+        } else if (s.cmd == L"click" || s.cmd == L"double" || s.cmd == L"right" || s.cmd == L"middle" || s.cmd == L"wheel") {
             TestMouse(s.cmd, s.arg);
         } else if (s.cmd == L"press" || s.cmd == L"drag" || s.cmd == L"release") {
             float x = 0, y = 0;
