@@ -18,6 +18,7 @@ void TestLog(const std::wstring& s);
 bool FolderExists(const std::wstring& p);
 void SaveSession();
 void InstPanelClose();
+void RenameManyClose();
 
 // ---- single instance
 
@@ -81,6 +82,7 @@ void BgHide() {
     PopupClose();
     if (g_pal.open) PaletteClose();
     InstPanelClose();
+    RenameManyClose();
     if (g_test) {
         g_testShown = false;
         TestLog(L"window: hidden");

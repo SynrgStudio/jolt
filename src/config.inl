@@ -10,7 +10,7 @@ enum class Cmd {
     Terminal, OpenExplorer, RealLocation, CollapseGroups, ExpandGroups, GroupByDay, GroupByType, NoGroups,
     SortByType, ZoomIn, ZoomOut, ZoomReset, RowsTaller, RowsShorter, EmptyRecycleBin,
     Undo, Redo,
-    Install, Quit,
+    Install, Quit, RenameMany,
     CustomFirst = 1000  // + index into g_cfg.custom: the user's own commands
 };
 inline bool IsCustom(Cmd c) { return static_cast<int>(c) >= static_cast<int>(Cmd::CustomFirst); }
@@ -53,7 +53,8 @@ const CmdDef kCommands[] = {
     {L"open_tab", Cmd::OpenTab, L"Ctrl+Enter", L"open the highlighted folder in a new tab"},
     {L"back", Cmd::Back, L"Alt+Left", L"back"},
     {L"forward", Cmd::Forward, L"Alt+Right", L"forward"},
-    {L"rename", Cmd::Rename, L"F2", L"rename"},
+    {L"rename", Cmd::Rename, L"F2", L"rename (several selected: the rename panel)"},
+    {L"rename_many", Cmd::RenameMany, L"Ctrl+F2", L"rename several at once: pattern, find and replace, with a preview"},
     {L"delete", Cmd::Delete, L"Del, Shift+Del", L"move to the Recycle Bin (with Shift, permanently)"},
     {L"new_folder", Cmd::NewFolder, L"Ctrl+Shift+N", L"new folder"},
     {L"copy", Cmd::Copy, L"Ctrl+C", L"copy"},

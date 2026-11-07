@@ -2722,6 +2722,7 @@ void DrawStatus(int pane, float H) {
 void DrawPreview(float W, float H);     // preview.inl
 void DrawViewEditor(float W, float H);  // viewedit.inl
 void DrawInstallPanel(float W, float H);  // install.inl
+void DrawRenamePanel(float W, float H);   // rename.inl
 
 // Milliseconds since the process started (includes loading the executable).
 double MsSinceProcessStart() {
@@ -2765,6 +2766,7 @@ void Render() {
     DrawViewEditor(W, H);
     DrawPalette(W, H);
     DrawInstallPanel(W, H);
+    DrawRenamePanel(W, H);
     if (g_rt->EndDraw() == D2DERR_RECREATE_TARGET) ReleaseTarget();
     if (g_firstFrameMs == 0) g_firstFrameMs = MsSinceProcessStart();
 
@@ -3096,6 +3098,7 @@ void ViewEditorOpen(int pane);
 void PreviewReleaseBitmap() { g_pv.d2d.Reset(); }
 #include "background.inl"
 #include "install.inl"
+#include "rename.inl"
 #include "testmode.inl"
 
 // ---------------------------------------------------------------- session (tabs, window, panes)
@@ -3336,7 +3339,11 @@ void RunCommand(Cmd cmd) {
         case Cmd::OpenTab: OpenSelected(true); break;
         case Cmd::Back: GoBack(); break;
         case Cmd::Forward: GoForward(); break;
-        case Cmd::Rename: BeginRename(); break;
+        case Cmd::Rename:
+            if (SelCount(t) > 1) RenameManyOpen();
+            else BeginRename();
+            break;
+        case Cmd::RenameMany: RenameManyOpen(); break;
         case Cmd::Delete: DeleteSelection(); break;
         case Cmd::NewFolder: NewItem(true); break;
         case Cmd::NewFile: NewItem(false); break;
@@ -3734,6 +3741,29 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         }
         if (msg == WM_LBUTTONDOWN) {
             InstClick(DipX(lp), DipY(lp));
+            return 0;
+        }
+    }
+    // the rename panel: its text boxes have the keyboard; the mouse only reaches the panel
+    if (g_rn.open) {
+        if (msg == WM_KEYDOWN) {
+            if (wp == VK_ESCAPE) RenameManyClose();
+            else if (wp == VK_RETURN) RenameManyApply();
+            else if (wp == VK_TAB) RnFocus(g_rn.focus + (KeyDown(VK_SHIFT) ? -1 : 1));
+            return 0;
+        }
+        if (msg == WM_CHAR || msg == WM_LBUTTONUP || msg == WM_RBUTTONDOWN || msg == WM_RBUTTONUP || msg == WM_MBUTTONDOWN || msg == WM_LBUTTONDBLCLK)
+            return 0;
+        if (msg == WM_MOUSEWHEEL) {
+            RnWheel(GET_WHEEL_DELTA_WPARAM(wp) / WHEEL_DELTA);
+            return 0;
+        }
+        if (msg == WM_MOUSEMOVE) {
+            RnHover(DipX(lp), DipY(lp));
+            return 0;
+        }
+        if (msg == WM_LBUTTONDOWN) {
+            RnClick(DipX(lp), DipY(lp));
             return 0;
         }
     }

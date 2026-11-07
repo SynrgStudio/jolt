@@ -90,6 +90,7 @@ bool TestLoadScript(const std::wstring& file) {
 // Window that receives the keyboard (the one that would have focus).
 HWND TestKeyTarget() {
     if (g_renaming) return g_renameEdit;
+    if (g_rn.open && g_rn.edit[g_rn.focus]) return g_rn.edit[g_rn.focus];
     if (g_editing) return g_edit;
     if (g_ved.editStep >= 0 && g_ved.edit) return g_ved.edit;
     return g_hwnd;
@@ -591,6 +592,11 @@ void TestRunStep() {
             std::wstring names;
             for (int i = 0; i < RowCount(T()) && i < 40; ++i) names += L" " + (IsHeader(T(), i) ? L"[" + RowName(T(), i) + L"]" : RowName(T(), i));
             TestLog(L"rows: " + std::to_wstring(RowCount(T())) + names);
+        } else if (s.cmd == L"rename_preview") {  // the rename panel's rows: old -> new, with problems
+            std::wstring out = L"rename_preview: " + std::to_wstring(g_rn.changing) + L" change, " + std::to_wstring(g_rn.problems) + L" problems";
+            for (const RnItem& it : g_rn.items)
+                out += L" | " + it.oldName + L" -> " + it.newName + (it.problem ? L" !" + std::to_wstring(it.problem) : L"");
+            TestLog(out);
         } else if (s.cmd == L"selection") {
             std::wstring names;
             for (const auto& n : SelectedNames(T())) names += L" " + n;
