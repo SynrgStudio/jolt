@@ -1,5 +1,6 @@
-// Tags and colors. Tags are labels you put on files and folders, each with a color, shown as small dots
-// after the name and usable in the filter ("tag:urgent"); they live in %APPDATA%\Jolt\tags.txt.
+// Tags and colors. Tags are labels you put on files and folders, each with a color, shown as little tag-shaped
+// labels after the name (dots where there's no room) and usable in the filter ("tag:urgent"); they live in
+// %APPDATA%\Jolt\tags.txt.
 // Name colors by rule come from [file_colors] in config.txt ("patterns = RRGGBB").
 // Included from app.cpp after the filter code, before BuildRows.
 

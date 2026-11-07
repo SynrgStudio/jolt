@@ -468,7 +468,16 @@ void DrawPreview(float W, float H) {
     Text(name, g_fmtNameBold.Get(), L, y, R, y + 26);
     y += 30;
     for (auto& [label, value] : info) {
-        if (!value.empty()) PvInfoLine(label, value, L, R, y);
-        else y += 20;
+        if (value.empty()) {
+            y += 20;
+        } else if (wcscmp(label, L"Tags") == 0) {  // the tags as labels, not text
+            Color(cFaint);
+            Text(label, wcslen(label), g_fmtName.Get(), L, y, L + 90, y + 20);
+            float xe;
+            DrawTagLabels(rowPath, L + 90, y + 10, R, 1.f, xe);
+            y += 20;
+        } else {
+            PvInfoLine(label, value, L, R, y);
+        }
     }
 }

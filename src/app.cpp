@@ -1899,7 +1899,7 @@ void CreateTextParams() {
                                       def->GetPixelGeometry(), DWRITE_RENDERING_MODE_GDI_CLASSIC, &g_textParams);
 }
 ComPtr<IDWriteTextFormat> g_fmtName, g_fmtNameBold, g_fmtRight, g_fmtIcon, g_fmtIconSm, g_fmtCap, g_fmtCrumb, g_fmtTab, g_fmtSide,
-    g_fmtSection, g_fmtHeader, g_fmtStatus, g_fmtStatusR, g_fmtCenter, g_fmtMono, g_fmtMonoR, g_fmtCell;
+    g_fmtSection, g_fmtHeader, g_fmtStatus, g_fmtStatusR, g_fmtCenter, g_fmtMono, g_fmtMonoR, g_fmtCell, g_fmtTag;
 
 bool FontExists(const wchar_t* family) {
     ComPtr<IDWriteFontCollection> fc;
@@ -1950,6 +1950,7 @@ void CreateFormats() {
     g_fmtStatus = MakeFormat(ui, sz, DWRITE_TEXT_ALIGNMENT_LEADING);
     g_fmtStatusR = MakeFormat(ui, sz, DWRITE_TEXT_ALIGNMENT_TRAILING);
     g_fmtCenter = MakeFormat(ui, sz, DWRITE_TEXT_ALIGNMENT_CENTER);
+    g_fmtTag = MakeFormat(ui, smallSz, DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_FONT_WEIGHT_SEMI_BOLD, false);  // the name inside a tag label
     g_fmtCell = MakeFormat(ui, sz, DWRITE_TEXT_ALIGNMENT_CENTER);  // grid names: centered, up to two lines
     g_fmtCell->SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP);
     g_fmtCell->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
@@ -2625,13 +2626,59 @@ void DrawHeader(int pane) {
 
 void DrawBox(int pane, float listTop, float listBot);  // boxselect.inl
 
-// The little discs after a name: one per tag.
+// The little discs after a name: one per tag (where a label wouldn't fit: the grid cells).
 void DrawTagDots(const std::wstring& full, float x, float cy, float a, float& xEnd) {
     xEnd = x;
     const auto* tags = TagsOf(full);
     if (!tags) return;
     for (const std::wstring& t : *tags) {
         Round(D2D1::RectF(xEnd, cy - 3.5f, xEnd + 7, cy + 3.5f), 3.5f, TagColor(t), a);
+        xEnd += 10;
+    }
+    xEnd += 4;
+}
+
+// A tag as a little label: a rectangle with a pointed left end (and its hole), the name inside. Draws as many as fit
+// before xMax, the rest as dots; xEnd is where the row may go on.
+void DrawTagLabels(const std::wstring& full, float x, float cy, float xMax, float a, float& xEnd) {
+    xEnd = x;
+    const auto* tags = TagsOf(full);
+    if (!tags) return;
+    const float h = std::clamp(kRow - 6.f, 14.f, 17.f), top = std::floor(cy - h / 2), bot = top + h, notch = std::floor(h / 2), r = 3;
+    const float mid = (top + bot) / 2;
+    bool dots = false;
+    for (const std::wstring& t : *tags) {
+        const UINT32 col = TagColor(t);
+        if (!dots) {
+            const float tw = std::ceil(MeasureW(t, g_fmtTag.Get())), w = notch + tw + 11;
+            if (xEnd + w <= xMax) {
+                ComPtr<ID2D1PathGeometry> g;
+                ComPtr<ID2D1GeometrySink> s;
+                if (SUCCEEDED(g_d2d->CreatePathGeometry(&g)) && SUCCEEDED(g->Open(&s))) {
+                    s->BeginFigure(D2D1::Point2F(xEnd, mid), D2D1_FIGURE_BEGIN_FILLED);
+                    s->AddLine(D2D1::Point2F(xEnd + notch, top));
+                    s->AddLine(D2D1::Point2F(xEnd + w - r, top));
+                    s->AddArc(D2D1::ArcSegment(D2D1::Point2F(xEnd + w, top + r), D2D1::SizeF(r, r), 0, D2D1_SWEEP_DIRECTION_CLOCKWISE, D2D1_ARC_SIZE_SMALL));
+                    s->AddLine(D2D1::Point2F(xEnd + w, bot - r));
+                    s->AddArc(D2D1::ArcSegment(D2D1::Point2F(xEnd + w - r, bot), D2D1::SizeF(r, r), 0, D2D1_SWEEP_DIRECTION_CLOCKWISE, D2D1_ARC_SIZE_SMALL));
+                    s->AddLine(D2D1::Point2F(xEnd + notch, bot));
+                    s->EndFigure(D2D1_FIGURE_END_CLOSED);
+                    s->Close();
+                    Color(col, 0.92f * a);
+                    g_rt->FillGeometry(g.Get(), g_brush.Get());
+                }
+                Round(D2D1::RectF(xEnd + notch - 0.5f, mid - 1.5f, xEnd + notch + 2.5f, mid + 1.5f), 1.5f, cBg, 0.9f * a);  // the hole
+                // dark text on a light tag, light on a dark one
+                const float lum = (0.299f * ((col >> 16) & 255) + 0.587f * ((col >> 8) & 255) + 0.114f * (col & 255)) / 255.f;
+                Color(lum > 0.5f ? 0x15151A : 0xF2F2F6, a);
+                Text(t, g_fmtTag.Get(), xEnd + notch + 5, top, xEnd + w - 4, bot);
+                xEnd += w + 5;
+                continue;
+            }
+            dots = true;  // no room for another label: the rest as dots
+        }
+        if (xEnd + 7 > xMax) break;
+        Round(D2D1::RectF(xEnd, mid - 3.5f, xEnd + 7, mid + 3.5f), 3.5f, col, a);
         xEnd += 10;
     }
     xEnd += 4;
@@ -2785,8 +2832,8 @@ void DrawList(int pane, float H) {
                 Color(NameColorFor(name, e.nameLen, e.isDir(), cText), a);
                 Text(name, shownLen, g_fmtName.Get(), textX, y, c.nameR, y + kRow);
             }
-            float tagEnd = 0;  // the tag dots, right after the name
-            if (!drives && TagsOf(full)) DrawTagDots(full, textX + MeasureW(std::wstring(name, shownLen), g_fmtName.Get()) + 8, y + kRow / 2, a, tagEnd);
+            float tagEnd = 0;  // the tag labels, right after the name, as far as the column goes
+            if (!drives && TagsOf(full)) DrawTagLabels(full, textX + MeasureW(std::wstring(name, shownLen), g_fmtName.Get()) + 8, y + kRow / 2, c.nameR - 3, a, tagEnd);
             // in the flat list (filter or search), where each thing is
             if (flat && row.depth > 0 && row.l->path.size() > t.path.size()) {
                 std::wstring rel = row.l->path.substr(t.path.size());
