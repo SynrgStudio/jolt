@@ -552,8 +552,9 @@ void TestRunStep() {
         } else if (s.cmd == L"toggle") {
             COPYDATASTRUCT cd{2, sizeof(wchar_t), const_cast<wchar_t*>(L"")};
             SendMessageW(g_hwnd, WM_COPYDATA, 0, reinterpret_cast<LPARAM>(&cd));
-        } else if (s.cmd == L"open_path") {
-            COPYDATASTRUCT cd{1, static_cast<DWORD>((s.arg.size() + 1) * sizeof(wchar_t)), const_cast<wchar_t*>(s.arg.c_str())};
+        } else if (s.cmd == L"open_path" || s.cmd == L"select_path") {
+            COPYDATASTRUCT cd{static_cast<ULONG_PTR>(s.cmd == L"select_path" ? 3 : 1), static_cast<DWORD>((s.arg.size() + 1) * sizeof(wchar_t)),
+                              const_cast<wchar_t*>(s.arg.c_str())};
             SendMessageW(g_hwnd, WM_COPYDATA, 0, reinterpret_cast<LPARAM>(&cd));
         } else if (s.cmd == L"tabs") {
             std::wstring all;

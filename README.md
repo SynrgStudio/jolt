@@ -83,8 +83,9 @@ kept in `%APPDATA%\Jolt`.
 
 Closing the window hides it and Jolt stays open: it comes back instantly with the global hotkey, the tray icon or by
 opening `jolt.exe folder`, which uses the running instance. ☰ → Quit and `jolt.exe --quit` really close it.
-`jolt.exe --hidden` starts without showing the window. Options in `config.txt`: `run_in_background`, `global_hotkey`,
-`tray_icon`, `open_drives`.
+`jolt.exe --hidden` starts without showing the window. `jolt.exe --select "C:\path\file.txt"` opens the folder
+with that item highlighted, which is what other apps' "Reveal in File Explorer" needs (Explorer's `/select,` form
+works too). Options in `config.txt`: `run_in_background`, `global_hotkey`, `tray_icon`, `open_drives`.
 
 ---
 
