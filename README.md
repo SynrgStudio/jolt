@@ -143,7 +143,7 @@ works too). Options in `config.txt`: `run_in_background`, `global_hotkey`, `tray
 | drag and drop | between Jolt's folders, panes, tabs, favorites and drives, and from/to other apps; same rules as File Explorer (Ctrl copies, Shift moves) |
 | Ctrl+Enter / middle click | open folder in a new tab |
 | a folder that can't be opened | Jolt stays where it is and says why in grey **next to the name**, with what can be done: *Open as administrator*, or *Go to the real folder* on Windows' protected links like `Application Data`. A typed path shows the same on the folder's page |
-| Ctrl+Shift+Enter | open the highlighted folder, or this one, in a **window as administrator**. It's a separate Jolt with a badge on the title bar that lists every folder, closes for real and leaves your session alone; what you open from it runs as administrator too |
+| Ctrl+Shift+Enter | open the highlighted folder, or this one, in a **window as administrator**. It's a separate Jolt with a badge on the title bar that lists every folder, closes for real and leaves your session alone; the global shortcut and Win+E hide it and bring it back along with the normal window. What you open from it runs as administrator too |
 | Backspace / Alt+↑ / ↑ button | parent folder |
 | Alt+← / Alt+→ / mouse side buttons | back / forward |
 | click on a path breadcrumb | go to that folder (middle click: in a new tab) |

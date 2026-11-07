@@ -14,6 +14,9 @@ bool g_testShown = true;     // in tests the window is never visible: it is trac
 bool g_hotkeyOk = false, g_trayOn = false;
 UINT g_taskbarCreated = 0;
 std::wstring g_relaunch, g_relaunchArgs;  // on quit, open this (after installing)
+constexpr ULONG_PTR kAdminHide = 4, kAdminBehind = 5, kAdminFront = 6;  // what the normal window tells the administrator one
+bool g_adminWasFront = false;  // it was the one in front when the shortcut hid them
+bool g_testAdminLink = false, g_testAdminFront = false;  // a test leaves the real one alone unless it asks
 
 void TestLog(const std::wstring& s);
 bool FolderExists(const std::wstring& p);
@@ -119,24 +122,45 @@ void OpenAsAdmin(const std::wstring& path) {
 }
 
 // ---- show and hide
+// The window as administrator goes along with the normal one: the shortcut and Win+E hide both and bring both back. If
+// only the normal one hid, Windows would bring the other forward and Jolt could never get out of the way.
+
+HWND BgAdminWindow() {
+    if (g_adminWindow || (g_test && !g_testAdminLink)) return nullptr;
+    return FindWindowW(kAdminClass, nullptr);
+}
+
+void BgAdminTell(HWND w, ULONG_PTR what) {
+    DWORD pid = 0;
+    GetWindowThreadProcessId(w, &pid);
+    AllowSetForegroundWindow(pid);
+    COPYDATASTRUCT cd{what, 0, nullptr};
+    SendMessageTimeoutW(w, WM_COPYDATA, 0, reinterpret_cast<LPARAM>(&cd), SMTO_ABORTIFHUNG, 1000, nullptr);
+}
 
 bool BgIsUp() {
     if (g_test) return g_testShown;
     return IsWindowVisible(g_hwnd) && !IsIconic(g_hwnd) && GetForegroundWindow() == g_hwnd;
 }
 
-void BgShow() {
+// asLeft: the shortcut brings them back as they were; anything else wants the normal window in front.
+void BgShow(bool asLeft = false) {
+    HWND admin = BgAdminWindow();
+    if (admin && IsWindowVisible(admin)) admin = nullptr;  // only what the shortcut hid
+    const bool adminOnTop = admin && asLeft && g_adminWasFront;
+    if (admin && !adminOnTop) BgAdminTell(admin, kAdminBehind);
     if (T().has) Enqueue(T().path, JobKind::Revalidate);  // it may have changed while hidden
     Invalidate();
     if (g_test) {
         g_testShown = true;
         TestLog(L"window: shown");
-        return;
+    } else {
+        if (g_showMaxOnce) ShowWindow(g_hwnd, SW_SHOWMAXIMIZED);
+        else ShowWindow(g_hwnd, IsIconic(g_hwnd) ? SW_RESTORE : SW_SHOW);
+        g_showMaxOnce = false;
+        SetForegroundWindow(g_hwnd);
     }
-    if (g_showMaxOnce) ShowWindow(g_hwnd, SW_SHOWMAXIMIZED);
-    else ShowWindow(g_hwnd, IsIconic(g_hwnd) ? SW_RESTORE : SW_SHOW);
-    g_showMaxOnce = false;
-    SetForegroundWindow(g_hwnd);
+    if (adminOnTop) BgAdminTell(admin, kAdminFront);
 }
 
 void BgHide() {
@@ -151,10 +175,24 @@ void BgHide() {
     }
     ShowWindow(g_hwnd, SW_HIDE);
     SaveSession();  // in case Windows shuts down or Jolt hangs
-    if (g_dsAny) SaveDirSizes();
+    if (g_dsAny && !g_adminWindow) SaveDirSizes();
+}
+
+// In the window as administrator: what the normal one asks of it.
+void BgAdminOrder(ULONG_PTR what) {
+    if (!g_adminWindow) return;
+    if (what == kAdminHide) {
+        BgHide();
+    } else if (what == kAdminFront) {
+        BgShow();
+    } else if (what == kAdminBehind) {
+        Invalidate();
+        ShowWindow(g_hwnd, SW_SHOWNOACTIVATE);
+    }
 }
 
 void BgQuit() {
+    if (HWND admin = BgAdminWindow(); admin && !IsWindowVisible(admin)) BgAdminTell(admin, kAdminFront);  // hidden, nothing could bring it back
     g_quitting = true;
     PostMessageW(g_hwnd, WM_CLOSE, 0, 0);
 }
@@ -245,13 +283,19 @@ std::wstring ExplorerFolder(HWND fg) {
 
 // The global shortcut and the tray click: shows up, and if it was already in front, hides.
 void BgToggle(bool fromHotkey) {
-    if (BgIsUp()) {
+    HWND admin = BgAdminWindow();
+    const bool adminInFront = admin && (GetForegroundWindow() == admin || g_testAdminFront);
+    if (BgIsUp() || adminInFront) {
+        if (admin && IsWindowVisible(admin) && !IsIconic(admin)) {  // first, or Windows would bring it forward
+            g_adminWasFront = adminInFront;
+            BgAdminTell(admin, kAdminHide);
+        }
         BgHide();
         return;
     }
     const std::wstring folder = fromHotkey ? ExplorerFolder(GetForegroundWindow()) : L"";
     if (!folder.empty()) BgOpenPath(folder);
-    BgShow();
+    BgShow(true);
 }
 
 // ---- global shortcut and tray

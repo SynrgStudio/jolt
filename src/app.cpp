@@ -4863,6 +4863,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case WM_COPYDATA: {
             const auto* cd = reinterpret_cast<const COPYDATASTRUCT*>(lp);
             if (cd->dwData == 2) BgToggle(true);
+            if (cd->dwData >= kAdminHide) BgAdminOrder(cd->dwData);
             if ((cd->dwData == 1 || cd->dwData == 3) && cd->cbData >= sizeof(wchar_t)) {
                 const std::wstring p(static_cast<const wchar_t*>(cd->lpData), cd->cbData / sizeof(wchar_t) - 1);
                 if (!p.empty()) cd->dwData == 3 ? BgRevealPath(p) : BgOpenPath(p);

@@ -15,6 +15,7 @@
 //   middle x y               middle click           popup                 logs the open menu
 //   crumbs                   logs where the path segments and chevrons are, to click them
 //   elevated on / off        draws as the window that runs as administrator would
+//   admin_window [front]     logs the real one on this desktop, and the shortcut takes it along from then on
 //
 // Windows windows (with --test-desktop they stay on an invisible desktop):
 //   wait_window Properties [ms]          windows                  (logs the open windows)
@@ -543,6 +544,8 @@ void TestRunStep() {
                 swprintf(b, 160, L"  %.0f ms: %s", at, what);
                 TestLog(b);
             }
+        } else if (s.cmd == L"x_button") {  // the X of the window
+            SendMessageW(g_hwnd, WM_CLOSE, 0, 0);
         } else if (s.cmd == L"hotkey") {
             SendMessageW(g_hwnd, WM_HOTKEY, kHotkeyId, 0);
         } else if (s.cmd == L"usage") {
@@ -651,6 +654,11 @@ void TestRunStep() {
             TestKey(s.arg);
         } else if (s.cmd == L"type") {
             for (wchar_t c : s.arg) SendMessageW(TestKeyTarget(), WM_CHAR, c, 1);
+        } else if (s.cmd == L"admin_window") {  // works with the real one on this desktop ("front": as if it had the focus)
+            g_testAdminLink = true;
+            g_testAdminFront = s.arg == L"front";
+            HWND w = FindWindowW(kAdminClass, nullptr);
+            TestLog(std::wstring(L"admin window: ") + (!w ? L"none" : IsWindowVisible(w) ? L"visible" : L"hidden"));
         } else if (s.cmd == L"elevated") {  // draws as the administrator window would
             g_elevated = s.arg != L"off";
             Invalidate();
