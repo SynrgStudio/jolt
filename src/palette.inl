@@ -62,6 +62,7 @@ void PaletteFilter() {
     if (g_pal.mode == 1) GotoBuild();
     if (g_pal.mode == 2) TagBuild();
     std::wstring pat = Lower(g_pal.match);
+    const NearPattern close(pat, g_cfg.typoMin);
     for (size_t i = 0; i < g_pal.all.size(); ++i) {
         const PalItem& it = g_pal.all[i];
         if (it.pinned) {
@@ -71,13 +72,29 @@ void PaletteFilter() {
         int s1 = 0, s2 = 0;
         bool m1 = FuzzyMatch(it.title.c_str(), it.title.size(), pat, s1, nullptr);
         bool m2 = !it.detail.empty() && FuzzyMatch(it.detail.c_str(), it.detail.size(), pat, s2, nullptr);
-        if (!m1 && !m2) continue;
-        g_pal.hits.push_back({static_cast<int>(i), std::max(m1 ? s1 : -1, m2 ? s2 - 10 : -1) + it.bonus});
+        const int real = std::max(m1 ? s1 : INT_MIN / 2, m2 ? s2 - 10 : INT_MIN / 2);
+        if (real <= kNearFloor / 2) {  // nothing, or scattered letters: a title that is close says more
+            if (const int percent = NearMatch(it.title.c_str(), it.title.size(), close)) {
+                g_pal.hits.push_back({static_cast<int>(i), NearScore(percent, it.title.size())});
+                continue;
+            }
+            if (!m1 && !m2) continue;
+        }
+        g_pal.hits.push_back({static_cast<int>(i), real + it.bonus});
     }
     if (!pat.empty())
         std::stable_sort(g_pal.hits.begin(), g_pal.hits.end(), [](auto& a, auto& b) { return a.second > b.second; });
     g_pal.sel = 0;
     g_pal.first = 0;
+}
+
+// How close a row is to what was typed, or 0 if it's a real match.
+int PalNear(const PalItem& it, const std::wstring& pat) {
+    int sc;
+    if (it.pinned || pat.empty() || (FuzzyMatch(it.title.c_str(), it.title.size(), pat, sc, nullptr) && sc > kNearFloor / 2) ||
+        (!it.detail.empty() && FuzzyMatch(it.detail.c_str(), it.detail.size(), pat, sc, nullptr) && sc > kNearFloor / 2))
+        return 0;
+    return NearMatch(it.title.c_str(), it.title.size(), NearPattern(pat, g_cfg.typoMin));
 }
 
 // Keeps the selected row in view.
@@ -457,8 +474,16 @@ void PaletteChar(wchar_t c) {
 void TextHighlighted(const std::wstring& s, const std::wstring& patLower, IDWriteTextFormat* fmt, float l, float t,
                      float r, float b, UINT32 color, UINT32 hiColor, float alpha) {
     std::vector<int> pos;
-    int score;
-    if (patLower.empty() || !FuzzyMatch(s.c_str(), s.size(), patLower, score, &pos) || pos.empty()) {
+    int score = 0;
+    bool found = !patLower.empty() && FuzzyMatch(s.c_str(), s.size(), patLower, score, &pos);
+    if (!patLower.empty() && (!found || score <= kNearFloor / 2)) {  // scattered letters say less than the stretch that is close
+        std::vector<int> closePos;
+        if (NearPositions(s.c_str(), s.size(), patLower, g_cfg.typoMin, closePos)) {
+            pos = std::move(closePos);
+            found = true;
+        }
+    }
+    if (!found || pos.empty()) {
         Color(color, alpha);
         Text(s, fmt, l, t, r, b);
         return;
@@ -552,6 +577,11 @@ void DrawPalette(float W, float H) {
         }
         TextHighlighted(it.title, it.pinned ? L"" : pat, g_fmtName.Get(), tx, y, right - dw - 12, y + kPalRow, cText, cAccent);
         if (dw > 0) TextHighlighted(it.detail, pat, g_fmtRight.Get(), right - dw, y, right, y + kPalRow, cFaint, cAccent);
+        if (const int percent = PalNear(it, pat)) {
+            const float px0 = tx + MeasureW(it.title, g_fmtName.Get()) + 8;
+            Color(cFaint);
+            if (px0 + 30 < right - dw - 12) Text(std::to_wstring(percent) + L"%", g_fmtName.Get(), px0, y, right - dw - 12, y + kPalRow);
+        }
         y += kPalRow;
     }
     if (total > kPalMaxRows) {

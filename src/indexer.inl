@@ -417,6 +417,7 @@ void IdxSearch(std::wstring query, uint64_t gen) {
         added = g_ixAdded;
     }
     const std::wstring pat = Lower(query);
+    const NearPattern close(pat, g_cfg.typoMin);
     struct Hit {
         int key;
         uint32_t vol, node;  // vol = UINT32_MAX: from "added"
@@ -424,57 +425,85 @@ void IdxSearch(std::wstring query, uint64_t gen) {
     };
     const size_t kTop = 80;
     unsigned nth = std::max(1u, std::min(8u, std::thread::hardware_concurrency()));
-    std::vector<std::vector<Hit>> part(nth);
-    std::vector<std::thread> th;
-    for (unsigned t = 0; t < nth; ++t) {
-        th.emplace_back([&, t] {
-            auto& heap = part[t];
-            int sc;
-            for (uint32_t vi = 0; vi < vols.size(); ++vi) {
-                const IdxVolume& v = *vols[vi];
-                const size_t n = v.count;
-                for (size_t i = 1 + t; i < n; i += nth) {
-                    if ((i & 0xFFFF) < nth && g_ixGen != gen) return;
-                    const IdxNode& nd = v.node[i];
-                    if (nd.nameLen < pat.size()) continue;
-                    if (!FuzzyMatch(v.name + nd.nameOff, nd.nameLen, pat, sc, nullptr)) continue;
-                    int key = sc * 8 - std::min<int>(nd.depth, 40) + (nd.dir ? 4 : 0);
-                    if (heap.size() < kTop) {
-                        heap.push_back({key, vi, static_cast<uint32_t>(i)});
-                        std::push_heap(heap.begin(), heap.end());
-                    } else if (key > heap.front().key) {
-                        std::pop_heap(heap.begin(), heap.end());
-                        heap.back() = {key, vi, static_cast<uint32_t>(i)};
-                        std::push_heap(heap.begin(), heap.end());
+    // Every name through keyOf, on several threads, keeping the best of each.
+    auto scan = [&](auto keyOf, std::vector<Hit>& out) {
+        std::vector<std::vector<Hit>> part(nth);
+        std::vector<std::thread> th;
+        for (unsigned t = 0; t < nth; ++t) {
+            th.emplace_back([&, t] {
+                auto& heap = part[t];
+                int key;
+                for (uint32_t vi = 0; vi < vols.size(); ++vi) {
+                    const IdxVolume& v = *vols[vi];
+                    const size_t n = v.count;
+                    for (size_t i = 1 + t; i < n; i += nth) {
+                        if ((i & 0xFFFF) < nth && g_ixGen != gen) return;
+                        const IdxNode& nd = v.node[i];
+                        if (!keyOf(v.name + nd.nameOff, nd, key)) continue;
+                        if (heap.size() < kTop) {
+                            heap.push_back({key, vi, static_cast<uint32_t>(i)});
+                            std::push_heap(heap.begin(), heap.end());
+                        } else if (key > heap.front().key) {
+                            std::pop_heap(heap.begin(), heap.end());
+                            heap.back() = {key, vi, static_cast<uint32_t>(i)};
+                            std::push_heap(heap.begin(), heap.end());
+                        }
                     }
                 }
-            }
-        });
-    }
-    for (auto& x : th) x.join();
-    if (g_ixGen != gen) return;
+            });
+        }
+        for (auto& x : th) x.join();
+        for (auto& p : part) out.insert(out.end(), p.begin(), p.end());
+    };
+    // The best ones, to the window.
+    auto publish = [&](std::vector<Hit>& all) {
+        std::sort(all.begin(), all.end(), [](const Hit& a, const Hit& b) { return a.key > b.key; });
+        auto res = std::make_unique<IdxResult>();
+        res->gen = gen;
+        res->query = query;
+        std::unordered_set<std::wstring> seen;
+        for (const Hit& h : all) {
+            if (res->hits.size() >= 40) break;
+            std::wstring p = h.vol == UINT32_MAX ? added[h.node] : IdxPath(*vols[h.vol], h.node);
+            DWORD a = GetFileAttributesW(ToExtendedPath(p).c_str());  // deleted items aren't shown
+            if (a == INVALID_FILE_ATTRIBUTES || !seen.insert(Key(p)).second) continue;
+            res->hits.push_back({p, (a & FILE_ATTRIBUTE_DIRECTORY) != 0});
+        }
+        IdxResult* raw = res.release();
+        if (!PostMessageW(g_hwnd, WM_APP_IDX, 0, reinterpret_cast<LPARAM>(raw))) delete raw;
+    };
     std::vector<Hit> all;
-    for (auto& p : part) all.insert(all.end(), p.begin(), p.end());
+    scan([&](const wchar_t* name, const IdxNode& nd, int& key) {
+        int sc;
+        if (!FuzzyMatch(name, nd.nameLen, pat, sc, nullptr)) return false;
+        key = sc * 8 - std::min<int>(nd.depth, 40) + (nd.dir ? 4 : 0);
+        return true;
+    }, all);
+    if (g_ixGen != gen) return;
     // what was created this session
     int sc;
     for (uint32_t i = 0; i < added.size(); ++i) {
         std::wstring leaf = LeafOf(added[i]);
         if (FuzzyMatch(leaf.c_str(), leaf.size(), pat, sc, nullptr)) all.push_back({sc * 8, UINT32_MAX, i});
     }
-    std::sort(all.begin(), all.end(), [](const Hit& a, const Hit& b) { return a.key > b.key; });
-    auto res = std::make_unique<IdxResult>();
-    res->gen = gen;
-    res->query = query;
-    std::unordered_set<std::wstring> seen;
-    for (const Hit& h : all) {
-        if (res->hits.size() >= 40) break;
-        std::wstring p = h.vol == UINT32_MAX ? added[h.node] : IdxPath(*vols[h.vol], h.node);
-        DWORD a = GetFileAttributesW(ToExtendedPath(p).c_str());  // deleted items aren't shown
-        if (a == INVALID_FILE_ATTRIBUTES || !seen.insert(Key(p)).second) continue;
-        res->hits.push_back({p, (a & FILE_ATTRIBUTE_DIRECTORY) != 0});
+    publish(all);
+    // Then the names close to it, in a second pass: going through all the disks again takes longer than the real
+    // matches, and those shouldn't have to wait. A list full of good matches has no room for them anyway.
+    const auto good = std::count_if(all.begin(), all.end(), [](const Hit& h) { return h.key > kNearFloor / 2; });
+    if (close.mistakes < 0 || good >= 40) return;
+    const size_t known = all.size();
+    scan([&](const wchar_t* name, const IdxNode& nd, int& key) {
+        const int percent = NearMatch(name, nd.nameLen, close);
+        if (!percent) return false;
+        key = NearScore(percent, nd.nameLen);
+        return true;
+    }, all);
+    if (g_ixGen != gen) return;
+    for (uint32_t i = 0; i < added.size(); ++i) {
+        std::wstring leaf = LeafOf(added[i]);
+        if (const int percent = NearMatch(leaf.c_str(), leaf.size(), close)) all.push_back({NearScore(percent, leaf.size()), UINT32_MAX, i});
     }
-    IdxResult* raw = res.release();
-    if (!PostMessageW(g_hwnd, WM_APP_IDX, 0, reinterpret_cast<LPARAM>(raw))) delete raw;
+    if (all.size() > known) publish(all);
 }
 
 void IdxRequest(const std::wstring& query) {

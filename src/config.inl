@@ -34,6 +34,7 @@ struct Config {
     float fontSize = 12;
     bool showHidden = true;
     bool previewWrap = true;  // long lines wrap in the text preview
+    int typoMin = 75;         // searches also show names this close to what was typed, in percent; 0: only real matches
     bool background = true, tray = true, openDrives = false;
     int hotCount = 10;  // folders in Recents (0: no section)
     std::wstring globalKey = L"Win+J";
@@ -268,6 +269,9 @@ void WriteDefaultConfig() {
         "preview_width = 360\n"
         "# Wrap long lines in the text preview: yes / no\n"
         "preview_wrap = yes\n"
+        "# Typos in searches: names close to what you typed appear under the real matches, with how close they are.\n"
+        "# The lowest percentage to show, from 50 to 100 (100: only swapped letters), or no.\n"
+        "filter_typos = 75\n"
         "# Show hidden and system files (dimmed): yes / no\n"
         "show_hidden = yes\n"
         "# Folders above files: yes / no / name (only when sorting by name; by date and size they are mixed)\n"
@@ -383,6 +387,7 @@ void LoadConfig() {
             else if (key == L"recents") g_cfg.hotCount = std::clamp(_wtoi(val.c_str()), 0, kHotCountMax);
             else if (key == L"show_hidden") g_cfg.showHidden = ParseBool(val);
             else if (key == L"preview_wrap") g_cfg.previewWrap = ParseBool(val);
+            else if (key == L"filter_typos") g_cfg.typoMin = _wtoi(val.c_str()) > 0 ? std::clamp(_wtoi(val.c_str()), 50, 100) : ParseBool(val) ? 75 : 0;
             else if (key == L"run_in_background") g_cfg.background = ParseBool(val);
             else if (key == L"global_hotkey") g_cfg.globalKey = val;
             else if (key == L"tray_icon") g_cfg.tray = ParseBool(val);
