@@ -14,6 +14,7 @@
 //   size 1100 700            window size            echo text             writes to log.txt
 //   middle x y               middle click           popup                 logs the open menu
 //   crumbs                   logs where the path segments and chevrons are, to click them
+//   elevated on / off        draws as the window that runs as administrator would
 //
 // Windows windows (with --test-desktop they stay on an invisible desktop):
 //   wait_window Properties [ms]          windows                  (logs the open windows)
@@ -650,6 +651,9 @@ void TestRunStep() {
             TestKey(s.arg);
         } else if (s.cmd == L"type") {
             for (wchar_t c : s.arg) SendMessageW(TestKeyTarget(), WM_CHAR, c, 1);
+        } else if (s.cmd == L"elevated") {  // draws as the administrator window would
+            g_elevated = s.arg != L"off";
+            Invalidate();
         } else if (s.cmd == L"popup") {  // the open menu: items, the marked one, the hovered one, the scroll
             if (!g_popup.open()) {
                 TestLog(L"popup: closed");

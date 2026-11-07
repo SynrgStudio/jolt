@@ -397,11 +397,10 @@ void DrawPreview(float W, float H) {
         // nothing requested yet (it takes a frame)
     } else if (g_pv.isDir) {
         if (cached == g_cache.end()) {
-            Color(cFaint);
-            Text(L"Loading…", g_fmtCenter.Get(), L, top, R, top + 60);
-        } else if (cached->second->error) {
-            Color(cError);
-            Text(ErrorText(cached->second->error), g_fmtCenter.Get(), L, top, R, top + 60);
+            auto note = g_folderNotes.find(Key(g_pv.path));
+            const bool why = note != g_folderNotes.end();
+            Color(why ? cDim : cFaint);
+            Text(why ? FolderWhyLong(note->second) : L"Loading…", g_fmtCenter.Get(), L, top, R, top + 60);
         } else {
             auto l = Prepared(cached->second);
             const float rh = 22;

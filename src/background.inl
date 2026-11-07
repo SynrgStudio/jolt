@@ -5,6 +5,7 @@ constexpr UINT WM_APP_TRAY = WM_APP + 40, WM_APP_QUIT = WM_APP + 41;
 constexpr int kHotkeyId = 1;
 constexpr UINT kTrayShow = 1, kTrayQuit = 2;
 constexpr wchar_t kWindowClass[] = L"JoltWindow";
+constexpr wchar_t kAdminClass[] = L"JoltAdminWindow";  // the window that runs as administrator: see OpenAsAdmin
 
 HANDLE g_instance = nullptr;
 bool g_quitting = false;    // really close, not hide
@@ -19,6 +20,7 @@ bool FolderExists(const std::wstring& p);
 void SaveSession();
 void InstPanelClose();
 void RenameManyClose();
+std::wstring ExePath();  // install.inl
 
 // ---- single instance
 
@@ -54,6 +56,65 @@ void BgSendQuit() {
     if (p) {
         WaitForSingleObject(p, 8000);
         CloseHandle(p);
+    }
+}
+
+// ---- running as administrator
+
+bool RunningElevated() {
+    HANDLE tok = nullptr;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &tok)) return false;
+    TOKEN_ELEVATION e{};
+    DWORD n = 0;
+    const bool ok = GetTokenInformation(tok, TokenElevation, &e, sizeof(e), &n) && e.TokenIsElevated;
+    CloseHandle(tok);
+    return ok;
+}
+
+// Lists folders past their permissions, those of other users or of the system included, without changing anything in
+// them: it's what backup programs do, and the listing already opens folders that way.
+void EnableBackupRight() {
+    HANDLE tok = nullptr;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &tok)) return;
+    TOKEN_PRIVILEGES tp{};
+    tp.PrivilegeCount = 1;
+    tp.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
+    if (LookupPrivilegeValueW(nullptr, SE_BACKUP_NAME, &tp.Privileges[0].Luid)) AdjustTokenPrivileges(tok, FALSE, &tp, 0, nullptr, nullptr);
+    CloseHandle(tok);
+}
+
+// Opens a folder in a separate Jolt that runs as administrator: a window of its own, passing through, that closes for
+// real and leaves the session alone. A second folder goes to the same window, without asking again.
+void OpenAsAdmin(const std::wstring& path) {
+    if (g_elevated) {
+        S.message = L"This window already runs as administrator";
+        Invalidate();
+        return;
+    }
+    if (g_test) {  // the prompt is for a person
+        TestLog(L"as administrator: " + path);
+        return;
+    }
+    if (HWND w = FindWindowW(kAdminClass, nullptr)) {
+        DWORD pid = 0;
+        GetWindowThreadProcessId(w, &pid);
+        AllowSetForegroundWindow(pid);
+        COPYDATASTRUCT cd{1, static_cast<DWORD>((path.size() + 1) * sizeof(wchar_t)), const_cast<wchar_t*>(path.c_str())};
+        if (SendMessageTimeoutW(w, WM_COPYDATA, 0, reinterpret_cast<LPARAM>(&cd), SMTO_ABORTIFHUNG, 3000, nullptr)) return;
+    }
+    const std::wstring exe = ExePath();
+    std::wstring args = L"--elevated";
+    if (!path.empty()) args += L" \"" + path + (path.back() == L'\\' ? L"\\\"" : L"\"");  // \" would be a quote, not the end
+    SHELLEXECUTEINFOW sei{sizeof(sei)};
+    sei.hwnd = g_hwnd;
+    sei.lpVerb = L"runas";
+    sei.lpFile = exe.c_str();
+    sei.lpParameters = args.c_str();
+    sei.nShow = SW_SHOWNORMAL;
+    if (!ShellExecuteExW(&sei)) {
+        const DWORD e = GetLastError();
+        S.message = e == ERROR_CANCELLED ? L"Cancelled: the folder stays closed" : L"Couldn't open it as administrator: " + ErrorText(e);
+        Invalidate();
     }
 }
 
@@ -259,6 +320,7 @@ void BgApplyConfig() {
         g_hotkeyOk = parsed;
         return;
     }
+    if (g_adminWindow) return;  // the shortcut and the tray are the normal window's
     UnregisterHotKey(g_hwnd, kHotkeyId);
     g_hotkeyOk = parsed && RegisterHotKey(g_hwnd, kHotkeyId, mods, vk);
     if (!g_cfg.globalKey.empty() && !g_hotkeyOk) S.message = L"The global shortcut " + g_cfg.globalKey + L" is not available";
@@ -269,7 +331,7 @@ void BgApplyConfig() {
 
 // Windows announces new drives to all windows, even hidden ones.
 void BgDeviceChange(WPARAM wp, LPARAM lp) {
-    if (!g_cfg.openDrives || wp != DBT_DEVICEARRIVAL) return;
+    if (!g_cfg.openDrives || g_adminWindow || wp != DBT_DEVICEARRIVAL) return;
     const auto* h = reinterpret_cast<const DEV_BROADCAST_HDR*>(lp);
     if (!h || h->dbch_devicetype != DBT_DEVTYP_VOLUME) return;
     const DWORD mask = reinterpret_cast<const DEV_BROADCAST_VOLUME*>(lp)->dbcv_unitmask;
