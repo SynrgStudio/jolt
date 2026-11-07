@@ -439,6 +439,9 @@ void TestDragOut(const std::wstring& arg) {
             a = Trim(a.substr(0, sp));
         }
     }
+    if (TestRefuses(a)) return;
+    for (const std::wstring& p : SelectedFullPaths(T()))
+        if (TestRefuses(p)) return;
     ComPtr<IDataObject> d = SelectionDataObject();
     ComPtr<IShellItem> item;
     ComPtr<IDropTarget> dt;

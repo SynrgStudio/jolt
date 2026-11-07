@@ -680,6 +680,7 @@ std::unique_ptr<ShellMenu> CreateShellMenu(const std::wstring& folder, const std
 }
 
 void ShellInvoke(ShellMenu& m, UINT id, POINT pt) {
+    if (TestRefuses(m.folder)) return;  // Windows' own commands can change anything
     CMINVOKECOMMANDINFOEX ici{};
     ici.cbSize = sizeof(ici);
     ici.fMask = CMIC_MASK_UNICODE | CMIC_MASK_PTINVOKE | CMIC_MASK_ASYNCOK;
@@ -930,6 +931,7 @@ bool ShellVerb(const std::vector<std::wstring>& names, const char* verb) {
     if (!t.list || t.list->error) return false;
     if (t.path.empty() && names.empty()) return false;
     if (names.empty() && strcmp(verb, "paste") != 0) return false;  // nothing selected: nothing to do
+    if (TestRefuses(names.empty() ? t.path : SelDir(t))) return false;
     auto m = CreateShellMenu(names.empty() ? t.path : SelDir(t), names, false);
     if (!m) return false;
     CMINVOKECOMMANDINFOEX ici{};

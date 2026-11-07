@@ -193,6 +193,9 @@ struct OpRecorder : IFileOperationProgressSink {
 bool FileOp(FileOpKind kind, const std::vector<std::wstring>& files, const std::wstring& dest, DWORD extraFlags = 0,
             const std::vector<std::wstring>* newNames = nullptr, OpRecorder* rec = nullptr) {
     if (files.empty()) return false;
+    for (const std::wstring& f : files)
+        if (TestRefuses(f)) return false;
+    if (kind != FileOpKind::Delete && TestRefuses(dest)) return false;
     ComPtr<IFileOperation> op;
     if (FAILED(CoCreateInstance(CLSID_FileOperation, nullptr, CLSCTX_ALL, IID_PPV_ARGS(&op)))) return false;
     op->SetOwnerWindow(g_hwnd);
@@ -434,6 +437,8 @@ void UndoStep(bool undo) {
         Invalidate();
         return;
     }
+    for (const UndoItem& i : from.back().items)
+        if (TestRefuses(i.from) || TestRefuses(i.to)) return;
     g_undoBusy = true;
     UndoEntry e = std::move(from.back());
     from.pop_back();

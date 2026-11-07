@@ -70,7 +70,7 @@ bool SaveBitmapPng(IWICBitmapSource* bmp, const std::wstring& file);  // testmod
 // named by the moment, and ready to rename.
 void PasteClipboardAsFile() {
     Tab& t = T();
-    if (t.path.empty() || !t.list || t.list->error) return;
+    if (t.path.empty() || !t.list || t.list->error || TestRefuses(t.path)) return;
     const bool image = IsClipboardFormatAvailable(CF_BITMAP) || IsClipboardFormatAvailable(CF_DIB);
     const bool text = IsClipboardFormatAvailable(CF_UNICODETEXT);
     if (!image && !text) return;
@@ -228,6 +228,7 @@ void GroupInFolder() {
         while (!base.empty() && (base.back() == L' ' || base.back() == L'.')) base.pop_back();
         if (base.empty()) base = L"New folder";
     }
+    if (TestRefuses(dir)) return;
     const std::wstring name = FreeName(dir, base, L""), folder = Join(dir, name.c_str());
     if (!CreateDirectoryW(ToExtendedPath(folder).c_str(), nullptr)) {
         S.message = L"Couldn't create the folder: " + ErrorText(GetLastError());
