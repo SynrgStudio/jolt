@@ -39,6 +39,7 @@ size_t GrepFind(const std::wstring& text, const std::wstring& term) {
 // Empty (with ok = false) for binaries and files that are too big.
 std::wstring GrepRead(const std::wstring& path, bool& ok) {
     ok = false;
+    if (OnlineOnlyPath(path)) return L"";  // reading it would download it
     HANDLE h = CreateFileW(ToExtendedPath(path).c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
                            OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
     if (h == INVALID_HANDLE_VALUE) return L"";

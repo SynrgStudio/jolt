@@ -56,6 +56,16 @@ void SortListing(Listing& l, SortBy by = SortBy::Name, bool asc = true, bool fol
 bool SameContent(const Listing& a, const Listing& b);
 std::wstring ToExtendedPath(const std::wstring& path);  // adds \\?\ for long paths
 
+// Cloud folders (OneDrive and the like): the item is listed, but its data isn't on this PC and reading it downloads it.
+// Listing, attributes and the date are free; anything that opens the file for reading is not.
+inline bool OnlineOnly(DWORD attrs) {
+    return (attrs & (FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS | FILE_ATTRIBUTE_RECALL_ON_OPEN | FILE_ATTRIBUTE_OFFLINE)) != 0;
+}
+inline bool OnlineOnlyPath(const std::wstring& path) {
+    const DWORD a = GetFileAttributesW(ToExtendedPath(path).c_str());
+    return a != INVALID_FILE_ATTRIBUTES && OnlineOnly(a);
+}
+
 inline double NowMs() {
     static const double freq = [] {
         LARGE_INTEGER f;
