@@ -203,6 +203,12 @@ void Properties() {
         if (!t.path.empty()) SHObjectProperties(g_hwnd, SHOP_FILEPATH, t.path.c_str(), nullptr);
         return;
     }
+    // items from several folders (search results): the menu verb can't open them together, the multi-file
+    // properties sheet can, from the same data object a drag uses
+    if (SelSpansFolders(t)) {
+        if (ComPtr<IDataObject> d = SelectionDataObject()) SHMultiFileProperties(d.Get(), 0);
+        return;
+    }
     ShellVerb(names, "properties");
 }
 

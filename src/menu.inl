@@ -1076,6 +1076,7 @@ bool ClipboardPaste(const std::wstring& destFolder) {
 }
 
 void DeleteSelection();
+void Properties();
 
 std::wstring ShortcutFor(Cmd cmd);  // palette.inl
 void BinRestoreSelection();  // ops.inl
@@ -1186,13 +1187,19 @@ void OpenShellMenu(POINT screenPt, int row) {
                 return;
             }
             if (!g_shellMenu) return;
-            // Delete goes through Jolt so it stays in the Ctrl+Z history
+            // Delete goes through Jolt so it stays in the Ctrl+Z history; Properties too when the items are in
+            // several folders, since that verb can't open them together
             char verb[32] = "";
             if (id >= kCmdFirst && !SelectedNames(T()).empty() &&
-                SUCCEEDED(g_shellMenu->cm->GetCommandString(id - kCmdFirst, GCS_VERBA, nullptr, verb, sizeof(verb))) &&
-                !_stricmp(verb, "delete")) {
-                DeleteSelection();
-                return;
+                SUCCEEDED(g_shellMenu->cm->GetCommandString(id - kCmdFirst, GCS_VERBA, nullptr, verb, sizeof(verb)))) {
+                if (!_stricmp(verb, "delete")) {
+                    DeleteSelection();
+                    return;
+                }
+                if (!_stricmp(verb, "properties") && SelSpansFolders(T())) {
+                    Properties();
+                    return;
+                }
             }
             ShellInvoke(*g_shellMenu, id, screenPt);
             if (T().recursive) SetTimer(g_hwnd, kTimerRecCheck, 800, nullptr);  // it may have changed what the results show
