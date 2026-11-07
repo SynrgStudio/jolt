@@ -227,9 +227,9 @@ bool FileOp(FileOpKind kind, const std::vector<std::wstring>& files, const std::
     return ok;
 }
 
-// Restores from the Recycle Bin with the Windows verb, which also removes its record ($I…). Looks up each
-// item in the Recycle Bin's virtual folder: the one IFileOperation returns is the $R file, and that one
-// doesn't have the verb. Returns the original paths that came back.
+// Restores from the Recycle Bin with the Windows verb. Looks up each item in the Recycle Bin's virtual folder: the one
+// IFileOperation returns is the $R file, and that one doesn't have the verb. The verb leaves the record ($I…) behind,
+// so that goes here. Returns the original paths that came back.
 std::unordered_set<std::wstring> BinRestore(const std::vector<std::pair<std::wstring, std::wstring>>& items) {
     std::unordered_set<std::wstring> back;  // items: path in the Recycle Bin, original path
     ComPtr<IShellItem> bin;
@@ -263,6 +263,8 @@ std::unordered_set<std::wstring> BinRestore(const std::vector<std::pair<std::wst
         for (int i = 0; i < 150 && !PathExists(original); ++i) Sleep(20);  // the verb may finish later
         if (PathExists(original)) back.insert(Key(original));
     }
+    for (const auto& [where, original] : items)
+        if (!PathExists(where)) DeleteFileW(ToExtendedPath(BinRecordOf(where)).c_str());
     return back;
 }
 

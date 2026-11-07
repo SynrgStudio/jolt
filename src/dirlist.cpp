@@ -147,6 +147,8 @@ std::wstring ToExtendedPath(const std::wstring& path) {
     return L"\\\\?\\" + path;
 }
 
+void ListingAdd(Listing& l, const wchar_t* name, size_t len, uint32_t attrs, uint64_t size, int64_t mtime) { Add(l, name, len, attrs, size, mtime); }
+
 bool EnumerateDir(const std::wstring& path, EnumMethod method, Listing& out) {
     out.path = path;
     out.entries.clear();

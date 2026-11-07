@@ -85,7 +85,7 @@ void HeatForget(const std::wstring& path) {
 
 // Called on navigation. If the user is still there a moment later, it counts.
 void HeatMark(const std::wstring& path) {
-    if (!g_heatReady) return;
+    if (!g_heatReady || IsVirtual(path)) return;
     g_heatPending = path;
     if (path.empty()) KillTimer(g_hwnd, kTimerHeat);
     else SetTimer(g_hwnd, kTimerHeat, kHeatDwellMs, nullptr);

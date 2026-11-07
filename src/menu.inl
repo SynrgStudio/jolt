@@ -1046,9 +1046,45 @@ bool ClipboardPaste(const std::wstring& destFolder) {
 
 void DeleteSelection();
 
+std::wstring ShortcutFor(Cmd cmd);  // palette.inl
+void BinRestoreSelection();  // ops.inl
+void BinDeleteSelection();
+void EmptyRecycleBin();
+
+// In the Recycle Bin the menu is Jolt's: Windows' would act on the files with their made-up names.
+void OpenBinMenu(POINT screenPt, int row) {
+    std::vector<MenuItem> items;
+    auto add = [&](const wchar_t* text, UINT id, Cmd cmd) {
+        MenuItem m;
+        m.text = text;
+        m.shortcut = ShortcutFor(cmd);
+        m.id = id;
+        items.push_back(std::move(m));
+    };
+    if (row >= 0) {
+        add(L"Restore", 1, Cmd::Restore);
+        add(L"Delete for good", 2, Cmd::Delete);
+        MenuItem sep;
+        sep.sep = true;
+        items.push_back(sep);
+    }
+    add(L"Empty the Recycle Bin", 3, Cmd::EmptyRecycleBin);
+    const RECT anchor{screenPt.x, screenPt.y, screenPt.x, screenPt.y};
+    PopupOpen(std::move(items), anchor, [](UINT id) {
+        if (id == 1) BinRestoreSelection();
+        if (id == 2) BinDeleteSelection();
+        if (id == 3) EmptyRecycleBin();
+        Invalidate();
+    });
+}
+
 void OpenShellMenu(POINT screenPt, int row) {
     Tab& t = T();
     if (!t.list || t.list->error) return;
+    if (IsBin(t.path)) {
+        OpenBinMenu(screenPt, row);
+        return;
+    }
     std::vector<std::wstring> names;
     std::wstring ctx = L"background", folder = t.path;
     if (row >= 0 && row < Count()) {
