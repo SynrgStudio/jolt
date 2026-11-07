@@ -27,6 +27,7 @@ float BoxContentY() {
 bool OnItem(int row, float x) {
     Tab& t = T();
     if (row < 0 || row >= Count()) return false;
+    if (GeoFor(t).grid) return true;  // the whole cell is the item
     const Row& rw = t.rows[row];
     const Entry& e = rw.l->entries[rw.e];
     const Columns c = Cols(g_act);
@@ -58,11 +59,15 @@ void BoxApply() {
     if (g_box.base.size() != t.selMask.size()) g_box.base.assign(t.selMask.size(), 0);  // the list changed
     t.selMask = g_box.base;
     const float cy = BoxContentY();
-    const int first = std::max(0, static_cast<int>(std::floor(std::min(g_box.y0, cy) / kRow)));
-    const int last = std::min(n - 1, static_cast<int>(std::floor(std::max(g_box.y0, cy) / kRow)));
+    const float y1 = std::min(g_box.y0, cy), y2 = std::max(g_box.y0, cy);
+    const float x1 = std::min(g_box.x0, g_box.x), x2 = std::max(g_box.x0, g_box.x);
+    const bool grid = GeoFor(t).grid;  // in the grid the box must also reach the cell sideways
     int lo = -1, hi = -1;
-    for (int i = first; i <= last; ++i) {
+    for (int i = 0; i < n; ++i) {
         if (IsHeader(t, i)) continue;
+        const D2D1_RECT_F r = RowRect(t, i);
+        if (r.bottom <= y1 || r.top > y2) continue;
+        if (grid && (r.right <= x1 || r.left > x2)) continue;
         t.selMask[i] = g_box.mode == 2 ? !g_box.base[i] : 1;
         if (lo < 0) lo = i;
         hi = i;

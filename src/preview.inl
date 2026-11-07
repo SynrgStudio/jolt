@@ -135,56 +135,16 @@ bool PvImage(IWICImagingFactory* wic, const std::wstring& path, PreviewResult& r
     return true;
 }
 
+// The Shell's thumbnail or icon, through the thumbnail cache (thumbs.inl): instant the second time.
 bool PvThumb(IWICImagingFactory* wic, const std::wstring& path, PreviewResult& r) {
-    ComPtr<IShellItemImageFactory> f;
-    if (FAILED(SHCreateItemFromParsingName(path.c_str(), nullptr, IID_PPV_ARGS(&f)))) return false;
-    HBITMAP hb = nullptr;
-    // A real thumbnail (PDF, video...) if there is one; otherwise the icon at its largest real size: asking
-    // for more makes Windows stretch it.
-    if (FAILED(f->GetImage(SIZE{512, 512}, SIIGBF_BIGGERSIZEOK | SIIGBF_THUMBNAILONLY, &hb)) || !hb) {
-        hb = nullptr;
-        if (FAILED(f->GetImage(SIZE{256, 256}, SIIGBF_ICONONLY, &hb)) || !hb) return false;
-    }
-    BITMAP bm{};
-    GetObjectW(hb, sizeof(bm), &bm);
-    bool ok = false;
-    if (bm.bmWidth > 0 && bm.bmHeight != 0) {
-        const int w = bm.bmWidth, h = std::abs(bm.bmHeight);
-        std::vector<uint8_t> px(static_cast<size_t>(w) * h * 4);
-        BITMAPINFO bi{};
-        bi.bmiHeader.biSize = sizeof(bi.bmiHeader);
-        bi.bmiHeader.biWidth = w;
-        bi.bmiHeader.biHeight = -h;  // top-down
-        bi.bmiHeader.biPlanes = 1;
-        bi.bmiHeader.biBitCount = 32;
-        HDC dc = GetDC(nullptr);
-        if (GetDIBits(dc, hb, 0, h, px.data(), &bi, DIB_RGB_COLORS) == h) {
-            bool anyAlpha = false, straight = false;
-            for (size_t i = 0; i + 3 < px.size(); i += 4) {
-                anyAlpha |= px[i + 3] != 0;
-                straight |= px[i] > px[i + 3] || px[i + 1] > px[i + 3] || px[i + 2] > px[i + 3];
-            }
-            if (!anyAlpha) {
-                for (size_t i = 3; i < px.size(); i += 4) px[i] = 255;
-            } else if (straight) {
-                // Icons come with straight alpha and Direct2D wants it premultiplied (a channel above the
-                // alpha gives it away): otherwise the soft edges turn into bright specks.
-                for (size_t i = 0; i + 3 < px.size(); i += 4)
-                    for (size_t c = 0; c < 3; ++c) px[i + c] = static_cast<uint8_t>((px[i + c] * px[i + 3] + 127) / 255);
-            }
-            ok = SUCCEEDED(wic->CreateBitmapFromMemory(w, h, GUID_WICPixelFormat32bppPBGRA, w * 4,
-                                                       static_cast<UINT>(px.size()), px.data(), &r.bmp));
-            if (ok) {
-                r.kind = 1;
-                r.thumb = true;
-                r.imgW = w;
-                r.imgH = h;
-            }
-        }
-        ReleaseDC(nullptr, dc);
-    }
-    DeleteObject(hb);
-    return ok;
+    UINT w = 0, h = 0;
+    bool isIcon = false;
+    if (!ThumbProduce(wic, path, 512, 0, r.bmp, w, h, isIcon)) return false;
+    r.kind = 1;
+    r.thumb = true;
+    r.imgW = w;
+    r.imgH = h;
+    return true;
 }
 
 bool PvText(const std::wstring& path, PreviewResult& r) {
@@ -392,7 +352,7 @@ void DrawPreview(float W, float H) {
         FormatDate(e.mtime, buf, 64);
         modified = buf;
     }
-    constexpr int kInfoRows = 4;
+    constexpr int kInfoRows = 5;
     std::pair<const wchar_t*, std::wstring> info[kInfoRows];
     if (e.isDir()) {
         std::wstring contains, size;
@@ -420,6 +380,11 @@ void DrawPreview(float W, float H) {
         info[2] = {L"Modified", modified};
         if (rowMatches && g_pv.res && g_pv.res->kind == 1 && !g_pv.res->thumb)
             info[3] = {L"Dimensions", std::to_wstring(g_pv.res->imgW) + L" × " + std::to_wstring(g_pv.res->imgH)};
+    }
+    if (const auto* tags = TagsOf(rowPath)) {
+        std::wstring all;
+        for (const std::wstring& x : *tags) all += (all.empty() ? L"" : L", ") + x;
+        info[4] = {L"Tags", all};
     }
     const float infoH = 34 + kInfoRows * 20 + 10;
     const float top = y0 + pad, bot = std::max(top + 60, y1 - infoH - 6);
@@ -549,7 +514,16 @@ void DrawPreview(float W, float H) {
     Text(name, g_fmtNameBold.Get(), L, y, R, y + 26);
     y += 30;
     for (auto& [label, value] : info) {
-        if (!value.empty()) PvInfoLine(label, value, L, R, y);
-        else y += 20;
+        if (value.empty()) {
+            y += 20;
+        } else if (wcscmp(label, L"Tags") == 0) {  // the tags as labels, not text
+            Color(cFaint);
+            Text(label, wcslen(label), g_fmtName.Get(), L, y, L + 90, y + 20);
+            float xe;
+            DrawTagLabels(rowPath, L + 90, y + 10, R, 1.f, xe);
+            y += 20;
+        } else {
+            PvInfoLine(label, value, L, R, y);
+        }
     }
 }
