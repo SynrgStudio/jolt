@@ -114,6 +114,12 @@ void PaletteBuild() {
         add(title, c.name, ShortcutFor(c.cmd), [cmd] { RunCommand(cmd); });
         g_pal.all.back().cmd = cmd;
     }
+    // the user's own commands ([commands] in config.txt)
+    for (size_t i = 0; i < g_cfg.custom.size(); ++i) {
+        Cmd cmd = CustomCmd(i);
+        add(g_cfg.custom[i].name, L"your command", ShortcutFor(cmd), [cmd] { RunCommand(cmd); });
+        g_pal.all.back().cmd = cmd;
+    }
     // sort
     add(L"Sort by name", L"sort", L"", [] { SetSortExplicit(SortBy::Name, true); });
     add(L"Sort by date, newest first", L"sort", L"", [] { SetSortExplicit(SortBy::Date, false); });
@@ -301,6 +307,7 @@ void PaletteRun(int hit) {
 
 // Command name (config) for a Cmd.
 const wchar_t* CmdName(Cmd cmd) {
+    if (IsCustom(cmd)) return CustomIndex(cmd) < static_cast<int>(g_cfg.custom.size()) ? g_cfg.custom[CustomIndex(cmd)].name.c_str() : L"";
     for (const CmdDef& c : kCommands)
         if (c.cmd == cmd) return c.name;
     return L"";
