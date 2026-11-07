@@ -113,11 +113,11 @@ void PasteClipboardAsFile() {
             fh->bfOffBits = static_cast<DWORD>(sizeof(BITMAPFILEHEADER) + bi->biSize + masks + colors * 4);
             memcpy(bmp.data() + sizeof(BITMAPFILEHEADER), data, size);
             GlobalUnlock(h2);
-            ComPtr<IWICStream> st;
+            ComPtr<IWICStream> ws;
             ComPtr<IWICBitmapDecoder> dec;
             ComPtr<IWICBitmapFrameDecode> fr;
-            if (SUCCEEDED(g_wic->CreateStream(&st)) && SUCCEEDED(st->InitializeFromMemory(bmp.data(), static_cast<DWORD>(bmp.size()))) &&
-                SUCCEEDED(g_wic->CreateDecoderFromStream(st.Get(), nullptr, WICDecodeMetadataCacheOnDemand, &dec)) && SUCCEEDED(dec->GetFrame(0, &fr)))
+            if (SUCCEEDED(g_wic->CreateStream(&ws)) && SUCCEEDED(ws->InitializeFromMemory(bmp.data(), static_cast<DWORD>(bmp.size()))) &&
+                SUCCEEDED(g_wic->CreateDecoderFromStream(ws.Get(), nullptr, WICDecodeMetadataCacheOnDemand, &dec)) && SUCCEEDED(dec->GetFrame(0, &fr)))
                 ok = SaveBitmapPng(fr.Get(), ToExtendedPath(full));
         } else if (HBITMAP hbm = static_cast<HBITMAP>(GetClipboardData(CF_BITMAP))) {
             ComPtr<IWICBitmap> wb;
