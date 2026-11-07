@@ -5,7 +5,7 @@
 struct RnItem {
     std::wstring dir, oldName, newName;
     bool isDir = false;
-    int64_t mtime = 0;
+    int64_t mtime = 0, ctime = 0;
     int problem = 0;  // 0 fine, 1 invalid characters, 2 exists already, 3 repeated among the results
 };
 enum class RnK { None, Edit0, Edit1, Edit2, Rename, Cancel };
@@ -24,6 +24,7 @@ struct RnData {
     int changing = 0, problems = 0;
     std::wstring regexError;
     int scroll = 0;  // first preview row shown
+    std::wstring lastPattern;  // what was used last time this session
 } g_rn;
 
 constexpr float kRnW = 700.f, kRnHead = 58.f, kRnEditRow = 40.f, kRnHint = 30.f, kRnRow = 24.f, kRnFoot = 54.f;
@@ -37,7 +38,50 @@ std::wstring RnText(int i) {
     return buf;
 }
 
-// The pattern applied to one item: {name} {NAME} {Name} {ext} {n} {n:3} {n:3:10} {date} {parent}.
+// A FILETIME as text: "YYYY-MM-DD" by default, or a format with YYYY YY MM DD hh mm ss (the rest is copied).
+std::wstring RnDate(int64_t ft, std::wstring fmt) {
+    FILETIME f{static_cast<DWORD>(ft & 0xFFFFFFFF), static_cast<DWORD>(ft >> 32)}, lt;
+    SYSTEMTIME st{};
+    if (!FileTimeToLocalFileTime(&f, &lt) || !FileTimeToSystemTime(&lt, &st)) return L"";
+    if (fmt.empty()) fmt = L"YYYY-MM-DD";
+    std::wstring out;
+    for (size_t i = 0; i < fmt.size();) {
+        auto take = [&](const wchar_t* tok, int value, int width) {
+            const size_t len = wcslen(tok);
+            if (fmt.compare(i, len, tok) != 0) return false;
+            wchar_t b[16];
+            swprintf(b, 16, L"%0*d", width, value);
+            out += b;
+            i += len;
+            return true;
+        };
+        if (take(L"YYYY", st.wYear, 4) || take(L"YY", st.wYear % 100, 2) || take(L"MM", st.wMonth, 2) || take(L"DD", st.wDay, 2) ||
+            take(L"hh", st.wHour, 2) || take(L"mm", st.wMinute, 2) || take(L"ss", st.wSecond, 2))
+            continue;
+        out += fmt[i++];
+    }
+    return out;
+}
+
+std::wstring RnCase(std::wstring s, const std::wstring& how) {
+    if (how == L"upper") {
+        CharUpperBuffW(s.data(), static_cast<DWORD>(s.size()));
+    } else if (how == L"lower") {
+        s = Lower(s);
+    } else if (how == L"title") {
+        s = Lower(s);
+        bool start = true;
+        for (wchar_t& c : s) {
+            if (start && iswalpha(c)) c = static_cast<wchar_t>(towupper(c));
+            start = !iswalnum(c);
+        }
+    }
+    return s;
+}
+
+// The pattern applied to one item:
+//   {name} {name:lower} {name:upper} {name:title} (also {NAME} and {Name}), {ext} and the same options,
+//   {n} {n:3} {n:3:10} {n:3:10:5} (padding, start, step), {date} {date:YYYYMMDD_hhmm} {time} {created} {created:...}, {parent}
 std::wstring RnExpand(const std::wstring& pat, const std::wstring& name, const std::wstring& ext, const RnItem& it, int index) {
     std::wstring out;
     for (size_t i = 0; i < pat.size();) {
@@ -50,43 +94,36 @@ std::wstring RnExpand(const std::wstring& pat, const std::wstring& name, const s
             out += pat.substr(i);
             break;
         }
-        const std::wstring tag = pat.substr(i + 1, close - i - 1), low = Lower(tag);
+        const std::wstring tag = pat.substr(i + 1, close - i - 1);
         i = close + 1;
-        if (low == L"name") {
-            if (tag == L"NAME") {
-                std::wstring u = name;
-                CharUpperBuffW(u.data(), static_cast<DWORD>(u.size()));
-                out += u;
-            } else if (tag == L"Name") {
-                std::wstring t = Lower(name);
-                bool start = true;
-                for (wchar_t& c : t) {
-                    if (start && iswalpha(c)) c = static_cast<wchar_t>(towupper(c));
-                    start = !iswalnum(c);
-                }
-                out += t;
-            } else {
-                out += tag == L"name" ? name : Lower(name);
-            }
-        } else if (low == L"ext") {
-            out += tag == L"EXT" ? [&] { std::wstring u = ext; CharUpperBuffW(u.data(), static_cast<DWORD>(u.size())); return u; }() : ext;
-        } else if (low == L"n" || low.rfind(L"n:", 0) == 0) {
-            int pad = 1, start = 1;
-            if (low.size() > 2) {
-                pad = std::max(1, _wtoi(low.c_str() + 2));
-                size_t c2 = low.find(L':', 2);
-                if (c2 != std::wstring::npos) start = _wtoi(low.c_str() + c2 + 1);
-            }
+        std::vector<std::wstring> parts;  // head and options, split by ':'
+        for (size_t s = 0;;) {
+            size_t c = tag.find(L':', s);
+            parts.push_back(tag.substr(s, c == std::wstring::npos ? std::wstring::npos : c - s));
+            if (c == std::wstring::npos) break;
+            s = c + 1;
+        }
+        const std::wstring head = Lower(parts[0]), opt = parts.size() > 1 ? Lower(parts[1]) : L"";
+        if (head == L"name" || head == L"ext") {
+            std::wstring how = opt;
+            if (how.empty() && parts[0] == L"NAME") how = L"upper";
+            else if (how.empty() && parts[0] == L"Name") how = L"title";
+            else if (how.empty() && parts[0] == L"EXT") how = L"upper";
+            out += RnCase(head == L"name" ? name : ext, how);
+        } else if (head == L"n") {
+            const int pad = parts.size() > 1 ? std::clamp(_wtoi(parts[1].c_str()), 1, 12) : 1;
+            const int start = parts.size() > 2 ? _wtoi(parts[2].c_str()) : 1;
+            const int step = parts.size() > 3 ? _wtoi(parts[3].c_str()) : 1;
             wchar_t b[32];
-            swprintf(b, 32, L"%0*d", std::min(pad, 12), start + index);
+            swprintf(b, 32, L"%0*d", pad, start + index * step);
             out += b;
-        } else if (low == L"date") {
-            FILETIME ft{static_cast<DWORD>(it.mtime & 0xFFFFFFFF), static_cast<DWORD>(it.mtime >> 32)}, lt;
-            SYSTEMTIME st;
-            wchar_t b[32] = L"";
-            if (FileTimeToLocalFileTime(&ft, &lt) && FileTimeToSystemTime(&lt, &st)) swprintf(b, 32, L"%04d-%02d-%02d", st.wYear, st.wMonth, st.wDay);
-            out += b;
-        } else if (low == L"parent") {
+        } else if (head == L"date") {
+            out += RnDate(it.mtime, parts.size() > 1 ? parts[1] : L"");
+        } else if (head == L"time") {
+            out += RnDate(it.mtime, parts.size() > 1 ? parts[1] : L"hh.mm.ss");
+        } else if (head == L"created") {
+            out += RnDate(it.ctime, parts.size() > 1 ? parts[1] : L"");
+        } else if (head == L"parent") {
             out += LeafOf(it.dir);
         } else {
             out += L"{" + tag + L"}";  // not a placeholder: left as typed
@@ -184,7 +221,11 @@ void RenameManyOpen() {
     for (int i = 0; i < RowCount(t); ++i) {
         if (!IsSel(t, i) || IsHeader(t, i) || RowDir(t, i).empty()) continue;
         const Entry& e = EntryAt(t, i);
-        items.push_back({RowDir(t, i), RowName(t, i), L"", e.isDir(), e.mtime});
+        RnItem it{RowDir(t, i), RowName(t, i), L"", e.isDir(), e.mtime, e.mtime};
+        WIN32_FILE_ATTRIBUTE_DATA d;
+        if (GetFileAttributesExW(ToExtendedPath(Join(it.dir, it.oldName.c_str())).c_str(), GetFileExInfoStandard, &d))
+            it.ctime = (static_cast<int64_t>(d.ftCreationTime.dwHighDateTime) << 32) | d.ftCreationTime.dwLowDateTime;
+        items.push_back(std::move(it));
     }
     if (items.empty()) return;
     PaletteClose();
@@ -202,7 +243,7 @@ void RenameManyOpen() {
         SendMessageW(g_rn.edit[i], WM_SETFONT, reinterpret_cast<WPARAM>(g_editFont), TRUE);
         SendMessageW(g_rn.edit[i], EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN, 0);
     }
-    SetWindowTextW(g_rn.edit[0], L"{name}{ext}");
+    SetWindowTextW(g_rn.edit[0], g_rn.lastPattern.empty() ? L"{name}{ext}" : g_rn.lastPattern.c_str());
     SetWindowTextW(g_rn.edit[1], L"");
     SetWindowTextW(g_rn.edit[2], L"");
     RnRefresh();
@@ -280,7 +321,7 @@ void RenameManyApply() {
             if (current[i] != from) MoveFileExW(ToExtendedPath(current[i]).c_str(), ToExtendedPath(from).c_str(), 0);  // back from the temporary name
         }
     }
-    const std::wstring dir = items.empty() ? t.path : items[0].dir;
+    g_rn.lastPattern = RnText(0);
     RenameManyClose();
     if (!done.empty()) UndoPush({UndoKind::Rename, done});
     if (!firstNew.empty() && Key(ParentOf(firstNew)) == Key(t.path)) t.pendingSelect = LeafOf(firstNew);
@@ -340,7 +381,7 @@ void DrawRenamePanel(float W, float H) {
     field(2, L"Replace", half + 8, x + kRnW - 20, ry);
     ry += kRnEditRow;
     Color(cFaint);
-    Text(g_rn.regexError.empty() ? L"{name}  {NAME}  {Name}  {ext}  {n}  {n:3}  {n:3:10}  {date}  {parent}     Find: text, or /regex/ with $1 in Replace"
+    Text(g_rn.regexError.empty() ? L"{name}  {name:lower}  {NAME}  {Name}  {ext}  {n}  {n:3:10:5}  {date}  {date:YYYYMMDD_hhmm}  {time}  {created}  {parent}     Find: text or /regex/, $1 in Replace"
                                  : g_rn.regexError,
          g_fmtStatus.Get(), x + 24, ry + 2, x + kRnW - 20, ry + kRnHint);
     ry += kRnHint;
