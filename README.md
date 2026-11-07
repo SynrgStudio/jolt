@@ -154,6 +154,7 @@ works too). Options in `config.txt`: `run_in_background`, `global_hotkey`, `tray
 | Ctrl+wheel | switch tab in the pane underneath: up, the next one; down, the previous one |
 | Win+J (from any app) | open Jolt; if it is already in front, hide it. With File Explorer in front, it opens its folder. Change it with `global_hotkey` |
 | Ctrl+Shift+wheel | move the active tab of the pane underneath: up, to the right; down, to the left |
+| Ctrl+K → "tag", or right click → Tags | **tags**: put a label on files and folders (several per item; each tag gets a color, shown as a dot after the name and in the preview). `tag:urgent` in the filter keeps the tagged ones, `!tag:done` leaves them out. Saved in `%APPDATA%\Jolt\tags.txt`, which can be edited by hand (`name = RRGGBB` under `[tags]`); tags follow renames done from Jolt |
 | Ctrl+Alt+wheel | **view**: up, a grid of thumbnails with bigger and bigger cells (80 to 256 px); down, back to the list. Per folder, saved in `views.txt` (`layout = grid 144`). In the grid, ← → ↑ ↓ walk the cells. Also Ctrl+K → "view: list / grid / bigger / smaller" |
 | Ctrl+Alt+T / Ctrl+Alt+E | open the terminal (Windows Terminal, or cmd) / File Explorer in this folder |
 | Ctrl+Alt+L | go to the real location of a shortcut (also symbolic links and junctions) |
@@ -206,6 +207,7 @@ save** (so do `favorites.txt` and `menu.txt`). Sections:
 - `[shortcuts]`: one command per line with its keys (`up = Backspace, Left, Alt+Up`). By default, as
   in a commander: **→ enters the highlighted folder and ← goes up one level**. The up/down arrows, PageUp/PageDown,
   Home/End, Esc, Ctrl+Space, Ctrl+1..9 and Alt+1..9 are fixed. If you delete an option, it returns to its default value.
+- `[file_colors]`: name colors by extension or pattern (`.jpg .png = 7FB3FF`, `*backup* = E06C75`, `folders = …`); the first rule that fits wins.
 - `[commands]`: **your own commands**, `name = program and arguments`, with `{file}` (the highlighted item),
   `{files}` (everything selected, quoted), `{dir}` (the folder) and `{name}`. They show up in Ctrl+K and at the end
   of the right-click menu (where the menu editor can hide or move them), and take a shortcut in `[shortcuts]` by

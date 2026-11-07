@@ -161,6 +161,7 @@
 <tr><td><code>newer:7d</code> &nbsp; <code>older:2w</code> &nbsp; <code>modified:today</code></td><td>date: d h w m y, or <code>today</code> (since midnight)</td></tr>
 <tr><td><code>!tmp</code> &nbsp; <code>!.bak</code> &nbsp; <code>!*.log</code></td><td>exclude by name, extension or pattern</td></tr>
 <tr><td><code>report*.pdf</code> &nbsp; <code>?.txt</code></td><td>wildcard pattern on the name</td></tr>
+<tr><td><code>tag:urgent</code> &nbsp; <code>!tag:done</code></td><td>items with (or without) a <a href="#files">tag</a></td></tr>
 </table>
 <p class="ex">Examples: <code>invoice .pdf newer:30d</code> — the invoices of the last month. &nbsp; <code>&gt;500mb !.iso</code> — what is taking space, except disc images. &nbsp; <code>type:folder old</code> — folders with "old" in the name.</p>
 <p>Only the words light up in the names. The status bar shows how many match.</p>
@@ -189,6 +190,14 @@
 <tr><td><kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>T</kbd> / <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>E</kbd></td><td>open a terminal (Windows Terminal, or cmd) / File Explorer in this folder</td></tr>
 <tr><td>right click / <kbd>Shift</kbd>+<kbd>F10</kbd> / Menu key</td><td>the Windows context menu for the file, the folder or the background; with <kbd>Shift</kbd>, the extended one. See <a href="#menu">context menu</a></td></tr>
 </table>
+<h3>Tags and colors</h3>
+<p>Right click → <strong>Tags</strong>, or <kbd>Ctrl</kbd>+<kbd>K</kbd> → "tag", puts a label on the selection: pick a known one or type a new name. Each tag gets a color, shown as a small dot after the name (and in the grid's corner and the preview's info), and an item can have several. <code>tag:urgent</code> in the filter keeps the tagged items, <code>!tag:done</code> leaves them out, in subfolder search too. They are saved in <code>%APPDATA%\Jolt\tags.txt</code>, which can be edited by hand (<code>name = RRGGBB</code> under <code>[tags]</code> sets a color), and they follow renames done from Jolt.</p>
+<p>Names can also take a color by rule, in <code>config.txt</code>:</p>
+<pre><code><span class="k">[file_colors]</span>
+.jpg .png .gif .webp = 7FB3FF
+.zip .7z .rar = C9A86A
+*backup* *.bak = E06C75
+folders = E6B450</code></pre>
 <h3>Undo</h3>
 <p><kbd>Ctrl</kbd>+<kbd>Z</kbd> undoes and <kbd>Ctrl</kbd>+<kbd>Y</kbd> (or <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd>) redoes what was done from Jolt in this session, up to 100 steps: rename, move, copy, duplicate, create, group, paste and send to the Recycle Bin. It never overwrites anything or touches what changed afterwards, and what it removes goes to the Recycle Bin. It doesn't cover what replaced or merged with something that already existed, or permanent deletion.</p>
 <h3>Status bar</h3>
@@ -263,6 +272,7 @@ open in vs code = Ctrl+Alt+V</code></pre>
 <tr><td><code>favorites.txt</code></td><td><code>Name|Path</code>, one per line</td></tr>
 <tr><td><code>views.txt</code></td><td>the <a href="#views">views</a> per folder</td></tr>
 <tr><td><code>menu.txt</code></td><td>the <a href="#menu">context menu</a> order and hidden entries</td></tr>
+<tr><td><code>tags.txt</code></td><td>the <a href="#files">tags</a>: their colors and which items have them</td></tr>
 <tr><td><code>session.txt</code>, <code>recents.txt</code></td><td>tabs and window, and the recent folders with their heat</td></tr>
 <tr><td><code>%LOCALAPPDATA%\Jolt</code></td><td>the installed program, the drive index, the calculated folder sizes (<code>sizes.bin</code>) and the thumbnail cache (<code>thumbs\</code>, safe to delete)</td></tr>
 </table>

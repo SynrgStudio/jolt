@@ -342,6 +342,7 @@ void RenameManyApply() {
             u.to = to;
             done.push_back(u);
             for (auto& tab : g_tabs) TreeFollow(*tab, from, to);
+            TagsFollow(from, to);
             if (firstNew.empty()) firstNew = to;
         } else {
             ++failed;

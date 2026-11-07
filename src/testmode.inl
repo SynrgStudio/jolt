@@ -603,6 +603,12 @@ void TestRunStep() {
                                  std::to_wstring(static_cast<int>(g.cellW)) + L"x" + std::to_wstring(static_cast<int>(g.cellH)) + L" content " +
                                  std::to_wstring(static_cast<int>(ContentHeight(T())))
                            : L"layout: list");
+        } else if (s.cmd == L"tags") {  // the tags of the cursor item
+            std::wstring out = L"tags:";
+            if (T().sel >= 0 && T().sel < Count())
+                if (const auto* tg = TagsOf(RowPath(T(), T().sel)))
+                    for (const std::wstring& x : *tg) out += L" " + x;
+            TestLog(out);
         } else if (s.cmd == L"rows") {  // what the list shows, in order
             std::wstring names;
             for (int i = 0; i < RowCount(T()) && i < 40; ++i) names += L" " + (IsHeader(T(), i) ? L"[" + RowName(T(), i) + L"]" : RowName(T(), i));
