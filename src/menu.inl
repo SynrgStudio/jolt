@@ -1157,7 +1157,7 @@ void OpenAppMenu(const RECT& anchorScreen) {
     };
     add(L"Context menu…", L"", CmdMenuEditor);
     add(L"Config folder", L"", CmdConfigFolder);
-    add(L"Install…", L"", CmdInstall);
+    if (!g_adminWindow) add(L"Install…", L"", CmdInstall);
     sep();
     add(L"About Jolt", L"", CmdAbout);
     sep();
@@ -1245,7 +1245,7 @@ void CrumbMenuShow(const Listing& l, const std::wstring& dir, const RECT& anchor
     }
     if (items.empty()) {
         MenuItem m;
-        m.text = l.error ? L"Couldn't open: " + ErrorText(l.error) : L"No folders here";
+        m.text = l.error ? FolderWhyLong({l.error, L""}) : L"No folders here";
         m.enabled = false;
         items.push_back(std::move(m));
     }
@@ -1270,7 +1270,7 @@ void CrumbMenu(const std::wstring& dir, const D2D1_RECT_F& r) {
     }
     auto j = Enqueue(dir, JobKind::Load);
     if (WaitForSingleObject(j->done, 30) == WAIT_OBJECT_0 && j->result && !j->taken.exchange(true)) {
-        if (j->result->error == 0) g_cache[Key(dir)] = j->result;
+        RememberListing(Key(dir), j->result);
         CrumbMenuShow(*j->result, dir, anchor);
         return;
     }

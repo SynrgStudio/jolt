@@ -502,6 +502,8 @@ struct Stats {
 } S;
 
 std::unordered_map<std::wstring, std::shared_ptr<const Listing>> g_cache;
+bool g_elevated = false;     // this process runs as administrator
+bool g_adminWindow = false;  // "--elevated": the separate window for that (background.inl)
 std::unordered_map<std::wstring, std::wstring> g_lastSel;
 std::unordered_map<std::wstring, std::unordered_map<std::wstring, std::wstring>> g_expandMem;  // tree per folder
 std::vector<std::wstring> g_recents;  // visited folders and files, most recent first
@@ -513,7 +515,7 @@ bool g_ignoreClipUpdate = false;
 int g_dropRow = -1, g_dropPane = 0, g_dropSide = -1, g_dropTab = -1;  // target highlighted during a drag
 
 // Clickable areas, recomputed on every draw.
-enum class HitKind { None, Tab, TabClose, TabNew, SideToggle, AppMenu, Back, Fwd, Up, Crumb, CrumbChev, PathEmpty, Side, Header, Divider, ViewBtn, FoldBtn, ColEdge, PreviewEdge };
+enum class HitKind { None, Tab, TabClose, TabNew, SideToggle, AppMenu, Back, Fwd, Up, Crumb, CrumbChev, PathEmpty, Side, Header, Divider, ViewBtn, FoldBtn, ColEdge, PreviewEdge, FolderNote };
 struct Hit {
     D2D1_RECT_F r;
     HitKind kind;
@@ -1172,7 +1174,7 @@ std::wstring TabTitle(const Tab& t) {
     return LeafOf(t.path);
 }
 
-void UpdateTitle() { SetWindowTextW(g_hwnd, (TabTitle(T()) + L" — Jolt").c_str()); }
+void UpdateTitle() { SetWindowTextW(g_hwnd, (TabTitle(T()) + (g_elevated ? L" — Jolt (Administrator)" : L" — Jolt")).c_str()); }
 
 // Watches the visible folders (both in split view); with the tree open, the subfolders too.
 void SetWatchAll() {
@@ -1192,6 +1194,8 @@ void BeginRename();
 void UndoRecordRename(const std::wstring& from, const std::wstring& to);
 void UndoRecordCreate(const std::wstring& path);
 void CrumbMenuListed(const Listing& l);  // menu.inl
+void RememberListing(const std::wstring& k, const std::shared_ptr<const Listing>& l);  // access.inl
+bool CantEnter(const std::wstring& path);
 void TreeFollow(Tab& t, const std::wstring& from, const std::wstring& to);
 void TouchSession();
 void StopRecursive(Tab& t, bool rebuild);
@@ -1207,7 +1211,7 @@ void LoadKid(Tab& t, const std::wstring& k, const std::wstring& path) {
     }
     auto j = Enqueue(path, JobKind::Load);
     if (WaitForSingleObject(j->done, 30) == WAIT_OBJECT_0 && j->result && !j->taken.exchange(true)) {
-        if (j->result->error == 0) g_cache[k] = j->result;
+        RememberListing(k, j->result);
         t.kids[k] = Prepared(j->result);
     }
 }
@@ -1264,7 +1268,7 @@ void Navigate(Tab& t, const std::wstring& path, bool pushHistory) {
         // For local folders it's almost always ready within 30 ms: this avoids
         // an intermediate "loading" frame. If it takes longer (network), we don't block.
         if (WaitForSingleObject(j->done, 30) == WAIT_OBJECT_0 && j->result && !j->taken.exchange(true)) {
-            if (j->result->error == 0) g_cache[Key(path)] = j->result;
+            RememberListing(Key(path), j->result);
             ShowListing(t, j->result, t.pendingSelect, false);
             if (current) {
                 S.fromCache = false;
@@ -1295,7 +1299,7 @@ void ApplyJob(const std::shared_ptr<Job>& j) {
     if (j->taken.exchange(true) || !j->result) return;
     auto l = j->result;
     const std::wstring k = Key(l->path);
-    if (l->error == 0) g_cache[k] = l;
+    RememberListing(k, l);
     CrumbMenuListed(*l);
     if (j->kind == JobKind::Prefetch) {
         if (g_preview) Invalidate();  // a folder's preview may be waiting for it
@@ -1548,6 +1552,7 @@ void OpenSelected(bool inNewTab) {
     const Entry& e = EntryAt(t, t.sel);
     std::wstring full = RowPath(t, t.sel);
     if (e.isDir()) {
+        if (CantEnter(full)) return;
         if (inNewTab)
             NewTab(full);
         else
@@ -1608,6 +1613,11 @@ void SetExpanded(Tab& t, int row, bool open) {
             LoadKid(t, k, path);
         else
             Enqueue(path, JobKind::Revalidate);
+        auto kid = t.kids.find(k);
+        if (kid != t.kids.end() && kid->second && kid->second->error) {  // nothing to show: the row says why
+            t.kids.erase(kid);
+            t.expanded.erase(k);
+        }
     } else {
         t.expanded.erase(k);
     }
@@ -2344,7 +2354,15 @@ void DrawTabs(float W) {
         Glyph(capGlyph[i], g_fmtCap.Get(), r.left, r.top, r.right, r.bottom);
     }
 
-    const float x0 = kTitleLeft + 2, xEnd = W - 3 * kCapBtnW - 14;
+    float xEnd = W - 3 * kCapBtnW - 14;
+    if (g_elevated) {  // what is opened from here runs as administrator too: it has to show
+        const float tw = std::ceil(MeasureW(L"Administrator", g_fmtName.Get())), bx = xEnd - tw;
+        Color(0xE5A84B, active ? 1.f : 0.6f);
+        Glyph(0xEA18, g_fmtIcon.Get(), bx - 22, 0, bx - 4, kTabH);
+        Text(L"Administrator", g_fmtName.Get(), bx, 0, bx + tw + 2, kTabH);
+        xEnd = bx - 34;
+    }
+    const float x0 = kTitleLeft + 2;
     if (!g_split) {
         DrawTabGroup(0, x0, xEnd, active);
     } else {
@@ -2692,6 +2710,7 @@ void DrawHeader(int pane) {
 }
 
 void DrawBox(int pane, float listTop, float listBot);  // boxselect.inl
+#include "access.inl"
 
 // The little discs after a name: one per tag (where a label wouldn't fit: the grid cells).
 void DrawTagDots(const std::wstring& full, float x, float cy, float a, float& xEnd) {
@@ -2797,9 +2816,7 @@ void DrawList(int pane, float H) {
         Color(cDim);
         Text(L"Loading…", g_fmtCenter.Get(), L, listTop, R, listTop + 80);
     } else if (t.list && t.list->error) {
-        Color(cError);
-        Text(L"Couldn't open: " + ErrorText(t.list->error), g_fmtCenter.Get(), L + kPad, listTop, R - kPad,
-             listTop + 80);
+        DrawFolderError(t, L, R, listTop);
     } else if (t.list && n == 0) {
         Color(cDim);
         Text(t.recursive && !t.recDone ? L"Searching…" : !t.filter.empty() ? L"No matches" : L"Empty folder",
@@ -2903,6 +2920,7 @@ void DrawList(int pane, float H) {
             if (!drives && TagsOf(full)) DrawTagLabels(full, textX + MeasureW(std::wstring(name, shownLen), g_fmtName.Get()) + 8, y + kRow / 2, c.nameR - 3, a, tagEnd);
             // in the flat list (filter or search), where each thing is
             float afterName = std::max(textX + MeasureW(std::wstring(name, shownLen), g_fmtName.Get()), tagEnd) + 14;
+            if (e.isDir() && !drives && !g_folderNotes.empty()) afterName = DrawFolderNote(full, afterName, nameEnd, y, a, selected && focused);
             if (flat && row.depth > 0 && row.l->path.size() > t.path.size()) {
                 std::wstring rel = row.l->path.substr(t.path.size());
                 while (!rel.empty() && rel[0] == L'\\') rel.erase(0, 1);
@@ -3091,6 +3109,7 @@ void Render() {
     if (g_iconFile < 0) g_iconFile = IconByAttrs(L"file", FILE_ATTRIBUTE_NORMAL);
     g_hits.clear();
     g_crumbPaths.clear();
+    g_notePaths.clear();
     D2D1_SIZE_F sz = g_rt->GetSize();
     const float W = sz.width, H = sz.height;
 
@@ -3473,6 +3492,7 @@ std::wstring RecentsFile() {
 }
 
 void SaveSession() {
+    if (g_adminWindow) return;  // the session is the normal window's
     std::wstring f = SessionFile();
     if (f.empty() || g_tabs.empty()) return;
     WINDOWPLACEMENT wp{sizeof(wp)};
@@ -3829,6 +3849,9 @@ void RunCommand(Cmd cmd) {
         case Cmd::RowsTaller: SetRowHeight(kRow + 1); break;
         case Cmd::RowsShorter: SetRowHeight(kRow - 1); break;
         case Cmd::FolderSiblings: CrumbMenu(CrumbSiblingsDir(t.path), g_crumbLast[g_act]); break;
+        case Cmd::OpenAsAdmin:
+            FolderNoteAct(t.sel >= 0 && t.sel < Count() && EntryAt(t, t.sel).isDir() ? RowPath(t, t.sel) : t.path);
+            break;
         case Cmd::PreviewWrap:
             g_cfg.previewWrap = !g_cfg.previewWrap;
             ConfigSetValue(L"general", L"preview_wrap", g_cfg.previewWrap ? L"yes" : L"no");
@@ -4032,6 +4055,9 @@ void OnClick(float x, float y, bool middle) {
             return;
         case HitKind::CrumbChev:
             if (!middle) CrumbMenu(g_crumbPaths[h.idx], h.r);
+            return;
+        case HitKind::FolderNote:
+            if (!middle) FolderNoteAct(g_notePaths[h.idx]);
             return;
         case HitKind::PathEmpty: ShowPathEdit(); return;
         case HitKind::Side:
@@ -4529,6 +4555,10 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             }
             if (HitAt(x, y).kind != HitKind::Divider) ActivatePane(PaneAt(x, y));
             if (SideDragStart(HitAt(x, y), x, y)) return 0;
+            if (HitAt(x, y).kind == HitKind::FolderNote) {  // before the row under it takes the click
+                OnClick(x, y, false);
+                return 0;
+            }
             int r = HitRow(x, y);
             if (r >= 0 && OnChevron(r, x)) {
                 OnClick(x, y, false);
@@ -4617,6 +4647,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case WM_LBUTTONDBLCLK: {
             PressEnd(false);
             Hit dh = HitAt(DipX(lp), DipY(lp));
+            if (dh.kind == HitKind::FolderNote) return 0;  // the first click already did it
             if (dh.kind == HitKind::ColEdge) {
                 FitColumn(dh.idx % 2 + 1, dh.idx / 2);
                 return 0;
@@ -4803,18 +4834,18 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return reinterpret_cast<LRESULT>(g_editBrush);
         }
         case WM_CLOSE:
-            if (g_cfg.background && !g_quitting) {
+            if (g_cfg.background && !g_quitting && !g_adminWindow) {
                 BgHide();  // the X hides: ☰ → Quit really closes
                 return 0;
             }
-            if (g_test) break;  // tests don't save anything
+            if (g_test || g_adminWindow) break;  // tests don't save anything, and the administrator window is passing through
             SaveSession();
             if (g_dsAny) SaveDirSizes();  // what's already calculated, even if something is half done
             break;
         case WM_QUERYENDSESSION:
             return TRUE;
         case WM_ENDSESSION:
-            if (wp && !g_test) {
+            if (wp && !g_test && !g_adminWindow) {
                 SaveSession();
                 if (g_dsAny) SaveDirSizes();
             }
@@ -4832,6 +4863,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case WM_COPYDATA: {
             const auto* cd = reinterpret_cast<const COPYDATASTRUCT*>(lp);
             if (cd->dwData == 2) BgToggle(true);
+            if (cd->dwData >= kAdminHide) BgAdminOrder(cd->dwData);
             if ((cd->dwData == 1 || cd->dwData == 3) && cd->cbData >= sizeof(wchar_t)) {
                 const std::wstring p(static_cast<const wchar_t*>(cd->lpData), cd->cbData / sizeof(wchar_t) - 1);
                 if (!p.empty()) cd->dwData == 3 ? BgRevealPath(p) : BgOpenPath(p);
@@ -4963,7 +4995,10 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdLine, int show) {
     }
     const bool hidden = !g_test && (HasArg(L"--hidden") || HasArg(L"--oculto"));
     const std::wstring selectItem = SelectArg();
-    if (!g_test && BgHandOff(hidden ? L"" : selectItem.empty() ? ArgPath() : selectItem, HasArg(L"--toggle") || HasArg(L"--alternar"),
+    g_adminWindow = !g_test && HasArg(L"--elevated");
+    g_elevated = RunningElevated();
+    if (g_elevated) EnableBackupRight();
+    if (!g_test && !g_adminWindow && BgHandOff(hidden ? L"" : selectItem.empty() ? ArgPath() : selectItem, HasArg(L"--toggle") || HasArg(L"--alternar"),
                              !hidden && !selectItem.empty()))
         return 0;
     BootMark(L"start");
@@ -4991,7 +5026,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdLine, int show) {
     wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
     wc.hIcon = (HICON)LoadImageW(inst, MAKEINTRESOURCEW(1), IMAGE_ICON, GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CYICON), 0);
     wc.hIconSm = (HICON)LoadImageW(inst, MAKEINTRESOURCEW(1), IMAGE_ICON, GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), 0);
-    wc.lpszClassName = g_test ? L"JoltTest" : kWindowClass;  // a test isn't mistaken for the open Jolt
+    wc.lpszClassName = g_test ? L"JoltTest" : g_adminWindow ? kAdminClass : kWindowClass;  // neither is mistaken for the open Jolt
     RegisterClassExW(&wc);
     RegisterPopupClass(inst);
     RegisterEditorClass(inst);
@@ -5001,6 +5036,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdLine, int show) {
                              MulDiv(1100, sysDpi, 96), MulDiv(700, sysDpi, 96), nullptr, nullptr, inst, nullptr);
     g_sysDpi = GetDpiForWindow(g_hwnd);
     ApplyDpi();
+    if (g_adminWindow) ChangeWindowMessageFilterEx(g_hwnd, WM_COPYDATA, MSGFLT_ALLOW, nullptr);  // the normal Jolt sends it folders
 
     BOOL dark = TRUE;
     DwmSetWindowAttribute(g_hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark, sizeof(dark));
@@ -5027,7 +5063,8 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdLine, int show) {
     std::thread(ConfigWatcherMain).detach();
     if (!g_test) {
         std::thread(LoadDirSizes).detach();  // folder sizes from previous sessions
-        IdxStart();                          // disk index for Ctrl+P
+        if (g_adminWindow) IdxStartReadOnly();
+        else IdxStart();  // disk index for Ctrl+P
     } else {
         IdxStartReadOnly();  // in tests, the index is used but not modified
     }
@@ -5039,6 +5076,10 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdLine, int show) {
 
     // previous session: window, sidebar, sort and tabs
     Session ses = LoadSession();
+    if (g_adminWindow) {  // the position and the sidebar, but only the folder it came for
+        ses.tabs.clear();
+        ses.split = false;
+    }
     BootMark(L"session");
     // views; the first time, the general one comes from the old sort (session) and folders_first (config)
     if (!LoadViews()) {
@@ -5054,7 +5095,9 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdLine, int show) {
     g_sideVisible = ses.sidebar;
     g_preview = ses.preview;
     g_splitRatio = ses.ratio;
-    if (ses.hasWindow) {
+    if (g_adminWindow && BgAdminPlace(show)) {
+        // beside the normal window
+    } else if (ses.hasWindow) {
         WINDOWPLACEMENT wp{sizeof(wp)};
         wp.rcNormalPosition = ses.rc;
         wp.showCmd = hidden ? SW_HIDE : ses.maximized ? SW_SHOWMAXIMIZED : SW_SHOWNORMAL;
@@ -5102,9 +5145,9 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdLine, int show) {
     g_taskbarCreated = RegisterWindowMessageW(L"TaskbarCreated");
     BgApplyConfig();
     if (hidden) Render();  // the first frame is the most expensive: get it done before showing
-    if (!g_test && !hidden && (HasArg(L"--panel") || InstShouldOffer())) InstPanelOpen();
+    if (!g_test && !hidden && !g_adminWindow && (HasArg(L"--panel") || InstShouldOffer())) InstPanelOpen();
     S.navPending = false;  // startup isn't a navigation; not measured
-    g_heatReady = true;
+    g_heatReady = !g_adminWindow;
     S.navMs = -1;
     if (g_test) {
         SetTimer(g_hwnd, kTimerTest, 400, nullptr);        // first script step

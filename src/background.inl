@@ -5,6 +5,7 @@ constexpr UINT WM_APP_TRAY = WM_APP + 40, WM_APP_QUIT = WM_APP + 41;
 constexpr int kHotkeyId = 1;
 constexpr UINT kTrayShow = 1, kTrayQuit = 2;
 constexpr wchar_t kWindowClass[] = L"JoltWindow";
+constexpr wchar_t kAdminClass[] = L"JoltAdminWindow";  // the window that runs as administrator: see OpenAsAdmin
 
 HANDLE g_instance = nullptr;
 bool g_quitting = false;    // really close, not hide
@@ -13,12 +14,16 @@ bool g_testShown = true;     // in tests the window is never visible: it is trac
 bool g_hotkeyOk = false, g_trayOn = false;
 UINT g_taskbarCreated = 0;
 std::wstring g_relaunch, g_relaunchArgs;  // on quit, open this (after installing)
+constexpr ULONG_PTR kAdminHide = 4, kAdminBehind = 5, kAdminFront = 6;  // what the normal window tells the administrator one
+bool g_adminWasFront = false;  // it was the one in front when the shortcut hid them
+bool g_testAdminLink = false, g_testAdminFront = false;  // a test leaves the real one alone unless it asks
 
 void TestLog(const std::wstring& s);
 bool FolderExists(const std::wstring& p);
 void SaveSession();
 void InstPanelClose();
 void RenameManyClose();
+std::wstring ExePath();  // install.inl
 
 // ---- single instance
 
@@ -57,25 +62,122 @@ void BgSendQuit() {
     }
 }
 
+// ---- running as administrator
+
+bool RunningElevated() {
+    HANDLE tok = nullptr;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &tok)) return false;
+    TOKEN_ELEVATION e{};
+    DWORD n = 0;
+    const bool ok = GetTokenInformation(tok, TokenElevation, &e, sizeof(e), &n) && e.TokenIsElevated;
+    CloseHandle(tok);
+    return ok;
+}
+
+// Lists folders past their permissions, those of other users or of the system included, without changing anything in
+// them: it's what backup programs do, and the listing already opens folders that way.
+void EnableBackupRight() {
+    HANDLE tok = nullptr;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &tok)) return;
+    TOKEN_PRIVILEGES tp{};
+    tp.PrivilegeCount = 1;
+    tp.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
+    if (LookupPrivilegeValueW(nullptr, SE_BACKUP_NAME, &tp.Privileges[0].Luid)) AdjustTokenPrivileges(tok, FALSE, &tp, 0, nullptr, nullptr);
+    CloseHandle(tok);
+}
+
+// The administrator window opens a little to the side of the normal one: exactly over it, it would look as if that
+// one had been replaced. Same size, cut where it would leave the screen. False if there's no window to go by.
+bool BgAdminPlace(int show) {
+    HWND normal = FindWindowW(kWindowClass, nullptr);
+    RECT r;
+    if (!normal || !IsWindowVisible(normal) || IsIconic(normal) || !GetWindowRect(normal, &r)) return false;
+    const int gap = MulDiv(50, g_dpi, 96);
+    OffsetRect(&r, gap, gap);
+    MONITORINFO mi{sizeof(mi)};
+    GetMonitorInfoW(MonitorFromRect(&r, MONITOR_DEFAULTTONEAREST), &mi);
+    r.right = std::min(r.right, mi.rcWork.right);
+    r.bottom = std::min(r.bottom, mi.rcWork.bottom);
+    SetWindowPos(g_hwnd, nullptr, r.left, r.top, r.right - r.left, r.bottom - r.top, SWP_NOZORDER | SWP_NOACTIVATE);
+    ShowWindow(g_hwnd, show);
+    return true;
+}
+
+// Opens a folder in a separate Jolt that runs as administrator: a window of its own, passing through, that closes for
+// real and leaves the session alone. A second folder goes to the same window, without asking again.
+void OpenAsAdmin(const std::wstring& path) {
+    if (g_elevated) {
+        S.message = L"This window already runs as administrator";
+        Invalidate();
+        return;
+    }
+    if (g_test) {  // the prompt is for a person
+        TestLog(L"as administrator: " + path);
+        return;
+    }
+    if (HWND w = FindWindowW(kAdminClass, nullptr)) {
+        DWORD pid = 0;
+        GetWindowThreadProcessId(w, &pid);
+        AllowSetForegroundWindow(pid);
+        COPYDATASTRUCT cd{1, static_cast<DWORD>((path.size() + 1) * sizeof(wchar_t)), const_cast<wchar_t*>(path.c_str())};
+        if (SendMessageTimeoutW(w, WM_COPYDATA, 0, reinterpret_cast<LPARAM>(&cd), SMTO_ABORTIFHUNG, 3000, nullptr)) return;
+    }
+    const std::wstring exe = ExePath();
+    std::wstring args = L"--elevated";
+    if (!path.empty()) args += L" \"" + path + (path.back() == L'\\' ? L"\\\"" : L"\"");  // \" would be a quote, not the end
+    SHELLEXECUTEINFOW sei{sizeof(sei)};
+    sei.hwnd = g_hwnd;
+    sei.lpVerb = L"runas";
+    sei.lpFile = exe.c_str();
+    sei.lpParameters = args.c_str();
+    sei.nShow = SW_SHOWNORMAL;
+    if (!ShellExecuteExW(&sei)) {
+        const DWORD e = GetLastError();
+        S.message = e == ERROR_CANCELLED ? L"Cancelled: the folder stays closed" : L"Couldn't open it as administrator: " + ErrorText(e);
+        Invalidate();
+    }
+}
+
 // ---- show and hide
+// The window as administrator goes along with the normal one: the shortcut and Win+E hide both and bring both back. If
+// only the normal one hid, Windows would bring the other forward and Jolt could never get out of the way.
+
+HWND BgAdminWindow() {
+    if (g_adminWindow || (g_test && !g_testAdminLink)) return nullptr;
+    return FindWindowW(kAdminClass, nullptr);
+}
+
+void BgAdminTell(HWND w, ULONG_PTR what) {
+    DWORD pid = 0;
+    GetWindowThreadProcessId(w, &pid);
+    AllowSetForegroundWindow(pid);
+    COPYDATASTRUCT cd{what, 0, nullptr};
+    SendMessageTimeoutW(w, WM_COPYDATA, 0, reinterpret_cast<LPARAM>(&cd), SMTO_ABORTIFHUNG, 1000, nullptr);
+}
 
 bool BgIsUp() {
     if (g_test) return g_testShown;
     return IsWindowVisible(g_hwnd) && !IsIconic(g_hwnd) && GetForegroundWindow() == g_hwnd;
 }
 
-void BgShow() {
+// asLeft: the shortcut brings them back as they were; anything else wants the normal window in front.
+void BgShow(bool asLeft = false) {
+    HWND admin = BgAdminWindow();
+    if (admin && IsWindowVisible(admin)) admin = nullptr;  // only what the shortcut hid
+    const bool adminOnTop = admin && asLeft && g_adminWasFront;
+    if (admin && !adminOnTop) BgAdminTell(admin, kAdminBehind);
     if (T().has) Enqueue(T().path, JobKind::Revalidate);  // it may have changed while hidden
     Invalidate();
     if (g_test) {
         g_testShown = true;
         TestLog(L"window: shown");
-        return;
+    } else {
+        if (g_showMaxOnce) ShowWindow(g_hwnd, SW_SHOWMAXIMIZED);
+        else ShowWindow(g_hwnd, IsIconic(g_hwnd) ? SW_RESTORE : SW_SHOW);
+        g_showMaxOnce = false;
+        SetForegroundWindow(g_hwnd);
     }
-    if (g_showMaxOnce) ShowWindow(g_hwnd, SW_SHOWMAXIMIZED);
-    else ShowWindow(g_hwnd, IsIconic(g_hwnd) ? SW_RESTORE : SW_SHOW);
-    g_showMaxOnce = false;
-    SetForegroundWindow(g_hwnd);
+    if (adminOnTop) BgAdminTell(admin, kAdminFront);
 }
 
 void BgHide() {
@@ -90,10 +192,24 @@ void BgHide() {
     }
     ShowWindow(g_hwnd, SW_HIDE);
     SaveSession();  // in case Windows shuts down or Jolt hangs
-    if (g_dsAny) SaveDirSizes();
+    if (g_dsAny && !g_adminWindow) SaveDirSizes();
+}
+
+// In the window as administrator: what the normal one asks of it.
+void BgAdminOrder(ULONG_PTR what) {
+    if (!g_adminWindow) return;
+    if (what == kAdminHide) {
+        BgHide();
+    } else if (what == kAdminFront) {
+        BgShow();
+    } else if (what == kAdminBehind) {
+        Invalidate();
+        ShowWindow(g_hwnd, SW_SHOWNOACTIVATE);
+    }
 }
 
 void BgQuit() {
+    if (HWND admin = BgAdminWindow(); admin && !IsWindowVisible(admin)) BgAdminTell(admin, kAdminFront);  // hidden, nothing could bring it back
     g_quitting = true;
     PostMessageW(g_hwnd, WM_CLOSE, 0, 0);
 }
@@ -184,13 +300,19 @@ std::wstring ExplorerFolder(HWND fg) {
 
 // The global shortcut and the tray click: shows up, and if it was already in front, hides.
 void BgToggle(bool fromHotkey) {
-    if (BgIsUp()) {
+    HWND admin = BgAdminWindow();
+    const bool adminInFront = admin && (GetForegroundWindow() == admin || g_testAdminFront);
+    if (BgIsUp() || adminInFront) {
+        if (admin && IsWindowVisible(admin) && !IsIconic(admin)) {  // first, or Windows would bring it forward
+            g_adminWasFront = adminInFront;
+            BgAdminTell(admin, kAdminHide);
+        }
         BgHide();
         return;
     }
     const std::wstring folder = fromHotkey ? ExplorerFolder(GetForegroundWindow()) : L"";
     if (!folder.empty()) BgOpenPath(folder);
-    BgShow();
+    BgShow(true);
 }
 
 // ---- global shortcut and tray
@@ -259,6 +381,7 @@ void BgApplyConfig() {
         g_hotkeyOk = parsed;
         return;
     }
+    if (g_adminWindow) return;  // the shortcut and the tray are the normal window's
     UnregisterHotKey(g_hwnd, kHotkeyId);
     g_hotkeyOk = parsed && RegisterHotKey(g_hwnd, kHotkeyId, mods, vk);
     if (!g_cfg.globalKey.empty() && !g_hotkeyOk) S.message = L"The global shortcut " + g_cfg.globalKey + L" is not available";
@@ -269,7 +392,7 @@ void BgApplyConfig() {
 
 // Windows announces new drives to all windows, even hidden ones.
 void BgDeviceChange(WPARAM wp, LPARAM lp) {
-    if (!g_cfg.openDrives || wp != DBT_DEVICEARRIVAL) return;
+    if (!g_cfg.openDrives || g_adminWindow || wp != DBT_DEVICEARRIVAL) return;
     const auto* h = reinterpret_cast<const DEV_BROADCAST_HDR*>(lp);
     if (!h || h->dbch_devicetype != DBT_DEVTYP_VOLUME) return;
     const DWORD mask = reinterpret_cast<const DEV_BROADCAST_VOLUME*>(lp)->dbcv_unitmask;
