@@ -588,6 +588,11 @@ void TestRunStep() {
             const size_t bar2 = s.arg.find(L'|', bar + 1);
             const std::wstring sub = Trim(s.arg.substr(0, bar)), name = Trim(s.arg.substr(bar + 1, bar2 - bar - 1)), val = Trim(s.arg.substr(bar2 + 1));
             RegWrite(sub, name.empty() ? nullptr : name.c_str(), val);
+        } else if (s.cmd == L"grep") {  // the content search: term, files still to read, files read, matches
+            int matches = 0;
+            for (const auto& [k, h] : g_grepHits) matches += h.match;
+            TestLog(L"grep: \"" + g_grepTerm + L"\" pending " + std::to_wstring(g_grepPending.load()) + L" read " + std::to_wstring(g_grepHits.size()) +
+                    L" matches " + std::to_wstring(matches) + L" gen " + std::to_wstring(g_grepGen.load()));
         } else if (s.cmd == L"thumb") {  // thumb C:\\a.jpg | 128: asks for it and logs its state
             size_t bar = s.arg.find(L'|');
             const std::wstring path = Trim(s.arg.substr(0, bar));

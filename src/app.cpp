@@ -591,6 +591,20 @@ void AddTree(const Tab& t, const Listing* l, int depth, std::vector<Row>& out) {
 
 // Builds the visible rows: the tree (or what was found in subfolders) and, with a filter, only what
 // matches, sorted by score like fzf.
+// Content search ("content:word" in the filter): what grep.inl found, by lowercase full path.
+struct GrepHit {
+    std::wstring snippet;  // text around the match
+    int at = -1, len = 0;  // the match inside the snippet
+    bool match = false;
+};
+std::unordered_map<std::wstring, GrepHit> g_grepHits;
+std::unordered_set<std::wstring> g_grepSeen;  // queued or done
+std::wstring g_grepTerm;                      // lowercase; empty = no content search
+extern std::atomic<int> g_grepPending;        // files queued but not read yet
+void GrepStart(const std::wstring& term);     // grep.inl
+void GrepStop();
+void GrepWant(const std::wstring& full);
+
 // What the typed filter means. Plain words are the fuzzy pattern; the other terms narrow the list:
 //   .png  *.png  ext:png,jpg        extension (several: any of them)
 //   >10mb  <500kb  >2gb             size (a bare number is MB); folders have no size and are left out
@@ -598,9 +612,11 @@ void AddTree(const Tab& t, const Listing* l, int depth, std::vector<Row>& out) {
 //   newer:7d  older:2w  modified:today   date (d h w m y; "today" since midnight)
 //   !tmp  !.bak  !*.log             exclude: name contains, extension, pattern
 //   report*.pdf  ?.txt              wildcard pattern on the name
+//   content:word  content:"two words"   files whose text contains it (read in the background)
 //   tag:urgent  !tag:done           items with (without) a tag
 struct FilterSpec {
     std::wstring fuzzy;  // lowercase
+    std::wstring content;  // lowercase phrase the file must contain
     std::vector<std::wstring> exts, notExts, notNames, globs, notGlobs;
     std::vector<std::wstring> tags, notTags;  // tag:urgent / !tag:done
     uint64_t minSize = 0, maxSize = UINT64_MAX;
@@ -654,6 +670,21 @@ FilterSpec ParseFilter(const std::wstring& filter) {
         std::wstring tok = f.substr(pos, sp == std::wstring::npos ? std::wstring::npos : sp - pos);
         pos = sp == std::wstring::npos ? f.size() : sp + 1;
         if (tok.empty()) continue;
+        if (tok.rfind(L"content:", 0) == 0 || tok.rfind(L"text:", 0) == 0) {
+            std::wstring v = tok.substr(tok.find(L':') + 1);
+            if (!v.empty() && v[0] == L'"') {  // a quoted phrase runs until the closing quote
+                v.erase(0, 1);
+                while (v.find(L'"') == std::wstring::npos && pos < f.size()) {
+                    size_t sp2 = f.find(L' ', pos);
+                    v += L" " + f.substr(pos, sp2 == std::wstring::npos ? std::wstring::npos : sp2 - pos);
+                    pos = sp2 == std::wstring::npos ? f.size() : sp2 + 1;
+                }
+                size_t q = v.find(L'"');
+                if (q != std::wstring::npos) v.resize(q);
+            }
+            s.content = v;
+            continue;
+        }
         const bool neg = tok[0] == L'!';
         if (neg) tok.erase(0, 1);
         if (tok.empty()) continue;
@@ -762,8 +793,15 @@ void BuildRows(Tab& t) {
     } else {
         AddTree(t, t.list.get(), 0, t.rows);
     }
-    if (t.filter.empty()) return;
+    if (t.filter.empty()) {
+        if (&t == &T()) GrepStop();
+        return;
+    }
     const FilterSpec spec = ParseFilter(t.filter);
+    if (&t == &T() && spec.content != g_grepTerm) {
+        if (spec.content.empty()) GrepStop();
+        else GrepStart(spec.content);
+    }
     std::vector<std::pair<int, int>> hits;  // (score, row)
     for (size_t i = 0; i < t.rows.size(); ++i) {
         const Row& r = t.rows[i];
@@ -771,6 +809,16 @@ void BuildRows(Tab& t) {
         const Entry& e = r.l->entries[r.e];
         int sc;
         if (!FilterPass(spec, e, r.l->name(e), e.nameLen, sc, nullptr)) continue;
+        if (!spec.content.empty()) {  // only files whose text has it; the unread ones appear as they are read
+            if (e.isDir() || r.l->path.empty()) continue;
+            const std::wstring full = Join(r.l->path, r.l->name(e));
+            auto h = g_grepHits.find(Key(full));
+            if (h == g_grepHits.end()) {
+                if (!g_grepSeen.count(Key(full))) GrepWant(full);
+                continue;
+            }
+            if (!h->second.match) continue;
+        }
         if (!spec.tags.empty() || !spec.notTags.empty()) {
             if (r.l->path.empty()) continue;
             const std::wstring full = Join(r.l->path, r.l->name(e));
@@ -2835,13 +2883,33 @@ void DrawList(int pane, float H) {
             float tagEnd = 0;  // the tag labels, right after the name, as far as the column goes
             if (!drives && TagsOf(full)) DrawTagLabels(full, textX + MeasureW(std::wstring(name, shownLen), g_fmtName.Get()) + 8, y + kRow / 2, c.nameR - 3, a, tagEnd);
             // in the flat list (filter or search), where each thing is
+            float afterName = std::max(textX + MeasureW(std::wstring(name, shownLen), g_fmtName.Get()), tagEnd) + 14;
             if (flat && row.depth > 0 && row.l->path.size() > t.path.size()) {
                 std::wstring rel = row.l->path.substr(t.path.size());
                 while (!rel.empty() && rel[0] == L'\\') rel.erase(0, 1);
-                float w = std::max(MeasureW(std::wstring(name, shownLen), g_fmtName.Get()), tagEnd - textX);
-                if (textX + w + 14 < nameEnd - 30) {
+                if (afterName < nameEnd - 30) {
                     Color(selected && focused ? 0x9FB3D9 : cFaint, a);
-                    Text(rel, g_fmtName.Get(), textX + w + 14, y, nameEnd, y + kRow);
+                    Text(rel, g_fmtName.Get(), afterName, y, nameEnd, y + kRow);
+                    afterName += MeasureW(rel, g_fmtName.Get()) + 14;
+                }
+            }
+            // content search: the text around the match, with the match in the accent color
+            if (!g_grepTerm.empty() && !drives && !e.isDir() && afterName < nameEnd - 40) {
+                auto h = g_grepHits.find(Key(full));
+                if (h != g_grepHits.end() && h->second.match) {
+                    const GrepHit& g = h->second;
+                    const std::wstring& s = g.snippet;
+                    const int at = std::clamp(g.at, 0, static_cast<int>(s.size())), end = std::min(static_cast<int>(s.size()), at + g.len);
+                    float x = afterName;
+                    auto part = [&](const std::wstring& txt, UINT32 col) {
+                        if (txt.empty() || x >= nameEnd) return;
+                        Color(col, a);
+                        Text(txt, g_fmtName.Get(), x, y, nameEnd, y + kRow);
+                        x += MeasureW(txt, g_fmtName.Get());
+                    };
+                    part(s.substr(0, at), selected && focused ? 0x9FB3D9 : cFaint);
+                    part(s.substr(at, end - at), cAccent);
+                    part(s.substr(end), selected && focused ? 0x9FB3D9 : cFaint);
                 }
             }
             Color(selected && focused ? 0xC6D4EE : cDim, a);
@@ -2951,6 +3019,10 @@ void DrawStatus(int pane, float H) {
                    (t.recDone ? L"   ·   Esc goes back" : L"   ·   searching…");
         } else {
             left = Thousands(n) + (n == 1 ? L" match" : L" matches") + L"   ·   Esc clears";
+        }
+        if (!g_grepTerm.empty() && activePane && S.message.empty()) {
+            const int pending = g_grepPending.load();
+            left += pending ? L"   ·   reading files… " + Thousands(pending) + L" left" : L"   ·   in the files' text";
         }
         if (!S.message.empty() && activePane) left = S.message;
     }
@@ -3362,6 +3434,7 @@ void ViewEditorOpen(int pane);
 #include "viewedit.inl"
 #include "ops.inl"
 #include "search.inl"
+#include "grep.inl"
 #include "preview.inl"
 void PreviewReleaseBitmap() { g_pv.d2d.Reset(); }
 #include "background.inl"
@@ -4246,6 +4319,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case WM_APP_REC:
             ApplyRecBatch(reinterpret_cast<RecBatch*>(lp));
             return 0;
+        case WM_APP_GREP:
+            ApplyGrepResult(reinterpret_cast<GrepResult*>(lp));
         case WM_APP_THUMB:
             g_thumbDirty = false;
             Invalidate();
