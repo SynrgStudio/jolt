@@ -86,6 +86,23 @@ void EnableBackupRight() {
     CloseHandle(tok);
 }
 
+// The administrator window opens a little to the side of the normal one: exactly over it, it would look as if that
+// one had been replaced. Same size, cut where it would leave the screen. False if there's no window to go by.
+bool BgAdminPlace(int show) {
+    HWND normal = FindWindowW(kWindowClass, nullptr);
+    RECT r;
+    if (!normal || !IsWindowVisible(normal) || IsIconic(normal) || !GetWindowRect(normal, &r)) return false;
+    const int gap = MulDiv(50, g_dpi, 96);
+    OffsetRect(&r, gap, gap);
+    MONITORINFO mi{sizeof(mi)};
+    GetMonitorInfoW(MonitorFromRect(&r, MONITOR_DEFAULTTONEAREST), &mi);
+    r.right = std::min(r.right, mi.rcWork.right);
+    r.bottom = std::min(r.bottom, mi.rcWork.bottom);
+    SetWindowPos(g_hwnd, nullptr, r.left, r.top, r.right - r.left, r.bottom - r.top, SWP_NOZORDER | SWP_NOACTIVATE);
+    ShowWindow(g_hwnd, show);
+    return true;
+}
+
 // Opens a folder in a separate Jolt that runs as administrator: a window of its own, passing through, that closes for
 // real and leaves the session alone. A second folder goes to the same window, without asking again.
 void OpenAsAdmin(const std::wstring& path) {

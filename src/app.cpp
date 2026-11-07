@@ -5095,7 +5095,9 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdLine, int show) {
     g_sideVisible = ses.sidebar;
     g_preview = ses.preview;
     g_splitRatio = ses.ratio;
-    if (ses.hasWindow) {
+    if (g_adminWindow && BgAdminPlace(show)) {
+        // beside the normal window
+    } else if (ses.hasWindow) {
         WINDOWPLACEMENT wp{sizeof(wp)};
         wp.rcNormalPosition = ses.rc;
         wp.showCmd = hidden ? SW_HIDE : ses.maximized ? SW_SHOWMAXIMIZED : SW_SHOWNORMAL;
