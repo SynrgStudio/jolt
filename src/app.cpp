@@ -13,6 +13,7 @@
 #include <shellapi.h>
 #include <shlwapi.h>
 #include <shlobj.h>
+#include <sddl.h>
 #include <commctrl.h>
 #include <commoncontrols.h>
 #include <dwmapi.h>
@@ -125,6 +126,14 @@ bool FoldersFirstFor(SortBy by) {
     return m == 1 || (m == 2 && by == SortBy::Name);
 }
 
+// Folders that aren't on any disk. Their paths are Windows' own names for them.
+const std::wstring kBinPath = L"::{645FF040-5081-101B-9F08-00AA002F954E}";
+inline bool IsVirtual(const std::wstring& p) { return p.size() > 2 && p[0] == L':' && p[1] == L':'; }
+inline bool IsBin(const std::wstring& p) { return IsVirtual(p) && _wcsicmp(p.c_str(), kBinPath.c_str()) == 0; }
+inline std::wstring VirtualTitle(const std::wstring& p) { return IsBin(p) ? L"Recycle Bin" : L""; }
+std::wstring VirtualJoin(const std::wstring& dir, const wchar_t* name);  // bin.inl
+void BinEnumerate(Listing& out);
+
 // ---------------------------------------------------------------- background work
 enum class JobKind { Load, Revalidate, Prefetch };
 
@@ -159,7 +168,8 @@ void WorkerMain() {
         if (!stale) {
             auto l = std::make_shared<Listing>();
             double t0 = NowMs();
-            EnumerateDir(j->path, EnumMethod::Nt, *l);
+            if (IsBin(j->path)) BinEnumerate(*l);
+            else EnumerateDir(j->path, EnumMethod::Nt, *l);
             double t1 = NowMs();
             SortBy by = static_cast<SortBy>(g_sortBy.load());
             SortListing(*l, by, g_sortAsc.load(), FoldersFirstFor(by));
@@ -249,6 +259,7 @@ std::wstring Key(const std::wstring& p) { return Lower(p); }
 
 std::wstring Join(const std::wstring& dir, const wchar_t* name) {
     if (dir.empty()) return std::wstring(name) + L"\\";  // "C:" -> "C:\"
+    if (IsVirtual(dir)) return VirtualJoin(dir, name);
     if (dir.back() == L'\\') return dir + name;
     return dir + L"\\" + name;
 }
@@ -548,6 +559,7 @@ void AddRecent(const std::wstring& p) {
 }
 
 #include "heat.inl"
+#include "bin.inl"
 
 // --- rows
 int RowCount(const Tab& t) { return static_cast<int>(t.rows.size()); }
@@ -563,7 +575,7 @@ std::wstring RowName(const Tab& t, int row) { return std::wstring(RowNameP(t, ro
 const std::wstring& RowDir(const Tab& t, int row) { return t.rows[row].l->path; }
 std::wstring RowPath(const Tab& t, int row) { return Normalize(Join(RowDir(t, row), RowNameP(t, row))); }
 std::wstring RowKey(const Tab& t, int row) { return Key(RowPath(t, row)); }
-bool FlatView(const Tab& t) { return !t.filter.empty() || t.recursive; }
+bool FlatView(const Tab& t) { return !t.filter.empty() || t.recursive || IsVirtual(t.path); }
 
 #include "fuzzy.inl"
 
@@ -1096,7 +1108,7 @@ std::vector<std::wstring> SelectedNames(const Tab& t) {
 // Full paths of everything selected (from any folder).
 std::vector<std::wstring> SelectedFullPaths(const Tab& t) {
     std::vector<std::wstring> out;
-    if (t.path.empty() && !t.recursive) return out;  // drives: not copied
+    if ((t.path.empty() && !t.recursive) || IsVirtual(t.path)) return out;  // drives: not copied, and the rest aren't files
     for (int i = 0; i < RowCount(t); ++i)
         if (IsSel(t, i)) out.push_back(RowPath(t, i));
     return out;
@@ -1182,6 +1194,7 @@ void ShowListing(Tab& t, std::shared_ptr<const Listing> l, const std::wstring& p
 
 std::wstring TabTitle(const Tab& t) {
     if (t.path.empty()) return L"This PC";
+    if (IsVirtual(t.path)) return VirtualTitle(t.path);
     if (IsDriveRoot(t.path)) return DriveLabel(t.path[0]);
     return LeafOf(t.path);
 }
@@ -1194,6 +1207,11 @@ void SetWatchAll() {
     for (int p = 0; p < PaneCount(); ++p) {
         Tab& t = PT(p);
         if (!t.has || t.path.empty()) continue;
+        if (IsVirtual(t.path)) {
+            if (IsBin(t.path))
+                for (const std::wstring& dir : BinDirs()) v.push_back({dir, false});
+            continue;
+        }
         bool dup = false;
         for (auto& w : v) dup |= Key(w.first) == Key(t.path);
         if (!dup) v.push_back({t.path, !t.expanded.empty()});
@@ -1595,6 +1613,11 @@ std::wstring SelectedPath() {
 void OpenSelected(bool inNewTab) {
     Tab& t = T();
     if (t.sel < 0 || t.sel >= Count()) return;
+    if (IsBin(t.path)) {
+        S.message = L"In the Recycle Bin: restore it to open it";
+        Invalidate();
+        return;
+    }
     const Entry& e = EntryAt(t, t.sel);
     std::wstring full = RowPath(t, t.sel);
     if (e.isDir()) {
@@ -1970,6 +1993,13 @@ void IconThreadMain() {
             if (SUCCEEDED(SHGetKnownFolderIDList(FOLDERID_ComputerFolder, 0, nullptr, &pidl))) {
                 if (SHGetFileInfoW(reinterpret_cast<LPCWSTR>(pidl), 0, &sfi, sizeof(sfi),
                                    SHGFI_PIDL | SHGFI_SYSICONINDEX | SHGFI_SMALLICON))
+                    idx = sfi.iIcon;
+                CoTaskMemFree(pidl);
+            }
+        } else if (IsVirtual(p)) {
+            PIDLIST_ABSOLUTE pidl = nullptr;
+            if (SUCCEEDED(SHParseDisplayName(p.c_str(), nullptr, &pidl, 0, nullptr))) {
+                if (SHGetFileInfoW(reinterpret_cast<LPCWSTR>(pidl), 0, &sfi, sizeof(sfi), SHGFI_PIDL | SHGFI_SYSICONINDEX | SHGFI_SMALLICON))
                     idx = sfi.iIcon;
                 CoTaskMemFree(pidl);
             }
@@ -2481,7 +2511,10 @@ void DrawToolbar(int pane) {
     };
     std::vector<Crumb> crumbs;
     crumbs.push_back({L"", L"", 30});  // "This PC" icon
-    if (!t.path.empty()) {
+    if (IsVirtual(t.path)) {
+        const std::wstring title = VirtualTitle(t.path);
+        crumbs.push_back({title, t.path, MeasureW(title, g_fmtCrumb.Get()) + 18});
+    } else if (!t.path.empty()) {
         std::wstring acc;
         size_t start = 0;
         bool unc = t.path.rfind(L"\\\\", 0) == 0;
@@ -2665,6 +2698,7 @@ void DrawSidebar(float H) {
         if (hoverDrive) SetTimer(g_hwnd, kTimerDisk, kDiskTickMs, nullptr);
         else KillTimer(g_hwnd, kTimerDisk);
     }
+    item(VirtualTitle(kBinPath), kBinPath, false, -1);
     g_sideHotFirst = static_cast<int>(g_sidePaths.size());
     const float bottom = H - kStatus - 6;
     if (g_cfg.hotCount > 0 && !g_hot.empty() && y + 12 + 22 + kSideRow <= bottom) {
@@ -2744,7 +2778,7 @@ void DrawHeader(int pane) {
         bool right;
         bool show;
     } cols[] = {{L"Name", SortBy::Name, c.nameL, c.nameR, false, true},
-                {L"Modified", SortBy::Date, c.dateL, c.dateL + kDateW, true, c.showDate},
+                {IsBin(PT(pane).path) ? L"Deleted" : L"Modified", SortBy::Date, c.dateL, c.dateL + kDateW, true, c.showDate},
                 {L"Size", SortBy::Size, c.sizeL, c.right, true, c.showSize}};
     int i = 0;
     for (const Col& col : cols) {
@@ -3005,6 +3039,10 @@ void DrawList(int pane, float H) {
             if (!drives && TagsOf(full)) DrawTagLabels(full, textX + MeasureW(std::wstring(name, shownLen), g_fmtName.Get()) + 8, y + kRow / 2, c.nameR - 3, a, tagEnd);
             // in the flat list (filter or search), where each thing is
             float afterName = std::max(textX + MeasureW(std::wstring(name, shownLen), g_fmtName.Get()), tagEnd) + 14;
+            if (IsBin(row.l->path) && afterName < nameEnd - 30) {  // where it came from
+                Color(selected && focused ? 0x9FB3D9 : cFaint, a);
+                Text(ParentOf(BinItemOf(name).original), g_fmtName.Get(), afterName, y, nameEnd, y + kRow);
+            }
             if (row.closeness && afterName < nameEnd - 24) {  // not a real match: how close it is
                 const std::wstring pct = std::to_wstring(row.closeness) + L"%";
                 Color(selected && focused ? 0x9FB3D9 : cFaint, a);
@@ -3282,7 +3320,7 @@ void UpdateEditFont() {
 }
 
 void ShowPathEdit() {
-    SetWindowTextW(g_edit, T().path.c_str());
+    SetWindowTextW(g_edit, IsVirtual(T().path) ? VirtualTitle(T().path).c_str() : T().path.c_str());
     LayoutEdit();
     g_editing = true;
     ShowWindow(g_edit, SW_SHOW);
@@ -3309,6 +3347,10 @@ void CommitPathEdit() {
     if (t.size() >= 2 && t.front() == L'"' && t.back() == L'"') t = t.substr(1, t.size() - 2);
     if (t.empty() || _wcsicmp(t.c_str(), L"This PC") == 0) {
         Navigate(T(), L"", true);
+        return;
+    }
+    if (_wcsicmp(t.c_str(), L"Recycle Bin") == 0 || _wcsicmp(t.c_str(), L"shell:RecycleBinFolder") == 0 || IsBin(t)) {
+        Navigate(T(), kBinPath, true);
         return;
     }
     wchar_t expanded[4096];
@@ -3400,7 +3442,7 @@ void LayoutRename() {
 
 void BeginRename() {
     Tab& t = T();
-    if (g_renaming || !t.list || t.list->error || t.sel < 0 || t.sel >= Count()) return;
+    if (g_renaming || !t.list || t.list->error || t.sel < 0 || t.sel >= Count() || IsVirtual(t.path)) return;
     if (RowDir(t, t.sel).empty()) return;  // drives
     g_renameOld = SelectedName(t);
     g_renameDir = RowDir(t, t.sel);
@@ -3814,6 +3856,17 @@ void RevalidateVisible() {
 // Runs a command from the shortcut table.
 void RunCommand(Cmd cmd) {
     Tab& t = T();
+    if (IsBin(t.path)) {  // what's in there isn't files to work with until it comes back
+        if (cmd == Cmd::Delete) {
+            BinDeleteSelection();
+            return;
+        }
+        if (BinRefuses(cmd)) {
+            S.message = L"In the Recycle Bin: restore it first";
+            Invalidate();
+            return;
+        }
+    }
     if (IsCustom(cmd)) {
         RunCustomCommand(CustomIndex(cmd));
         return;
@@ -3944,6 +3997,11 @@ void RunCommand(Cmd cmd) {
             break;
         case Cmd::ReopenTab: ReopenTab(); break;
         case Cmd::PinTab: SetPinned(g_cur, !t.pinned); break;
+        case Cmd::Restore:
+            if (IsBin(t.path)) BinRestoreSelection();
+            else S.message = L"Restoring works in the Recycle Bin";
+            Invalidate();
+            break;
         case Cmd::CloseOthers: CloseOtherTabs(); break;
         case Cmd::Terminal: OpenTerminal(); break;
         case Cmd::OpenExplorer: OpenInExplorer(); break;
@@ -5013,6 +5071,7 @@ std::wstring ArgPath() {
             ++i;
             continue;
         }
+        if (IsBin(a)) return kBinPath;
         if (a.rfind(L"--", 0) == 0 || a.rfind(L"::", 0) == 0 || a.rfind(L"/select,", 0) == 0) continue;  // "::{...}": virtual shell folder, no path
         while (!a.empty() && a.back() == L'"') a.pop_back();
         if (a.size() == 2 && a[1] == L':') a += L'\\';
@@ -5063,6 +5122,7 @@ std::wstring DefaultPath() {
 
 // Does it exist and is it a folder?
 bool FolderExists(const std::wstring& p) {
+    if (IsVirtual(p)) return true;
     DWORD a = GetFileAttributesW(ToExtendedPath(p).c_str());
     return a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_DIRECTORY);
 }

@@ -383,8 +383,9 @@ void DrawPreview(float W, float H) {
         FormatSize(e.size, buf, 64);
         info[0] = {L"Type", type};
         info[1] = {L"Size", std::wstring(buf) + L"  (" + Thousands(static_cast<int>(std::min<uint64_t>(e.size, INT_MAX))) + L" bytes)"};
-        info[2] = {L"Modified", modified};
-        if (rowMatches && g_pv.res && g_pv.res->kind == 1 && !g_pv.res->thumb)
+        info[2] = {IsBin(t.path) ? L"Deleted" : L"Modified", modified};
+        if (IsBin(t.path)) info[3] = {L"From", ParentOf(BinItemOf(RowName(t, t.sel).c_str()).original)};
+        else if (rowMatches && g_pv.res && g_pv.res->kind == 1 && !g_pv.res->thumb)
             info[3] = {L"Dimensions", std::to_wstring(g_pv.res->imgW) + L" × " + std::to_wstring(g_pv.res->imgH)};
         else if (OnlineOnly(e.attrs)) info[3] = {L"Storage", L"Online only"};
         else if (e.attrs & FILE_ATTRIBUTE_PINNED) info[3] = {L"Storage", L"Always on this PC"};

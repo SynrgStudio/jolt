@@ -262,7 +262,7 @@ void TransferToOther(bool move) {
     }
     Tab& src = T();
     Tab& dst = PT(1 - g_act);
-    if (dst.path.empty()) {
+    if (dst.path.empty() || IsVirtual(dst.path)) {
         S.message = L"The other pane isn't in a folder";
         Invalidate();
         return;
@@ -441,6 +441,7 @@ void OpenInExplorer() {
     Tab& t = T();
     std::wstring args;
     if (t.path.empty()) args = L"shell:MyComputerFolder";
+    if (IsBin(t.path)) args = L"shell:RecycleBinFolder";
     else if (t.sel >= 0 && t.sel < Count() && !IsHeader(t, t.sel)) args = L"/select,\"" + RowPath(t, t.sel) + L"\"";
     else args = L"\"" + t.path + L"\"";
     if (g_test) {
@@ -453,6 +454,69 @@ void OpenInExplorer() {
 
 // Empties the Recycle Bin on all drives. Windows asks for confirmation; it runs on another thread because
 // deleting many gigabytes takes time and Jolt must not hang.
+void EmptyRecycleBin();
+
+// What makes no sense on something deleted: the real file has a made-up name, and it has to come back first.
+bool BinRefuses(Cmd cmd) {
+    switch (cmd) {
+        case Cmd::Rename: case Cmd::RenameMany: case Cmd::NewFolder: case Cmd::NewFile: case Cmd::Copy: case Cmd::Cut: case Cmd::Paste:
+        case Cmd::CopyToOther: case Cmd::MoveToOther: case Cmd::CopyPath: case Cmd::CopyName: case Cmd::CopyPathUnix: case Cmd::Duplicate:
+        case Cmd::GroupInFolder: case Cmd::Properties: case Cmd::Terminal: case Cmd::RealLocation: case Cmd::OpenAsAdmin: case Cmd::Tag:
+        case Cmd::SearchSubfolders:
+            return true;
+        default:
+            return IsCustom(cmd);
+    }
+}
+
+// Back where they were, with Windows' own verb: it deals with conflicts and removes the record.
+void BinRestoreSelection() {
+    Tab& t = T();
+    std::vector<std::pair<std::wstring, std::wstring>> items;
+    for (int i = 0; i < Count(); ++i)
+        if (IsSel(t, i)) {
+            BinItem b = BinItemOf(RowName(t, i).c_str());
+            if (!b.real.empty()) items.push_back({b.real, b.original});
+        }
+    if (items.empty()) return;
+    S.message = L"Restoring…";
+    std::thread([items] {
+        CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+        const size_t back = BinRestore(items).size();
+        CoUninitialize();
+        Enqueue(kBinPath, JobKind::Revalidate);
+        IdxStatus(back == items.size() ? (back == 1 ? L"Restored" : L"Restored " + Thousands(static_cast<int>(back)) + L" items")
+                                       : L"Restored " + Thousands(static_cast<int>(back)) + L" of " + Thousands(static_cast<int>(items.size())));
+    }).detach();
+}
+
+// Gone for good: the item and its record.
+void BinDeleteSelection() {
+    Tab& t = T();
+    std::vector<std::wstring> real;
+    for (int i = 0; i < Count(); ++i)
+        if (IsSel(t, i)) {
+            BinItem b = BinItemOf(RowName(t, i).c_str());
+            if (!b.real.empty()) real.push_back(b.real);
+        }
+    if (real.empty()) return;
+    const std::wstring what = real.size() == 1 ? L"“" + RowName(t, t.sel) + L"”" : Thousands(static_cast<int>(real.size())) + L" items";
+    if (!g_test && MessageBoxW(g_hwnd, (L"Delete " + what + L" for good? This can't be undone.").c_str(), L"Recycle Bin", MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) != IDYES)
+        return;
+    auto* rec = new OpRecorder();  // doesn't go to the history: it can't be undone
+    FileOp(FileOpKind::Delete, real, L"", FOF_NOCONFIRMATION, nullptr, rec);
+    rec->Release();
+    int gone = 0;
+    for (const std::wstring& p : real)
+        if (!PathExists(p)) {
+            DeleteFileW(ToExtendedPath(BinRecordOf(p)).c_str());
+            ++gone;
+        }
+    S.message = gone == 1 ? L"Deleted for good" : L"Deleted " + Thousands(gone) + L" items for good";
+    Enqueue(kBinPath, JobKind::Revalidate);
+    Invalidate();
+}
+
 void EmptyRecycleBin() {
     SHQUERYRBINFO before{sizeof(before)};
     SHQueryRecycleBinW(nullptr, &before);

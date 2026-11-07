@@ -47,7 +47,7 @@ void RecThread(std::wstring root, uint64_t gen, bool showHidden, SortBy by, bool
 }
 
 void StartRecursive(Tab& t) {
-    if (t.path.empty() || !t.list || t.list->error) {
+    if (t.path.empty() || IsVirtual(t.path) || !t.list || t.list->error) {
         S.message = L"Subfolder search needs a folder";
         Invalidate();
         return;

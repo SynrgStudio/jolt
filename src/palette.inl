@@ -251,7 +251,7 @@ void TagBuild() {
 
 // ---- Go to (Ctrl+P): recents, favorites, system places, drives, or a typed path
 void GotoOpen(const std::wstring& p, bool newTab) {
-    DWORD a = p.empty() ? FILE_ATTRIBUTE_DIRECTORY : GetFileAttributesW(ToExtendedPath(p).c_str());
+    DWORD a = p.empty() || IsVirtual(p) ? FILE_ATTRIBUTE_DIRECTORY : GetFileAttributesW(ToExtendedPath(p).c_str());
     if (a == INVALID_FILE_ATTRIBUTES) {
         S.message = L"No longer exists: " + p;
         Invalidate();
@@ -271,6 +271,7 @@ void GotoOpen(const std::wstring& p, bool newTab) {
 
 std::wstring PlaceTitle(const std::wstring& p) {
     if (p.empty()) return L"This PC";
+    if (IsVirtual(p)) return VirtualTitle(p);
     if (IsDriveRoot(p)) return DriveLabel(p[0]);
     return LeafOf(p);
 }
@@ -282,7 +283,7 @@ void GotoBuild() {
         if (!seen.insert(Key(path)).second) return;
         PalItem it;
         it.title = title;
-        it.detail = path.empty() ? L"drives" : path;
+        it.detail = path.empty() ? L"drives" : IsVirtual(path) ? L"" : path;
         it.path = path;
         it.pinned = pinned;
         it.bonus = bonus;
@@ -356,6 +357,7 @@ void GotoBuild() {
     wchar_t tmp[MAX_PATH];
     if (GetTempPathW(MAX_PATH, tmp)) add(L"Temp", Normalize(tmp));
     add(L"This PC", L"");
+    add(VirtualTitle(kBinPath), kBinPath);
     DWORD mask = GetLogicalDrives();
     for (int i = 0; i < 26; ++i)
         if (mask & (1u << i)) {

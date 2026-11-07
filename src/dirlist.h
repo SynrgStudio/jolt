@@ -41,6 +41,7 @@ struct Listing {
 enum class EnumMethod { Nt, Win32 };
 
 bool EnumerateDir(const std::wstring& path, EnumMethod method, Listing& out);
+void ListingAdd(Listing& l, const wchar_t* name, size_t len, uint32_t attrs, uint64_t size, int64_t mtime);
 // Names in "natural" order like File Explorer. foldersFirst: folders on top; otherwise mixed.
 // Sort keys by name: computed once per file, and comparing two is comparing bytes.
 // They sort the same as StrCmpLogicalW, which recomputes everything on each comparison.
