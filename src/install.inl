@@ -396,17 +396,20 @@ void InstHover(float x, float y) {
 void InstClick(float x, float y) {
     g_inst.note.clear();
     switch (InstHitAt(x, y)) {
-        case InstK::Install:
+        case InstK::Install: {
+            const bool update = InstIsInstalled();  // already installed: this is just a newer copy
             if (!InstInstall()) {
                 g_inst.note = L"Could not copy the executable";
             } else if (g_test) {
-                g_inst.note = L"Installed";
+                g_inst.note = update ? L"Updated" : L"Installed";
             } else {
-                g_relaunch = InstExe();  // continues from the installed copy, with the panel open
-                g_relaunchArgs = L"--panel";
+                // continues from the installed copy; the panel stays open only the first time, to set the options
+                g_relaunch = InstExe();
+                g_relaunchArgs = update ? L"" : L"--panel";
                 BgQuit();
             }
             break;
+        }
         case InstK::Path: InstSetPath(!InstInPath()); break;
         case InstK::Default: InstSetDefault(!InstIsDefault()); break;
         case InstK::Startup: InstSetStartup(!InstStartsWithWindows()); break;
