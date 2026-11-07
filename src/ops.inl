@@ -39,8 +39,9 @@ bool SetClipboardText(const std::wstring& s) {
 }
 
 // Ctrl+Shift+C: the path of the selection (one per line), or of the folder if nothing is selected.
-// Quotes are added only when needed.
-void CopyPathText() {
+// Quotes are added only when needed. Name: just the name, with its extension. Unix: forward slashes, no quotes.
+enum class CopyWhat { Path, Name, Unix };
+void CopyPathText(CopyWhat what) {
     Tab& t = T();
     std::vector<std::wstring> paths;
     for (int i = 0; i < Count(); ++i)
@@ -49,12 +50,109 @@ void CopyPathText() {
     if (paths.empty()) return;
     std::wstring text;
     for (size_t i = 0; i < paths.size(); ++i) {
-        const std::wstring& p = paths[i];
-        bool quote = p.find_first_of(L" &()[]{}^=;!'+,`~") != std::wstring::npos;
+        std::wstring p = paths[i];
+        if (what == CopyWhat::Name) p = IsDriveRoot(p) ? p : LeafOf(p);
+        if (what == CopyWhat::Unix) std::replace(p.begin(), p.end(), L'\\', L'/');
+        bool quote = what == CopyWhat::Path && p.find_first_of(L" &()[]{}^=;!'+,`~") != std::wstring::npos;
         text += (i ? L"\r\n" : L"") + (quote ? L"\"" + p + L"\"" : p);
     }
-    if (SetClipboardText(text))
-        S.message = paths.size() == 1 ? L"Path copied: " + paths[0] : Thousands(static_cast<int>(paths.size())) + L" paths copied";
+    if (SetClipboardText(text)) {
+        const wchar_t* one = what == CopyWhat::Name ? L"Name copied: " : L"Path copied: ";
+        const wchar_t* many = what == CopyWhat::Name ? L" names copied" : L" paths copied";
+        S.message = paths.size() == 1 ? one + text : Thousands(static_cast<int>(paths.size())) + many;
+    }
+    Invalidate();
+}
+
+bool SaveBitmapPng(IWICBitmapSource* bmp, const std::wstring& file);  // testmode.inl
+
+// Ctrl+V without files on the clipboard: an image becomes a PNG in the folder, text a .txt (UTF-8),
+// named by the moment, and ready to rename.
+void PasteClipboardAsFile() {
+    Tab& t = T();
+    if (t.path.empty() || !t.list || t.list->error) return;
+    const bool image = IsClipboardFormatAvailable(CF_BITMAP) || IsClipboardFormatAvailable(CF_DIB);
+    const bool text = IsClipboardFormatAvailable(CF_UNICODETEXT);
+    if (!image && !text) return;
+    SYSTEMTIME st;
+    GetLocalTime(&st);
+    wchar_t stamp[64];
+    swprintf(stamp, 64, L"Clipboard %04d-%02d-%02d %02d.%02d.%02d", st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
+    const std::wstring name = FreeName(t.path, stamp, image ? L".png" : L".txt");
+    const std::wstring full = Join(t.path, name.c_str());
+    bool ok = false;
+    if (!OpenClipboard(g_hwnd)) return;
+    if (image) {
+        // Preferred: the "PNG" format many apps add (keeps transparency, written as is). Then the DIB,
+        // decoded by WIC as a BMP file. CF_BITMAP last: with OLE clipboards it is often announced but not delivered.
+        auto bytes = [&](UINT fmt, const BYTE*& data, size_t& size) {
+            HGLOBAL h = GetClipboardData(fmt);
+            data = h ? static_cast<const BYTE*>(GlobalLock(h)) : nullptr;
+            size = data ? GlobalSize(h) : 0;
+            return h;
+        };
+        const BYTE* data = nullptr;
+        size_t size = 0;
+        if (HGLOBAL h = bytes(RegisterClipboardFormatW(L"PNG"), data, size); h && size > 8 && memcmp(data, "PNG", 4) == 0) {
+            HANDLE f = CreateFileW(ToExtendedPath(full).c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+            if (f != INVALID_HANDLE_VALUE) {
+                DWORD n = 0;
+                ok = WriteFile(f, data, static_cast<DWORD>(size), &n, nullptr) && n == size;
+                CloseHandle(f);
+                if (!ok) DeleteFileW(ToExtendedPath(full).c_str());
+            }
+            GlobalUnlock(h);
+        } else if (HGLOBAL h2 = bytes(CF_DIB, data, size); h2 && size > sizeof(BITMAPINFOHEADER)) {
+            const auto* bi = reinterpret_cast<const BITMAPINFOHEADER*>(data);
+            DWORD colors = bi->biClrUsed ? bi->biClrUsed : bi->biBitCount <= 8 ? 1u << bi->biBitCount : 0;
+            DWORD masks = bi->biCompression == BI_BITFIELDS && bi->biSize == sizeof(BITMAPINFOHEADER) ? 12 : 0;
+            std::vector<BYTE> bmp(sizeof(BITMAPFILEHEADER) + size);
+            auto* fh = reinterpret_cast<BITMAPFILEHEADER*>(bmp.data());
+            fh->bfType = 0x4D42;
+            fh->bfSize = static_cast<DWORD>(bmp.size());
+            fh->bfOffBits = static_cast<DWORD>(sizeof(BITMAPFILEHEADER) + bi->biSize + masks + colors * 4);
+            memcpy(bmp.data() + sizeof(BITMAPFILEHEADER), data, size);
+            GlobalUnlock(h2);
+            ComPtr<IWICStream> ws;
+            ComPtr<IWICBitmapDecoder> dec;
+            ComPtr<IWICBitmapFrameDecode> fr;
+            if (SUCCEEDED(g_wic->CreateStream(&ws)) && SUCCEEDED(ws->InitializeFromMemory(bmp.data(), static_cast<DWORD>(bmp.size()))) &&
+                SUCCEEDED(g_wic->CreateDecoderFromStream(ws.Get(), nullptr, WICDecodeMetadataCacheOnDemand, &dec)) && SUCCEEDED(dec->GetFrame(0, &fr)))
+                ok = SaveBitmapPng(fr.Get(), ToExtendedPath(full));
+        } else if (HBITMAP hbm = static_cast<HBITMAP>(GetClipboardData(CF_BITMAP))) {
+            ComPtr<IWICBitmap> wb;
+            if (SUCCEEDED(g_wic->CreateBitmapFromHBITMAP(hbm, nullptr, WICBitmapIgnoreAlpha, &wb))) ok = SaveBitmapPng(wb.Get(), ToExtendedPath(full));
+        }
+    } else if (HGLOBAL h = GetClipboardData(CF_UNICODETEXT)) {
+        if (const wchar_t* w = static_cast<const wchar_t*>(GlobalLock(h))) {
+            std::string utf8(WideCharToMultiByte(CP_UTF8, 0, w, -1, nullptr, 0, nullptr, nullptr), '\0');
+            if (!utf8.empty()) utf8.resize(WideCharToMultiByte(CP_UTF8, 0, w, -1, utf8.data(), static_cast<int>(utf8.size()), nullptr, nullptr));
+            while (!utf8.empty() && utf8.back() == '\0') utf8.pop_back();  // the terminator
+            HANDLE f = CreateFileW(ToExtendedPath(full).c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+            if (f != INVALID_HANDLE_VALUE) {
+                DWORD n = 0;
+                ok = WriteFile(f, utf8.data(), static_cast<DWORD>(utf8.size()), &n, nullptr) && n == utf8.size();
+                CloseHandle(f);
+                if (!ok) DeleteFileW(ToExtendedPath(full).c_str());
+            }
+            GlobalUnlock(h);
+        }
+    }
+    CloseClipboard();
+    if (!ok) {
+        S.message = image ? L"Couldn't save the clipboard image" : L"Couldn't save the clipboard text";
+        Invalidate();
+        return;
+    }
+    UndoRecordCreate(full);
+    if (!t.filter.empty()) {
+        t.filter.clear();
+        BuildRows(t);
+    }
+    t.pendingSelect = name;
+    g_renameAfterSelect = name;
+    S.message = (image ? L"Image pasted as " : L"Text pasted as ") + name;
+    Enqueue(t.path, JobKind::Revalidate);
     Invalidate();
 }
 
@@ -106,6 +204,53 @@ void Properties() {
         return;
     }
     ShellVerb(names, "properties");
+}
+
+// Ctrl+Shift+G: moves the selection into a new folder next to it and starts renaming the folder.
+// One item: the folder takes its name (without the extension). Several: "New folder".
+void GroupInFolder() {
+    Tab& t = T();
+    std::vector<std::wstring> files = SelectedFullPaths(t);
+    if (files.empty()) return;
+    const std::wstring dir = ParentOf(files[0]);
+    for (const std::wstring& f : files)
+        if (Key(ParentOf(f)) != Key(dir)) {
+            S.message = L"Select items from a single folder to group them";
+            Invalidate();
+            return;
+        }
+    std::wstring base = L"New folder";
+    if (files.size() == 1) {
+        base = LeafOf(files[0]);
+        DWORD a = GetFileAttributesW(ToExtendedPath(files[0]).c_str());
+        size_t dot = base.find_last_of(L'.');
+        if (a != INVALID_FILE_ATTRIBUTES && !(a & FILE_ATTRIBUTE_DIRECTORY) && dot != std::wstring::npos && dot > 0) base.resize(dot);
+        while (!base.empty() && (base.back() == L' ' || base.back() == L'.')) base.pop_back();
+        if (base.empty()) base = L"New folder";
+    }
+    const std::wstring name = FreeName(dir, base, L""), folder = Join(dir, name.c_str());
+    if (!CreateDirectoryW(ToExtendedPath(folder).c_str(), nullptr)) {
+        S.message = L"Couldn't create the folder: " + ErrorText(GetLastError());
+        Invalidate();
+        return;
+    }
+    UndoRecordCreate(folder);
+    if (!FileOp(FileOpKind::Move, files, folder)) {
+        RemoveDirectoryW(ToExtendedPath(folder).c_str());  // nothing moved: leave no empty folder behind
+        Enqueue(dir, JobKind::Revalidate);
+        return;
+    }
+    if (Key(dir) == Key(t.path)) {
+        if (!t.filter.empty()) {
+            t.filter.clear();
+            BuildRows(t);
+        }
+        t.pendingSelect = name;
+        g_renameAfterSelect = name;
+    }
+    S.message = Thousands(static_cast<int>(files.size())) + (files.size() == 1 ? L" item moved into " : L" items moved into ") + name;
+    Enqueue(dir, JobKind::Revalidate);
+    Invalidate();
 }
 
 // F5 / F6 with split view: copy / move the selection to the other pane's folder.

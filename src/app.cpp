@@ -2496,8 +2496,32 @@ void DrawStatus(int pane, float H) {
                     items += static_cast<int>(end - t.list->groups[gi].first);
                 }
         left = Thousands(items) + (items == 1 ? L" item" : L" items");
+        // sizes: the files, plus the folders whose size has been calculated
+        auto bytesOf = [&](bool selectedOnly) {
+            uint64_t sum = 0;
+            for (int i = 0; i < n; ++i) {
+                if (IsHeader(t, i) || (selectedOnly && !IsSel(t, i))) continue;
+                const Entry& e = EntryAt(t, i);
+                if (!e.isDir()) sum += e.size;
+                else if (DirSize ds; g_dsAny && DirSizeOf(Key(RowPath(t, i)), ds)) sum += ds.bytes;
+            }
+            return sum;
+        };
+        wchar_t buf[64];
+        if (!t.recursive && !t.path.empty()) {
+            if (uint64_t total = bytesOf(false)) {
+                FormatSize(total, buf, 64);
+                left += L"  ·  " + std::wstring(buf);
+            }
+        }
         int s = SelCount(t);
-        if (s > 1) left += L"   ·   " + Thousands(s) + L" selected";
+        if (s > 1) {
+            left += L"   ·   " + Thousands(s) + L" selected";
+            if (uint64_t sel = bytesOf(true)) {
+                FormatSize(sel, buf, 64);
+                left += L"  ·  " + std::wstring(buf);
+            }
+        }
     }
     float lx = g.TL + kPad + 2;
     if (!t.filter.empty() || t.recursive) {
@@ -3183,7 +3207,8 @@ void RunCommand(Cmd cmd) {
             break;
         }
         case Cmd::Paste:
-            if (ClipboardPaste(t.path) && !g_cutKeys.empty()) {
+            if (!IsClipboardFormatAvailable(CF_HDROP)) PasteClipboardAsFile();
+            else if (ClipboardPaste(t.path) && !g_cutKeys.empty()) {
                 g_cutKeys.clear();
                 Invalidate();
             }
@@ -3231,8 +3256,11 @@ void RunCommand(Cmd cmd) {
         case Cmd::OtherPane: ActivatePane(1 - g_act); break;
         case Cmd::CopyToOther: TransferToOther(false); break;
         case Cmd::MoveToOther: TransferToOther(true); break;
-        case Cmd::CopyPath: CopyPathText(); break;
+        case Cmd::CopyPath: CopyPathText(CopyWhat::Path); break;
+        case Cmd::CopyName: CopyPathText(CopyWhat::Name); break;
+        case Cmd::CopyPathUnix: CopyPathText(CopyWhat::Unix); break;
         case Cmd::Duplicate: Duplicate(); break;
+        case Cmd::GroupInFolder: GroupInFolder(); break;
         case Cmd::Install: InstPanelOpen(); break;
         case Cmd::Quit: BgQuit(); break;
         case Cmd::Undo: UndoStep(true); break;
@@ -4212,9 +4240,9 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case WM_COPYDATA: {
             const auto* cd = reinterpret_cast<const COPYDATASTRUCT*>(lp);
             if (cd->dwData == 2) BgToggle(true);
-            if (cd->dwData == 1 && cd->cbData >= sizeof(wchar_t)) {
+            if ((cd->dwData == 1 || cd->dwData == 3) && cd->cbData >= sizeof(wchar_t)) {
                 const std::wstring p(static_cast<const wchar_t*>(cd->lpData), cd->cbData / sizeof(wchar_t) - 1);
-                if (!p.empty()) BgOpenPath(p);
+                if (!p.empty()) cd->dwData == 3 ? BgRevealPath(p) : BgOpenPath(p);
                 BgShow();
             }
             return TRUE;
@@ -4244,7 +4272,11 @@ std::wstring ArgPath() {
     std::wstring p;
     for (int i = 1; argv && i < argc && p.empty(); ++i) {
         std::wstring a = argv[i];
-        if (a.rfind(L"--", 0) == 0 || a.rfind(L"::", 0) == 0) continue;  // "::{...}": virtual shell folder, no path
+        if (a == L"--select") {  // its value is the item to reveal, not a folder to open
+            ++i;
+            continue;
+        }
+        if (a.rfind(L"--", 0) == 0 || a.rfind(L"::", 0) == 0 || a.rfind(L"/select,", 0) == 0) continue;  // "::{...}": virtual shell folder, no path
         while (!a.empty() && a.back() == L'"') a.pop_back();
         if (a.size() == 2 && a[1] == L':') a += L'\\';
         wchar_t full[4096];
@@ -4252,6 +4284,26 @@ std::wstring ArgPath() {
     }
     if (argv) LocalFree(argv);
     return p;
+}
+
+// "--select <item>" or File Explorer's "/select,<item>": the item (file or folder) to leave highlighted
+// in the folder that holds it. Empty if not given.
+std::wstring SelectArg() {
+    if (g_test) return L"";
+    int argc = 0;
+    wchar_t** argv = CommandLineToArgvW(GetCommandLineW(), &argc);
+    std::wstring item;
+    for (int i = 1; argv && i < argc && item.empty(); ++i) {
+        std::wstring a = argv[i];
+        if (a == L"--select" && i + 1 < argc) a = argv[i + 1];
+        else if (a.rfind(L"/select,", 0) == 0) a = a.substr(8);
+        else continue;
+        while (!a.empty() && a.back() == L'"') a.pop_back();
+        wchar_t full[4096];
+        if (!a.empty() && GetFullPathNameW(a.c_str(), 4096, full, nullptr)) item = Normalize(full);
+    }
+    if (argv) LocalFree(argv);
+    return item;
 }
 
 bool HasArg(const wchar_t* flag) {
@@ -4318,7 +4370,10 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdLine, int show) {
         }
     }
     const bool hidden = !g_test && (HasArg(L"--hidden") || HasArg(L"--oculto"));
-    if (!g_test && BgHandOff(hidden ? L"" : ArgPath(), HasArg(L"--toggle") || HasArg(L"--alternar"))) return 0;
+    const std::wstring selectItem = SelectArg();
+    if (!g_test && BgHandOff(hidden ? L"" : selectItem.empty() ? ArgPath() : selectItem, HasArg(L"--toggle") || HasArg(L"--alternar"),
+                             !hidden && !selectItem.empty()))
+        return 0;
     BootMark(L"start");
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     SetErrorMode(SEM_FAILCRITICALERRORS);  // no "insert a disk" dialogs
@@ -4433,7 +4488,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdLine, int show) {
             return newIdx[old];
         return NeighborInPane(pane, 0);
     };
-    std::wstring arg = ArgPath();
+    std::wstring arg = selectItem.empty() ? ArgPath() : RevealFolderOf(selectItem);
     if (g_tabs.empty()) {
         g_split = false;
         NewTab(arg.empty() ? DefaultPath() : arg);

@@ -23,7 +23,8 @@ void InstPanelClose();
 
 // If a Jolt already exists, passes it the folder and returns true. The starting process may come to the front; it hands that over.
 // With toggle ("--toggle", what Win+E runs) it does the same as the global shortcut: show or hide.
-bool BgHandOff(const std::wstring& path, bool toggle) {
+// With select ("--select"), path is an item to leave highlighted in the folder that holds it.
+bool BgHandOff(const std::wstring& path, bool toggle, bool select) {
     g_instance = CreateMutexW(nullptr, FALSE, L"Local\\JoltInstancia");
     if (GetLastError() != ERROR_ALREADY_EXISTS) return false;
     HWND w = nullptr;
@@ -35,7 +36,8 @@ bool BgHandOff(const std::wstring& path, bool toggle) {
     DWORD pid = 0;
     GetWindowThreadProcessId(w, &pid);
     AllowSetForegroundWindow(pid);
-    COPYDATASTRUCT cd{static_cast<ULONG_PTR>(toggle ? 2 : 1), static_cast<DWORD>((path.size() + 1) * sizeof(wchar_t)), const_cast<wchar_t*>(path.c_str())};
+    COPYDATASTRUCT cd{static_cast<ULONG_PTR>(toggle ? 2 : select ? 3 : 1), static_cast<DWORD>((path.size() + 1) * sizeof(wchar_t)),
+                      const_cast<wchar_t*>(path.c_str())};
     SendMessageTimeoutW(w, WM_COPYDATA, 0, reinterpret_cast<LPARAM>(&cd), SMTO_ABORTIFHUNG, 3000, nullptr);
     return true;
 }
@@ -104,6 +106,38 @@ void BgOpenPath(const std::wstring& raw) {
             return;
         }
     NewTab(path);
+}
+
+// The folder to open so that item ends up highlighted in it ("--select"): its parent, remembered as the
+// place to put the cursor. For a drive root or something that isn't there, the item itself.
+std::wstring RevealFolderOf(const std::wstring& raw) {
+    const std::wstring item = Normalize(raw), folder = ParentOf(item);
+    if (folder.empty() || !FolderExists(folder)) return item;
+    g_lastSel[Key(folder)] = LeafOf(item);
+    return folder;
+}
+
+// "--select" with Jolt already running: shows the item's folder (the tab that has it, or a new one)
+// with the item highlighted, even if it was just created.
+void BgRevealPath(const std::wstring& raw) {
+    const std::wstring item = Normalize(raw), folder = RevealFolderOf(item);
+    if (folder == item) {
+        BgOpenPath(item);
+        return;
+    }
+    for (int i : ActiveTabs())
+        if (Key(Normalize(g_tabs[i]->path)) == Key(folder)) {
+            SelectTab(i);
+            Tab& t = *g_tabs[i];
+            StopRecursive(t, false);
+            t.filter.clear();
+            t.pendingSelect = LeafOf(item);
+            if (t.list) Rebuild(t, nullptr, t.pendingSelect);
+            Enqueue(folder, JobKind::Revalidate);  // it may be new
+            Invalidate();
+            return;
+        }
+    NewTab(folder);
 }
 
 // The folder of the File Explorer window in front (of its active tab). Empty if it is not a real folder.

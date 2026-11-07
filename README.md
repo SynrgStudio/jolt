@@ -83,8 +83,9 @@ kept in `%APPDATA%\Jolt`.
 
 Closing the window hides it and Jolt stays open: it comes back instantly with the global hotkey, the tray icon or by
 opening `jolt.exe folder`, which uses the running instance. ☰ → Quit and `jolt.exe --quit` really close it.
-`jolt.exe --hidden` starts without showing the window. Options in `config.txt`: `run_in_background`, `global_hotkey`,
-`tray_icon`, `open_drives`.
+`jolt.exe --hidden` starts without showing the window. `jolt.exe --select "C:\path\file.txt"` opens the folder
+with that item highlighted, which is what other apps' "Reveal in File Explorer" needs (Explorer's `/select,` form
+works too). Options in `config.txt`: `run_in_background`, `global_hotkey`, `tray_icon`, `open_drives`.
 
 ---
 
@@ -127,9 +128,12 @@ opening `jolt.exe folder`, which uses the running instance. ☰ → Quit and `jo
 | F2 | rename (the name without the extension is selected); **Tab / Shift+Tab** saves and moves to the next / previous one |
 | Ctrl+N / Ctrl+Shift+N | new file / new folder, ready to rename |
 | Ctrl+Shift+D | duplicate ("name - Copy.ext") |
+| Ctrl+Shift+G | **group in a new folder**: moves the selection into a new folder next to it (named after the item if there is one) and starts renaming it. Ctrl+Z undoes it in two steps |
 | Ctrl+Shift+C | copy the path of the selection (or of the folder), with quotes only if needed |
+| Ctrl+Alt+C | copy the name of the selection (or of the folder). Ctrl+K → "copy the path with forward slashes" gives `C:/Users/...` |
 | Alt+Enter | Windows properties |
 | Ctrl+C / Ctrl+X / Ctrl+V | copy, cut and paste, compatible with File Explorer (Windows progress, conflicts and undo) |
+| Ctrl+V with an image or text on the clipboard | saves it in the folder as a PNG or a UTF-8 .txt named by the moment, ready to rename |
 | Del / Shift+Del | to the Recycle Bin / delete permanently |
 | Ctrl+Z / Ctrl+Y or Ctrl+Shift+Z | **undo / redo** what was done from Jolt in this session (up to 100 steps): rename, move, copy, duplicate, create and send to the Recycle Bin. It never overwrites anything or touches what changed afterwards, and what it removes goes to the Recycle Bin. It doesn't cover what replaced or merged with something that already existed, or permanent deletion |
 | drag and drop | between Jolt's folders, panes, tabs, favorites and drives, and from/to other apps; same rules as File Explorer (Ctrl copies, Shift moves) |
@@ -164,6 +168,7 @@ opening `jolt.exe folder`, which uses the running instance. ☰ → Quit and `jo
 | Ctrl+K → "sort by type", "space between rows", "empty the Recycle Bin" | no default shortcut; the Recycle Bin asks for Windows confirmation |
 | Ctrl+R | reload |
 | F12 | show/hide timings |
+| status bar | item count and total size of the folder; with several items selected, their count and size too (calculated folders count) |
 
 </details>
 
