@@ -64,6 +64,64 @@ void CopyPathText(CopyWhat what) {
     Invalidate();
 }
 
+bool SaveBitmapPng(IWICBitmap* bmp, const std::wstring& file);  // testmode.inl
+
+// Ctrl+V without files on the clipboard: an image becomes a PNG in the folder, text a .txt (UTF-8),
+// named by the moment, and ready to rename.
+void PasteClipboardAsFile() {
+    Tab& t = T();
+    if (t.path.empty() || !t.list || t.list->error) return;
+    const bool image = IsClipboardFormatAvailable(CF_BITMAP) || IsClipboardFormatAvailable(CF_DIB);
+    const bool text = IsClipboardFormatAvailable(CF_UNICODETEXT);
+    if (!image && !text) return;
+    SYSTEMTIME st;
+    GetLocalTime(&st);
+    wchar_t stamp[64];
+    swprintf(stamp, 64, L"Clipboard %04d-%02d-%02d %02d.%02d.%02d", st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
+    const std::wstring name = FreeName(t.path, stamp, image ? L".png" : L".txt");
+    const std::wstring full = Join(t.path, name.c_str());
+    bool ok = false;
+    if (!OpenClipboard(g_hwnd)) return;
+    if (image) {
+        if (HBITMAP hbm = static_cast<HBITMAP>(GetClipboardData(CF_BITMAP))) {
+            ComPtr<IWICBitmap> wb;
+            // the alpha channel of a clipboard bitmap is rarely meaningful: a screenshot would come out blank
+            if (SUCCEEDED(g_wic->CreateBitmapFromHBITMAP(hbm, nullptr, WICBitmapIgnoreAlpha, &wb)))
+                ok = SaveBitmapPng(wb.Get(), ToExtendedPath(full));
+        }
+    } else if (HGLOBAL h = GetClipboardData(CF_UNICODETEXT)) {
+        if (const wchar_t* w = static_cast<const wchar_t*>(GlobalLock(h))) {
+            std::string utf8(WideCharToMultiByte(CP_UTF8, 0, w, -1, nullptr, 0, nullptr, nullptr), '\0');
+            if (!utf8.empty()) utf8.resize(WideCharToMultiByte(CP_UTF8, 0, w, -1, utf8.data(), static_cast<int>(utf8.size()), nullptr, nullptr));
+            while (!utf8.empty() && utf8.back() == '\0') utf8.pop_back();  // the terminator
+            HANDLE f = CreateFileW(ToExtendedPath(full).c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+            if (f != INVALID_HANDLE_VALUE) {
+                DWORD n = 0;
+                ok = WriteFile(f, utf8.data(), static_cast<DWORD>(utf8.size()), &n, nullptr) && n == utf8.size();
+                CloseHandle(f);
+                if (!ok) DeleteFileW(ToExtendedPath(full).c_str());
+            }
+            GlobalUnlock(h);
+        }
+    }
+    CloseClipboard();
+    if (!ok) {
+        S.message = image ? L"Couldn't save the clipboard image" : L"Couldn't save the clipboard text";
+        Invalidate();
+        return;
+    }
+    UndoRecordCreate(full);
+    if (!t.filter.empty()) {
+        t.filter.clear();
+        BuildRows(t);
+    }
+    t.pendingSelect = name;
+    g_renameAfterSelect = name;
+    S.message = (image ? L"Image pasted as " : L"Text pasted as ") + name;
+    Enqueue(t.path, JobKind::Revalidate);
+    Invalidate();
+}
+
 // Duplicates the selection in its own folder: "name - Copy.ext", "name - Copy (2).ext"...
 void Duplicate() {
     Tab& t = T();

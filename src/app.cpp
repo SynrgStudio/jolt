@@ -3183,7 +3183,8 @@ void RunCommand(Cmd cmd) {
             break;
         }
         case Cmd::Paste:
-            if (ClipboardPaste(t.path) && !g_cutKeys.empty()) {
+            if (!IsClipboardFormatAvailable(CF_HDROP)) PasteClipboardAsFile();
+            else if (ClipboardPaste(t.path) && !g_cutKeys.empty()) {
                 g_cutKeys.clear();
                 Invalidate();
             }

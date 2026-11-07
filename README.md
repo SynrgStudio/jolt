@@ -133,6 +133,7 @@ works too). Options in `config.txt`: `run_in_background`, `global_hotkey`, `tray
 | Ctrl+Alt+C | copy the name of the selection (or of the folder). Ctrl+K → "copy the path with forward slashes" gives `C:/Users/...` |
 | Alt+Enter | Windows properties |
 | Ctrl+C / Ctrl+X / Ctrl+V | copy, cut and paste, compatible with File Explorer (Windows progress, conflicts and undo) |
+| Ctrl+V with an image or text on the clipboard | saves it in the folder as a PNG or a UTF-8 .txt named by the moment, ready to rename |
 | Del / Shift+Del | to the Recycle Bin / delete permanently |
 | Ctrl+Z / Ctrl+Y or Ctrl+Shift+Z | **undo / redo** what was done from Jolt in this session (up to 100 steps): rename, move, copy, duplicate, create and send to the Recycle Bin. It never overwrites anything or touches what changed afterwards, and what it removes goes to the Recycle Bin. It doesn't cover what replaced or merged with something that already existed, or permanent deletion |
 | drag and drop | between Jolt's folders, panes, tabs, favorites and drives, and from/to other apps; same rules as File Explorer (Ctrl copies, Shift moves) |
