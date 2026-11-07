@@ -10,7 +10,7 @@ enum class Cmd {
     Terminal, OpenExplorer, RealLocation, CollapseGroups, ExpandGroups, GroupByDay, GroupByType, NoGroups,
     SortByType, ZoomIn, ZoomOut, ZoomReset, RowsTaller, RowsShorter, EmptyRecycleBin,
     Undo, Redo,
-    Install, Quit, RenameMany,
+    Install, Quit, RenameMany, PreviewWrap,
     CustomFirst = 1000  // + index into g_cfg.custom: the user's own commands
 };
 inline bool IsCustom(Cmd c) { return static_cast<int>(c) >= static_cast<int>(Cmd::CustomFirst); }
@@ -29,6 +29,7 @@ struct Config {
     std::wstring font = L"Segoe UI";
     float fontSize = 12;
     bool showHidden = true;
+    bool previewWrap = true;  // long lines wrap in the text preview
     bool background = true, tray = true, openDrives = false;
     int hotCount = 10;  // folders in Recents (0: no section)
     std::wstring globalKey = L"Win+J";
@@ -79,6 +80,7 @@ const CmdDef kCommands[] = {
     {L"collapse", Cmd::Collapse, L"Shift+Left", L"collapse the folder (or go to the one above in the tree)"},
     {L"go_to_location", Cmd::GoToLocation, L"Ctrl+Shift+E", L"open the folder containing the highlighted item"},
     {L"preview", Cmd::Preview, L"Space", L"show or hide the preview"},
+    {L"preview_wrap", Cmd::PreviewWrap, L"", L"wrap long lines in the text preview (toggle)"},
     {L"split", Cmd::Split, L"Ctrl+S", L"split view with two panes"},
     {L"other_pane", Cmd::OtherPane, L"Tab", L"switch to the other pane"},
     {L"copy_to_other", Cmd::CopyToOther, L"F5", L"copy the selection to the other pane"},
@@ -252,6 +254,8 @@ void WriteDefaultConfig() {
         "recents = 10\n"
         "# Preview width (Space).\n"
         "preview_width = 360\n"
+        "# Wrap long lines in the text preview: yes / no\n"
+        "preview_wrap = yes\n"
         "# Show hidden and system files (dimmed): yes / no\n"
         "show_hidden = yes\n"
         "# Folders above files: yes / no / name (only when sorting by name; by date and size they are mixed)\n"
@@ -361,6 +365,7 @@ void LoadConfig() {
             else if (key == L"sidebar_width") kSideW = std::clamp(static_cast<float>(_wtof(val.c_str())), 120.f, 500.f);
             else if (key == L"recents") g_cfg.hotCount = std::clamp(_wtoi(val.c_str()), 0, kHotCountMax);
             else if (key == L"show_hidden") g_cfg.showHidden = ParseBool(val);
+            else if (key == L"preview_wrap") g_cfg.previewWrap = ParseBool(val);
             else if (key == L"run_in_background") g_cfg.background = ParseBool(val);
             else if (key == L"global_hotkey") g_cfg.globalKey = val;
             else if (key == L"tray_icon") g_cfg.tray = ParseBool(val);

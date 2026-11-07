@@ -124,7 +124,7 @@ works too). Options in `config.txt`: `run_in_background`, `global_hotkey`, `tray
 | Ctrl+Shift+F | **search subfolders**: the filter searches the whole folder and its subfolders (you can see where each result is); Esc goes back |
 | Ctrl+Shift+E | open the folder containing the highlighted item (useful in search and in the tree) |
 | chevron ›, Shift+→ / Shift+← | **tree**: expand / collapse subfolders inside the list. Remembered per folder |
-| Space | **preview** on the right: images (with EXIF orientation), text and code, folder contents, and Shell thumbnails (PDF, videos, Office…). Wheel: scroll. Drag its left edge to change the width; double click to reset it |
+| Space | **preview** on the right: images (with EXIF orientation), text and code **with syntax highlighting** (C-family, JS/TS, C#, Java, Go, Rust, Python, shell, PowerShell, batch, Lua, Ruby, SQL, CSS, HTML/XML, JSON, YAML, INI/TOML, Markdown, diffs, Dockerfile, Makefile), line numbers and wrapped long lines (`preview_wrap`, or Ctrl+K → "wrap long lines"), folder contents, and Shell thumbnails (PDF, videos, Office…). Wheel: scroll. Drag its left edge to change the width; double click to reset it |
 | Ctrl+S | **split view**: two panes, each with its own tabs. Tab switches pane; the divider can be dragged (double click: half and half) |
 | F5 / F6 | in split view: copy / move the selection to the other pane's folder |
 | Alt+R | **folder sizes**: calculates every folder in the list (or the selected ones); all their subfolders end up calculated too, and they are remembered between sessions (`%LOCALAPPDATA%\Jolt\sizes.bin`). Sorting by size takes them into account |

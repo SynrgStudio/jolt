@@ -26,6 +26,7 @@ struct PreviewState {
     std::unique_ptr<PreviewResult> res;
     ComPtr<ID2D1Bitmap> d2d;
     std::vector<std::pair<size_t, size_t>> lines;  // (start, length) in res->text
+    std::vector<Span> spans;                       // syntax highlighting, sorted by start
     float scroll = 0;
     bool loading = false;
     bool isDir = false;  // the shown item is a folder
@@ -315,7 +316,11 @@ void PreviewApply(PreviewResult* raw) {
     g_pv.loading = false;
     g_pv.d2d.Reset();
     g_pv.lines.clear();
+    g_pv.spans.clear();
     if (r->kind == 2) {
+        // tabs become four spaces: the mono layout and the wrap arithmetic then agree
+        for (size_t p = r->text.find(L'\t'); p != std::wstring::npos; p = r->text.find(L'\t', p + 4)) r->text.replace(p, 1, L"    ");
+        if (const Lang* l = LangFor(r->path)) g_pv.spans = Highlight(r->text, *l);
         size_t start = 0;
         const std::wstring& s = r->text;
         while (start <= s.size() && g_pv.lines.size() < 20000) {
@@ -472,22 +477,63 @@ void DrawPreview(float W, float H) {
         const int nl = static_cast<int>(g_pv.lines.size());
         const int digits = static_cast<int>(std::to_wstring(std::max(1, nl)).size());
         const float gutter = digits * 7.5f + 10;
-        float maxScroll = std::max(0.f, nl * lh - (bot - top));
-        g_pv.scroll = std::min(g_pv.scroll, maxScroll);
+        // wrapping: the mono font makes a line's rows len / columns, so the scroll stays in pixels
+        static float charW = 0;
+        static IDWriteTextFormat* charWFor = nullptr;
+        if (charWFor != g_fmtMono.Get()) {
+            charW = std::max(1.f, MeasureW(L"MMMMMMMMMM", g_fmtMono.Get()) / 10);
+            charWFor = g_fmtMono.Get();
+        }
+        const bool wrap = g_cfg.previewWrap;
+        const int cols = std::max(8, static_cast<int>((R - 6 - L - gutter) / charW));
+        const float layW = wrap ? cols * charW + 0.5f : 20000.f;
+        auto rowsOf = [&](int i) { return wrap ? std::max(1, (static_cast<int>(std::min<size_t>(g_pv.lines[i].second, 4000)) + cols - 1) / cols) : 1; };
+        float total = 0;
+        for (int i = 0; i < nl; ++i) total += rowsOf(i) * lh;
+        g_pv.scroll = std::min(g_pv.scroll, std::max(0.f, total - (bot - top)));
         if (s.empty()) {
             Color(cFaint);
             Text(L"Empty file", g_fmtCenter.Get(), L, top, R, top + 60);
         }
-        for (int i = std::max(0, static_cast<int>(g_pv.scroll / lh)); i < nl; ++i) {
-            float y = top + i * lh - g_pv.scroll;
+        // one brush per token class, for this render target
+        static ComPtr<ID2D1SolidColorBrush> tokBrush[11];
+        static ID2D1RenderTarget* tokRt = nullptr;
+        if (tokRt != g_rt.Get()) {
+            for (auto& b : tokBrush) b.Reset();
+            tokRt = g_rt.Get();
+        }
+        auto brushFor = [&](Tok t) -> ID2D1SolidColorBrush* {
+            auto& b = tokBrush[static_cast<int>(t)];
+            if (!b) g_rt->CreateSolidColorBrush(D2D1::ColorF(TokColor(t)), &b);
+            return b.Get();
+        };
+        float y = top - g_pv.scroll;
+        int i = 0;
+        for (; i < nl && y + rowsOf(i) * lh <= top; ++i) y += rowsOf(i) * lh;  // skip what is above
+        for (; i < nl; ++i) {
+            const float rows = static_cast<float>(rowsOf(i));
             if (y > bot) break;
             wchar_t num[16];
             swprintf(num, 16, L"%d", i + 1);
             Color(cFaint);
             Text(num, wcslen(num), g_fmtMonoR.Get(), L, y, L + gutter - 10, y + lh);
-            Color(0xD4D4DA);
             auto [off, len] = g_pv.lines[i];
-            Text(s.c_str() + off, std::min<size_t>(len, 400), g_fmtMono.Get(), L + gutter, y, R + 2000, y + lh);
+            len = std::min<size_t>(len, 4000);
+            ComPtr<IDWriteTextLayout> lay;
+            if (len && SUCCEEDED(g_dw->CreateTextLayout(s.c_str() + off, static_cast<UINT32>(len), wrap ? g_fmtMonoWrap.Get() : g_fmtMono.Get(), layW, rows * lh, &lay))) {
+                // the spans touching this line (they are sorted by start; one may begin before it)
+                auto it = std::lower_bound(g_pv.spans.begin(), g_pv.spans.end(), off, [](const Span& sp, size_t o) { return sp.start + sp.len <= o; });
+                for (; it != g_pv.spans.end() && it->start < off + len; ++it) {
+                    const size_t a = std::max<size_t>(it->start, off), b = std::min<size_t>(it->start + it->len, off + len);
+                    if (b <= a) continue;
+                    const DWRITE_TEXT_RANGE range{static_cast<UINT32>(a - off), static_cast<UINT32>(b - a)};
+                    lay->SetDrawingEffect(brushFor(it->cls), range);
+                    if (it->cls == Tok::Heading) lay->SetFontWeight(DWRITE_FONT_WEIGHT_BOLD, range);
+                }
+                Color(0xD4D4DA);
+                g_rt->DrawTextLayout(D2D1::Point2F(L + gutter, y), lay.Get(), g_brush.Get(), D2D1_DRAW_TEXT_OPTIONS_CLIP);
+            }
+            y += rows * lh;
         }
     } else if (g_pv.loading) {
         // no flicker: "loading" isn't shown (it almost always takes less than a frame)
