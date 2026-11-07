@@ -20,6 +20,7 @@
 // Drag and drop (as if it came from another app, or from Jolt's selection):
 //   drag_over 300 140 copy C:\a.txt | C:\b.txt     drag_over 300 140 move selection
 //   exists C:\a.txt (logs whether it is there)      touch C:\a.txt (appends a byte, or creates it)      message (logs the bottom notice)
+//   rows (logs the names the list shows, in order)     selection (logs the selected names and the cursor)
 //   drop / cancel_drag             drag_out C:\target copy   (the selection dropped on another folder)
 // Activation:  activate no / activate yes   (the window loses or regains focus)
 // Mouse in parts:  press x y / drag x y / release x y   (move with the button held)
@@ -586,6 +587,10 @@ void TestRunStep() {
             const size_t bar2 = s.arg.find(L'|', bar + 1);
             const std::wstring sub = Trim(s.arg.substr(0, bar)), name = Trim(s.arg.substr(bar + 1, bar2 - bar - 1)), val = Trim(s.arg.substr(bar2 + 1));
             RegWrite(sub, name.empty() ? nullptr : name.c_str(), val);
+        } else if (s.cmd == L"rows") {  // what the list shows, in order
+            std::wstring names;
+            for (int i = 0; i < RowCount(T()) && i < 40; ++i) names += L" " + (IsHeader(T(), i) ? L"[" + RowName(T(), i) + L"]" : RowName(T(), i));
+            TestLog(L"rows: " + std::to_wstring(RowCount(T())) + names);
         } else if (s.cmd == L"selection") {
             std::wstring names;
             for (const auto& n : SelectedNames(T())) names += L" " + n;
