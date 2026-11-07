@@ -92,7 +92,7 @@ opening `jolt.exe folder`, which uses the running instance. ☰ → Quit and `jo
 
 | Key | Action |
 |---|---|
-| type letters | fuzzy filter |
+| type letters | fuzzy filter, with terms like `.png`, `>10mb`, `newer:7d`, `!tmp` |
 | Ctrl+P | go to anything on your drives |
 | Ctrl+K | command palette |
 | Space | preview |
@@ -116,6 +116,7 @@ opening `jolt.exe folder`, which uses the running instance. ☰ → Quit and `jo
 | drag from empty space or the free part of a row | **box select**. Shift adds, Ctrl toggles, Esc cancels; near the edge the list scrolls. On the icon, the name or a multiple selection, dragging still moves files |
 | Ctrl+A / Esc | select all / keep only the cursor |
 | type letters | **fuzzy filter** (like fzf, ignoring accents): filters and sorts by match; Backspace edits, Esc clears |
+| filter terms | words are the fuzzy pattern; the rest narrow the list: `.png` `*.png` `ext:png,jpg` (extension), `>10mb` `<500kb` (size; a bare number is MB), `type:folder` `type:file`, `newer:7d` `older:2w` `modified:today` (d h w m y), `!tmp` `!.bak` (exclude by name or extension), `report*.pdf` (wildcards). Example: `invoice .pdf newer:30d` |
 | Ctrl+P | **Go to**: recents, favorites, system places, drives and **everything on your drives** (global index) with fuzzy search; typing a path (`C:\Us…`, `%APPDATA%`, `~`) autocompletes its folders. Ctrl+Enter opens in a new tab |
 | Ctrl+Shift+F | **search subfolders**: the filter searches the whole folder and its subfolders (you can see where each result is); Esc goes back |
 | Ctrl+Shift+E | open the folder containing the highlighted item (useful in search and in the tree) |

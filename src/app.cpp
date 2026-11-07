@@ -588,6 +588,153 @@ void AddTree(const Tab& t, const Listing* l, int depth, std::vector<Row>& out) {
 
 // Builds the visible rows: the tree (or what was found in subfolders) and, with a filter, only what
 // matches, sorted by score like fzf.
+// What the typed filter means. Plain words are the fuzzy pattern; the other terms narrow the list:
+//   .png  *.png  ext:png,jpg        extension (several: any of them)
+//   >10mb  <500kb  >2gb             size (a bare number is MB); folders have no size and are left out
+//   type:folder  type:file          kind
+//   newer:7d  older:2w  modified:today   date (d h w m y; "today" since midnight)
+//   !tmp  !.bak  !*.log             exclude: name contains, extension, pattern
+//   report*.pdf  ?.txt              wildcard pattern on the name
+struct FilterSpec {
+    std::wstring fuzzy;  // lowercase
+    std::vector<std::wstring> exts, notExts, notNames, globs, notGlobs;
+    uint64_t minSize = 0, maxSize = UINT64_MAX;
+    bool sized = false;
+    int64_t newerThan = 0, olderThan = 0;  // FILETIME; 0 = no limit
+    int kind = 0;                          // 1 folders, 2 files
+};
+
+bool ParseFilterSize(const std::wstring& s, uint64_t& out) {
+    wchar_t* end = nullptr;
+    double v = wcstod(s.c_str(), &end);
+    if (end == s.c_str() || v < 0) return false;
+    std::wstring u = Trim(end);
+    double mul = u.empty() || u == L"m" || u == L"mb" ? 1048576.0 : u == L"b" ? 1 : u == L"k" || u == L"kb" ? 1024.0 : u == L"g" || u == L"gb" ? 1073741824.0 : u == L"t" || u == L"tb" ? 1099511627776.0 : 0;
+    if (mul == 0) return false;
+    out = static_cast<uint64_t>(v * mul);
+    return true;
+}
+
+// "7d", "12h", "2w", "3m", "1y" or "today" -> the FILETIME where that period starts.
+bool ParseFilterAge(const std::wstring& s, int64_t& out) {
+    FILETIME now;
+    GetSystemTimeAsFileTime(&now);
+    const int64_t nowT = (static_cast<int64_t>(now.dwHighDateTime) << 32) | now.dwLowDateTime;
+    if (s == L"today") {
+        SYSTEMTIME lt;
+        GetLocalTime(&lt);
+        lt.wHour = lt.wMinute = lt.wSecond = lt.wMilliseconds = 0;
+        FILETIME local, utc;
+        if (!SystemTimeToFileTime(&lt, &local) || !LocalFileTimeToFileTime(&local, &utc)) return false;
+        out = (static_cast<int64_t>(utc.dwHighDateTime) << 32) | utc.dwLowDateTime;
+        return true;
+    }
+    wchar_t* end = nullptr;
+    double v = wcstod(s.c_str(), &end);
+    if (end == s.c_str() || v < 0) return false;
+    std::wstring u = Trim(end);
+    const double day = 864000000000.0;  // 100 ns units
+    double span = u.empty() || u == L"d" ? day : u == L"h" ? day / 24 : u == L"w" ? day * 7 : u == L"m" ? day * 30 : u == L"y" ? day * 365 : 0;
+    if (span == 0) return false;
+    out = nowT - static_cast<int64_t>(v * span);
+    return true;
+}
+
+FilterSpec ParseFilter(const std::wstring& filter) {
+    FilterSpec s;
+    const std::wstring f = Lower(filter);
+    size_t pos = 0;
+    while (pos < f.size()) {
+        size_t sp = f.find(L' ', pos);
+        std::wstring tok = f.substr(pos, sp == std::wstring::npos ? std::wstring::npos : sp - pos);
+        pos = sp == std::wstring::npos ? f.size() : sp + 1;
+        if (tok.empty()) continue;
+        const bool neg = tok[0] == L'!';
+        if (neg) tok.erase(0, 1);
+        if (tok.empty()) continue;
+        auto ext = [&](std::wstring e) {
+            if (e.empty()) return;
+            if (e[0] != L'.') e.insert(0, 1, L'.');
+            (neg ? s.notExts : s.exts).push_back(e);
+        };
+        const bool wild = tok.find_first_of(L"*?") != std::wstring::npos;
+        if (tok.rfind(L"ext:", 0) == 0) {
+            for (const std::wstring& e : SplitList(tok.substr(4))) ext(e);
+        } else if (tok.size() > 1 && tok[0] == L'.' && tok.find(L'.', 1) == std::wstring::npos && !wild) {
+            ext(tok);
+        } else if (tok.size() > 2 && tok.rfind(L"*.", 0) == 0 && tok.find_first_of(L"*?.", 2) == std::wstring::npos) {
+            ext(tok.substr(1));
+        } else if (tok.rfind(L"type:", 0) == 0) {
+            const std::wstring v = tok.substr(5);
+            s.kind = v == L"folder" || v == L"folders" || v == L"dir" || v == L"dirs" ? 1 : v == L"file" || v == L"files" ? 2 : 0;
+        } else if ((tok[0] == L'>' || tok[0] == L'<') && tok.size() > 1) {
+            uint64_t bytes;
+            if (ParseFilterSize(tok.substr(1), bytes)) {
+                (tok[0] == L'>' ? s.minSize : s.maxSize) = bytes;
+                s.sized = true;
+            } else {
+                s.fuzzy += (s.fuzzy.empty() ? L"" : L" ") + tok;
+            }
+        } else if (tok.rfind(L"newer:", 0) == 0 || tok.rfind(L"modified:", 0) == 0 || tok.rfind(L"older:", 0) == 0) {
+            int64_t when;
+            const bool older = tok[0] == L'o';
+            if (ParseFilterAge(tok.substr(tok.find(L':') + 1), when)) (older ? s.olderThan : s.newerThan) = when;
+        } else if (wild) {
+            (neg ? s.notGlobs : s.globs).push_back(tok);
+        } else if (neg) {
+            s.notNames.push_back(tok);
+        } else {
+            s.fuzzy += (s.fuzzy.empty() ? L"" : L" ") + tok;
+        }
+    }
+    return s;
+}
+
+// * and ? over a lowercase name.
+bool GlobMatch(const wchar_t* name, size_t n, const std::wstring& pat) {
+    size_t i = 0, p = 0, star = std::wstring::npos, mark = 0;
+    while (i < n) {
+        if (p < pat.size() && (pat[p] == L'?' || pat[p] == FzLower(name[i]))) {
+            ++i;
+            ++p;
+        } else if (p < pat.size() && pat[p] == L'*') {
+            star = p++;
+            mark = i;
+        } else if (star != std::wstring::npos) {
+            p = star + 1;
+            i = ++mark;
+        } else {
+            return false;
+        }
+    }
+    while (p < pat.size() && pat[p] == L'*') ++p;
+    return p == pat.size();
+}
+
+// Does the entry pass the typed filter? score and pos come from the fuzzy words.
+bool FilterPass(const FilterSpec& s, const Entry& e, const wchar_t* name, size_t n, int& score, std::vector<int>* pos) {
+    if (s.kind == 1 && !e.isDir()) return false;
+    if (s.kind == 2 && e.isDir()) return false;
+    if (s.sized && (e.isDir() || e.size < s.minSize || e.size > s.maxSize)) return false;
+    if (s.newerThan && e.mtime < s.newerThan) return false;
+    if (s.olderThan && e.mtime > s.olderThan) return false;
+    if (!s.exts.empty() || !s.notExts.empty()) {
+        const std::wstring ext = ExtOf(name, n);
+        if (!s.exts.empty() && std::find(s.exts.begin(), s.exts.end(), ext) == s.exts.end()) return false;
+        if (std::find(s.notExts.begin(), s.notExts.end(), ext) != s.notExts.end()) return false;
+    }
+    if (!s.notNames.empty()) {
+        const std::wstring low = Lower(std::wstring(name, n));
+        for (const std::wstring& x : s.notNames)
+            if (low.find(x) != std::wstring::npos) return false;
+    }
+    for (const std::wstring& g : s.globs)
+        if (!GlobMatch(name, n, g)) return false;
+    for (const std::wstring& g : s.notGlobs)
+        if (GlobMatch(name, n, g)) return false;
+    return FuzzyMatch(name, n, s.fuzzy, score, pos);
+}
+
 void BuildRows(Tab& t) {
     t.rows.clear();
     if (!t.list) return;
@@ -604,14 +751,14 @@ void BuildRows(Tab& t) {
         AddTree(t, t.list.get(), 0, t.rows);
     }
     if (t.filter.empty()) return;
-    std::wstring pat = Lower(t.filter);
+    const FilterSpec spec = ParseFilter(t.filter);
     std::vector<std::pair<int, int>> hits;  // (score, row)
     for (size_t i = 0; i < t.rows.size(); ++i) {
         const Row& r = t.rows[i];
         if (r.e < 0) continue;
         const Entry& e = r.l->entries[r.e];
         int sc;
-        if (FuzzyMatch(r.l->name(e), e.nameLen, pat, sc, nullptr)) hits.push_back({sc, static_cast<int>(i)});
+        if (FilterPass(spec, e, r.l->name(e), e.nameLen, sc, nullptr)) hits.push_back({sc, static_cast<int>(i)});
     }
     std::stable_sort(hits.begin(), hits.end(), [](auto& a, auto& b) { return a.first > b.first; });
     std::vector<Row> out;
@@ -2351,7 +2498,7 @@ void DrawList(int pane, float H) {
         const bool multi = SelCount(t) > 1;
         const bool flat = FlatView(t);
         const int hoverHeader = g_hoverHeader;
-        const std::wstring filterPat = Lower(t.filter);
+        const std::wstring filterPat = ParseFilter(t.filter).fuzzy;  // only the words light up in the names
         wchar_t buf[64];
         for (int i = std::max(0, static_cast<int>(t.scroll / kRow)); i < n; ++i) {
             const float y = listTop + i * kRow - t.scroll;
