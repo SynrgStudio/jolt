@@ -292,6 +292,7 @@ C++20, Win32 and Direct2D/DirectWrite, with no external dependencies.
 - Icons: those that depend only on the extension are resolved on the spot without touching the disk; those that depend
   on the file (folders, .exe, shortcuts) are requested from another thread and only for visible rows.
 - Draws only what is visible.
+- Shell thumbnails (for the preview, and the grid view to come) are made on a thread and cached on disk in `%LOCALAPPDATA%\Jolt\thumbs`, so they are instant the second time.
 
 ### Build
 

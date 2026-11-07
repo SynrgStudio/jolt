@@ -261,7 +261,7 @@ open in vs code = Ctrl+Alt+V</code></pre>
 <tr><td><code>views.txt</code></td><td>the <a href="#views">views</a> per folder</td></tr>
 <tr><td><code>menu.txt</code></td><td>the <a href="#menu">context menu</a> order and hidden entries</td></tr>
 <tr><td><code>session.txt</code>, <code>recents.txt</code></td><td>tabs and window, and the recent folders with their heat</td></tr>
-<tr><td><code>%LOCALAPPDATA%\Jolt</code></td><td>the installed program, the drive index and the calculated folder sizes (<code>sizes.bin</code>)</td></tr>
+<tr><td><code>%LOCALAPPDATA%\Jolt</code></td><td>the installed program, the drive index, the calculated folder sizes (<code>sizes.bin</code>) and the thumbnail cache (<code>thumbs\</code>, safe to delete)</td></tr>
 </table>
 <p><code>☰ → Configuration folder</code> opens it. With <code>JOLT_DEBUG=1</code> in the environment, Jolt writes a log to <code>%TEMP%\jolt.log</code>.</p>
 
@@ -302,6 +302,7 @@ properties</code></pre>
   <li>Preloads the highlighted folder (local drives) so Enter doesn't have to read the disk.</li>
   <li>Icons that depend only on the extension are resolved on the spot; those that depend on the file (folders, .exe, shortcuts) come from another thread, for visible rows only.</li>
   <li>Draws only what is visible.</li>
+  <li>Shell thumbnails are made on a thread and cached on disk (<code>%LOCALAPPDATA%\Jolt\thumbs</code>, PNG, by path, size and modified time; entries unused for 60 days are dropped), so the preview is instant the second time.</li>
 </ul>
 <h3>Build</h3>
 <pre><code>build.bat           optimized (/O2)          ~2 s
