@@ -358,6 +358,7 @@ void GotoBuild() {
     if (GetTempPathW(MAX_PATH, tmp)) add(L"Temp", Normalize(tmp));
     add(L"This PC", L"");
     add(VirtualTitle(kBinPath), kBinPath);
+    add(VirtualTitle(kNetPath), kNetPath);
     DWORD mask = GetLogicalDrives();
     for (int i = 0; i < 26; ++i)
         if (mask & (1u << i)) {

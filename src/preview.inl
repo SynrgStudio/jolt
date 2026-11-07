@@ -370,7 +370,7 @@ void DrawPreview(float W, float H) {
             FormatSize(ds.bytes, buf, 64);
             size = std::wstring(buf) + (ds.done ? L"" : L"…") + L"   ·   " + Thousands(static_cast<int>(ds.files)) + L" files";
         }
-        info[0] = {L"Type", L"Folder"};
+        info[0] = {L"Type", IsServerPath(rowPath) ? L"Computer" : IsSharePath(rowPath) ? L"Shared folder" : L"Folder"};
         info[1] = {L"Modified", modified};
         info[2] = {L"Contains", contains};
         info[3] = {L"Size", size};

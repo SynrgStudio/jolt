@@ -9,6 +9,7 @@ std::mutex g_binM;
 std::unordered_map<std::wstring, BinItem> g_binItems;  // Key(name in the list)
 
 std::wstring VirtualJoin(const std::wstring& dir, const wchar_t* name) {
+    if (IsNet(dir)) return L"\\\\" + std::wstring(name);
     std::lock_guard lk(g_binM);
     auto it = g_binItems.find(Key(name));
     return it != g_binItems.end() ? it->second.real : dir + L"\\" + name;

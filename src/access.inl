@@ -5,10 +5,12 @@
 struct FolderNote {
     DWORD error;
     std::wstring target;  // a protected link: the folder it really is
+    bool network = false;
 };
 std::unordered_map<std::wstring, FolderNote> g_folderNotes;  // Key(path) -> why
 std::vector<std::wstring> g_notePaths;                       // what each FolderNote hit acts on, rebuilt every frame
 void OpenAsAdmin(const std::wstring& path);                  // background.inl
+void TestLog(const std::wstring& s);
 
 // If it's a junction or a symbolic link, the folder it really is.
 std::wstring LinkTarget(const std::wstring& path) {
@@ -37,14 +39,24 @@ void FolderNoteSet(const std::wstring& path, DWORD error) {
         g_folderNotes.erase(it);
     } else {
         if (it != g_folderNotes.end() && it->second.error == error) return;
-        g_folderNotes[k] = {error, error == ERROR_ACCESS_DENIED ? LinkTarget(path) : L""};
+        const bool network = path.rfind(L"\\\\", 0) == 0;
+        g_folderNotes[k] = {error, error == ERROR_ACCESS_DENIED && !network ? LinkTarget(path) : L"", network};
     }
     Invalidate();
 }
 
 // A listing arrived: kept if it could be read; if not, why.
 void RememberListing(const std::wstring& k, const std::shared_ptr<const Listing>& l) {
-    if (l->error == 0) g_cache[k] = l;
+    if (l->error == 0) {
+        g_cache[k] = l;
+        NetRememberPath(l->path);  // only what answered: a name typed wrong doesn't stay in the list
+    } else if (l->path.rfind(L"\\\\", 0) == 0 && l->error != ERROR_ACCESS_DENIED && l->error != ERROR_LOGON_FAILURE) {
+        // nobody there: not even recents keeps it. One that asks for a password does exist, so that one stays
+        const std::wstring key = Key(l->path);
+        g_recents.erase(std::remove_if(g_recents.begin(), g_recents.end(), [&](const std::wstring& r) { return Key(r) == key; }), g_recents.end());
+        if (Key(g_heatPending) == key) g_heatPending.clear();
+        HeatForget(l->path);
+    }
     FolderNoteSet(l->path, l->error);
 }
 
@@ -84,13 +96,33 @@ std::wstring FolderWhyLong(const FolderNote& n) {
 // Windows' compatibility links (Application Data, My Documents...) refuse everyone, administrators too: they go to the
 // real folder. Anything else that's denied may open as administrator.
 std::wstring FolderAction(const FolderNote& n) {
+    if (n.network && (n.error == ERROR_ACCESS_DENIED || n.error == ERROR_LOGON_FAILURE)) return L"Sign in";
     if (!n.target.empty()) return L"Go to the real folder";
     return n.error == ERROR_ACCESS_DENIED && !g_elevated ? L"Open as administrator" : L"";
 }
 
+// Windows' own dialog for a user and password, for a share or for the server (its IPC$ share is what signing in to it is).
+void NetSignIn(const std::wstring& path) {
+    if (g_test) {
+        TestLog(L"sign in: " + path);
+        return;
+    }
+    size_t end = path.find(L'\\', 2);
+    if (end != std::wstring::npos) end = path.find(L'\\', end + 1);
+    std::wstring res = IsServerPath(path) ? path + L"\\IPC$" : path.substr(0, end);
+    NETRESOURCEW nr{};
+    nr.dwType = RESOURCETYPE_ANY;
+    nr.lpRemoteName = res.data();
+    const DWORD e = WNetAddConnection3W(g_hwnd, &nr, nullptr, nullptr, CONNECT_INTERACTIVE | CONNECT_PROMPT);
+    if (e == NO_ERROR) Navigate(T(), path, false);
+    else if (e != ERROR_CANCELLED) S.message = L"Couldn't sign in: " + ErrorText(e);
+    Invalidate();
+}
+
 void FolderNoteAct(const std::wstring& path) {
     auto it = g_folderNotes.find(Key(Normalize(path)));
-    if (it != g_folderNotes.end() && !it->second.target.empty()) Navigate(T(), it->second.target, true);
+    if (it != g_folderNotes.end() && it->second.network) NetSignIn(path);
+    else if (it != g_folderNotes.end() && !it->second.target.empty()) Navigate(T(), it->second.target, true);
     else OpenAsAdmin(path);
 }
 

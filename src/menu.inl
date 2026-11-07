@@ -1085,6 +1085,7 @@ void OpenShellMenu(POINT screenPt, int row) {
         OpenBinMenu(screenPt, row);
         return;
     }
+    if (IsVirtual(t.path)) return;
     std::vector<std::wstring> names;
     std::wstring ctx = L"background", folder = t.path;
     if (row >= 0 && row < Count()) {
@@ -1261,14 +1262,7 @@ struct CrumbWait {
 } g_crumbWait;
 
 // Where a segment's siblings are. The top of a tree has none: there, its own contents.
-std::wstring CrumbSiblingsDir(const std::wstring& p) {
-    if (p.rfind(L"\\\\", 0) == 0) {  // \\server\share: ParentOf stops at the share
-        const size_t a = p.find(L'\\', 2);
-        if (a == std::wstring::npos) return p;
-        if (p.find(L'\\', a + 1) == std::wstring::npos) return p.substr(0, a);
-    }
-    return p.empty() ? p : ParentOf(p);
-}
+std::wstring CrumbSiblingsDir(const std::wstring& p) { return p.empty() ? p : ParentOf(p); }
 
 // Is this item the folder we are in, or on the way to it?
 bool OnTheWay(const std::wstring& item, const std::wstring& here) {
