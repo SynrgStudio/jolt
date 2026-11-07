@@ -593,6 +593,27 @@ void TestRunStep() {
             for (const auto& [k, h] : g_grepHits) matches += h.match;
             TestLog(L"grep: \"" + g_grepTerm + L"\" pending " + std::to_wstring(g_grepPending.load()) + L" read " + std::to_wstring(g_grepHits.size()) +
                     L" matches " + std::to_wstring(matches) + L" gen " + std::to_wstring(g_grepGen.load()));
+        } else if (s.cmd == L"thumb") {  // thumb C:\\a.jpg | 128: asks for it and logs its state
+            size_t bar = s.arg.find(L'|');
+            const std::wstring path = Trim(s.arg.substr(0, bar));
+            const int size = bar == std::wstring::npos ? 128 : _wtoi(s.arg.c_str() + bar + 1);
+            const int64_t mt = ThumbMtimeOf(path);
+            Thumb* th = ThumbGet(path, size, mt);
+            TestLog(th ? L"thumb: ready " + std::to_wstring(th->w) + L"x" + std::to_wstring(th->h) + (th->isIcon ? L" icon" : L" image") +
+                             (PathExists(ThumbFile(path, size, mt)) ? L" cached" : L" not cached")
+                       : L"thumb: loading");
+        } else if (s.cmd == L"layout") {  // the active folder's view: list or grid, and the grid's shape
+            const Geo g = GeoFor(T());
+            TestLog(g.grid ? L"layout: grid " + std::to_wstring(g.size) + L" cols " + std::to_wstring(g.cols) + L" cell " +
+                                 std::to_wstring(static_cast<int>(g.cellW)) + L"x" + std::to_wstring(static_cast<int>(g.cellH)) + L" content " +
+                                 std::to_wstring(static_cast<int>(ContentHeight(T())))
+                           : L"layout: list");
+        } else if (s.cmd == L"tags") {  // the tags of the cursor item
+            std::wstring out = L"tags:";
+            if (T().sel >= 0 && T().sel < Count())
+                if (const auto* tg = TagsOf(RowPath(T(), T().sel)))
+                    for (const std::wstring& x : *tg) out += L" " + x;
+            TestLog(out);
         } else if (s.cmd == L"rows") {  // what the list shows, in order
             std::wstring names;
             for (int i = 0; i < RowCount(T()) && i < 40; ++i) names += L" " + (IsHeader(T(), i) ? L"[" + RowName(T(), i) + L"]" : RowName(T(), i));

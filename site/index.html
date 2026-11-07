@@ -127,6 +127,7 @@
 <tr><td><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd></td><td>reopen the last closed tab, in its place and with its history</td></tr>
 <tr><td><kbd>Alt</kbd>+<kbd>1</kbd> … <kbd>Alt</kbd>+<kbd>9</kbd></td><td>go to that tab (9: the last one). <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>W</kbd> closes the others</td></tr>
 <tr><td><kbd>Ctrl</kbd>+wheel / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+wheel</td><td>over the tab bar: switch tab / move the active tab</td></tr>
+<tr><td><kbd>Ctrl</kbd>+<kbd>Alt</kbd>+wheel</td><td><strong>view</strong>: up, a grid of thumbnails with bigger and bigger cells; down, back to the list. Per folder. See <a href="#views">views</a></td></tr>
 <tr><td><kbd>Ctrl</kbd>+<kbd>S</kbd></td><td><strong>split view</strong>: two panes, each with its own tabs. <kbd>Tab</kbd> switches pane; drag the divider (double click: half and half)</td></tr>
 <tr><td><kbd>F5</kbd> / <kbd>F6</kbd></td><td>in split view: copy / move the selection to the other pane's folder</td></tr>
 <tr><td>drag the tab bar</td><td>move the window (double click maximizes; right click: system menu)</td></tr>
@@ -161,6 +162,7 @@
 <tr><td><code>!tmp</code> &nbsp; <code>!.bak</code> &nbsp; <code>!*.log</code></td><td>exclude by name, extension or pattern</td></tr>
 <tr><td><code>report*.pdf</code> &nbsp; <code>?.txt</code></td><td>wildcard pattern on the name</td></tr>
 <tr><td><code>content:word</code> &nbsp; <code>content:"two words"</code></td><td><strong>search inside the files</strong>: keeps the text files whose content has it, and shows the line around the match next to the name. Files are read in the background (UTF-8, UTF-16 or the system code page; binaries and files over 32 MB are skipped). With <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>F</kbd> it covers the subfolders too</td></tr>
+<tr><td><code>tag:urgent</code> &nbsp; <code>!tag:done</code></td><td>items with (or without) a <a href="#files">tag</a></td></tr>
 </table>
 <p class="ex">Examples: <code>content:TODO .cpp</code> — source files with a TODO. &nbsp; <code>invoice .pdf newer:30d</code> — the invoices of the last month. &nbsp; <code>&gt;500mb !.iso</code> — what is taking space, except disc images. &nbsp; <code>type:folder old</code> — folders with "old" in the name.</p>
 <p>Only the words light up in the names. The status bar shows how many match.</p>
@@ -189,6 +191,14 @@
 <tr><td><kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>T</kbd> / <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>E</kbd></td><td>open a terminal (Windows Terminal, or cmd) / File Explorer in this folder</td></tr>
 <tr><td>right click / <kbd>Shift</kbd>+<kbd>F10</kbd> / Menu key</td><td>the Windows context menu for the file, the folder or the background; with <kbd>Shift</kbd>, the extended one. See <a href="#menu">context menu</a></td></tr>
 </table>
+<h3>Tags and colors</h3>
+<p>Right click → <strong>Tags</strong>, or <kbd>Ctrl</kbd>+<kbd>K</kbd> → "tag", puts a label on the selection: pick a known one or type a new name. Each tag gets a color and shows as a little tag-shaped label after the name, with its name inside while there is room (a dot when there isn't, and in the grid's corner), and in the preview's info; an item can have several. <code>tag:urgent</code> in the filter keeps the tagged items, <code>!tag:done</code> leaves them out, in subfolder search too. They are saved in <code>%APPDATA%\Jolt\tags.txt</code>, which can be edited by hand (<code>name = RRGGBB</code> under <code>[tags]</code> sets a color), and they follow renames done from Jolt.</p>
+<p>Names can also take a color by rule, in <code>config.txt</code>:</p>
+<pre><code><span class="k">[file_colors]</span>
+.jpg .png .gif .webp = 7FB3FF
+.zip .7z .rar = C9A86A
+*backup* *.bak = E06C75
+folders = E6B450</code></pre>
 <h3>Undo</h3>
 <p><kbd>Ctrl</kbd>+<kbd>Z</kbd> undoes and <kbd>Ctrl</kbd>+<kbd>Y</kbd> (or <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd>) redoes what was done from Jolt in this session, up to 100 steps: rename, move, copy, duplicate, create, group, paste and send to the Recycle Bin. It never overwrites anything or touches what changed afterwards, and what it removes goes to the Recycle Bin. It doesn't cover what replaced or merged with something that already existed, or permanent deletion.</p>
 <h3>Status bar</h3>
@@ -226,6 +236,8 @@ sort = name asc
 group = day
 folders = first
 hide = extension tmp part crdownload</code></pre>
+<h3>List or grid</h3>
+<p>Each folder can be a <strong>grid of thumbnails</strong> instead of a list. <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+wheel up makes the cells bigger (80 to 256 px), down goes back to the list; the palette has the same as commands. In the grid, the arrows walk the cells, and everything else works as in the list: typing filters, box select, drag and drop, the preview. The thumbnails come from the Shell (photos, videos, PDF, Office, and the icon for the rest) and are cached on disk, so a folder you have seen opens with its pictures already there. It is saved per folder in <code>views.txt</code> as <code>layout = grid 144</code>.</p>
 <p>Quick toggles in the palette (<kbd>Ctrl</kbd>+<kbd>K</kbd>): show or hide folders, files, hidden files (<kbd>Ctrl</kbd>+<kbd>H</kbd>) and extensions; group this folder by day or type; collapse or expand all groups; sort by type; more or less space between rows. Any of them can get a key with a click.</p>
 
 <h2 id="commands">Custom commands</h2>
@@ -261,8 +273,9 @@ open in vs code = Ctrl+Alt+V</code></pre>
 <tr><td><code>favorites.txt</code></td><td><code>Name|Path</code>, one per line</td></tr>
 <tr><td><code>views.txt</code></td><td>the <a href="#views">views</a> per folder</td></tr>
 <tr><td><code>menu.txt</code></td><td>the <a href="#menu">context menu</a> order and hidden entries</td></tr>
+<tr><td><code>tags.txt</code></td><td>the <a href="#files">tags</a>: their colors and which items have them</td></tr>
 <tr><td><code>session.txt</code>, <code>recents.txt</code></td><td>tabs and window, and the recent folders with their heat</td></tr>
-<tr><td><code>%LOCALAPPDATA%\Jolt</code></td><td>the installed program, the drive index and the calculated folder sizes (<code>sizes.bin</code>)</td></tr>
+<tr><td><code>%LOCALAPPDATA%\Jolt</code></td><td>the installed program, the drive index, the calculated folder sizes (<code>sizes.bin</code>) and the thumbnail cache (<code>thumbs\</code>, safe to delete)</td></tr>
 </table>
 <p><code>☰ → Configuration folder</code> opens it. With <code>JOLT_DEBUG=1</code> in the environment, Jolt writes a log to <code>%TEMP%\jolt.log</code>.</p>
 
@@ -303,6 +316,7 @@ properties</code></pre>
   <li>Preloads the highlighted folder (local drives) so Enter doesn't have to read the disk.</li>
   <li>Icons that depend only on the extension are resolved on the spot; those that depend on the file (folders, .exe, shortcuts) come from another thread, for visible rows only.</li>
   <li>Draws only what is visible.</li>
+  <li>Shell thumbnails are made on a thread and cached on disk (<code>%LOCALAPPDATA%\Jolt\thumbs</code>, PNG, by path, size and modified time; entries unused for 60 days are dropped), so the preview is instant the second time.</li>
 </ul>
 <h3>Build</h3>
 <pre><code>build.bat           optimized (/O2)          ~2 s

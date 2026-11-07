@@ -10,7 +10,7 @@ enum class Cmd {
     Terminal, OpenExplorer, RealLocation, CollapseGroups, ExpandGroups, GroupByDay, GroupByType, NoGroups,
     SortByType, ZoomIn, ZoomOut, ZoomReset, RowsTaller, RowsShorter, EmptyRecycleBin,
     Undo, Redo,
-    Install, Quit, RenameMany,
+    Install, Quit, RenameMany, ViewList, ViewGrid, ViewBigger, ViewSmaller, Tag,
     CustomFirst = 1000  // + index into g_cfg.custom: the user's own commands
 };
 inline bool IsCustom(Cmd c) { return static_cast<int>(c) >= static_cast<int>(Cmd::CustomFirst); }
@@ -25,6 +25,10 @@ struct KeyBind {
 
 constexpr int kHotCountMax = 30;
 
+struct FileColorRule {
+    std::vector<std::wstring> patterns;  // ".png", "*backup*", "folders"
+    UINT32 color;
+};
 struct Config {
     std::wstring font = L"Segoe UI";
     float fontSize = 12;
@@ -34,6 +38,7 @@ struct Config {
     std::wstring globalKey = L"Win+J";
     bool colDate = true, colSize = true;
     std::vector<KeyBind> keys;
+    std::vector<FileColorRule> fileColors;  // [file_colors]
     struct Custom {
         std::wstring name, line;  // "Open in VS Code", "code \"{dir}\""
     };
@@ -111,6 +116,11 @@ const CmdDef kCommands[] = {
     {L"zoom_reset", Cmd::ZoomReset, L"Ctrl+0", L"reset the interface to normal size (zoom)"},
     {L"rows_taller", Cmd::RowsTaller, L"", L"more space between rows"},
     {L"rows_shorter", Cmd::RowsShorter, L"", L"less space between rows"},
+    {L"view_list", Cmd::ViewList, L"", L"show this folder as a list (details)"},
+    {L"view_grid", Cmd::ViewGrid, L"", L"show this folder as a grid of thumbnails"},
+    {L"view_bigger", Cmd::ViewBigger, L"", L"bigger cells in the grid (Ctrl+Alt+wheel up)"},
+    {L"view_smaller", Cmd::ViewSmaller, L"", L"smaller cells, down to the list (Ctrl+Alt+wheel down)"},
+    {L"tag", Cmd::Tag, L"", L"tag the selection: add or remove a tag"},
     {L"empty_recycle_bin", Cmd::EmptyRecycleBin, L"", L"empty the Recycle Bin"},
     {L"undo", Cmd::Undo, L"Ctrl+Z", L"undo the last action (rename, move, copy, create, Recycle Bin)"},
     {L"redo", Cmd::Redo, L"Ctrl+Y, Ctrl+Shift+Z", L"redo what was undone"},
@@ -274,6 +284,11 @@ void WriteDefaultConfig() {
         "# RRGGBB in hexadecimal.\n";
     for (const ColorDef& c : kColors) s += Utf8(std::wstring(c.name) + L" = " + Hex(c.def) + L"    # " + c.help + L"\n");
     s +=
+        "\n[file_colors]\n"
+        "# Name colors in the list, by extension or pattern (and \"folders\"): patterns = RRGGBB. The first rule that fits wins.\n"
+        "# .jpg .png .gif .webp = 7FB3FF\n"
+        "# .zip .7z .rar = C9A86A\n"
+        "# *backup* *.bak = E06C75\n"
         "\n[shortcuts]\n"
         "# Several keys per command, separated by commas. Modifiers: Ctrl, Shift, Alt.\n"
         "# Keys: letters, digits, F1..F24, Enter, Esc, Del, Backspace, Tab, Space, Left, Right,\n"
@@ -386,6 +401,21 @@ void LoadConfig() {
                     if (!h.empty() && h[0] == L'#') h.erase(0, 1);
                     if (h.size() == 6) *c.var = static_cast<UINT32>(wcstoul(h.c_str(), nullptr, 16));
                 }
+        } else if (section == L"file_colors") {
+            std::wstring h = val;
+            if (!h.empty() && h[0] == L'#') h.erase(0, 1);
+            FileColorRule r;
+            size_t p = 0;
+            while (p < key.size()) {
+                size_t sp = key.find(L' ', p);
+                std::wstring w = key.substr(p, sp == std::wstring::npos ? std::wstring::npos : sp - p);
+                p = sp == std::wstring::npos ? key.size() : sp + 1;
+                if (!w.empty()) r.patterns.push_back(w);
+            }
+            if (h.size() == 6 && !r.patterns.empty()) {
+                r.color = static_cast<UINT32>(wcstoul(h.c_str(), nullptr, 16));
+                g_cfg.fileColors.push_back(std::move(r));
+            }
         } else if (section == L"shortcuts") {
             bool builtin = false;
             for (const CmdDef& c : kCommands)
