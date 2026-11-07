@@ -5,3 +5,4 @@ build/
 # File Pilot reference material: stays on this machine only
 docs/filepilot-palette.md
 docs/extract_fp_commands.py
+_site/

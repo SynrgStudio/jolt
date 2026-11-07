@@ -15,7 +15,7 @@ Folders open instantly. One small file, no dependencies, no telemetry.
 
 <a href="https://github.com/SynrgStudio/jolt/releases/latest/download/jolt.exe"><img src="https://img.shields.io/badge/Download-jolt.exe-ff9f2e?style=for-the-badge" alt="Download jolt.exe" height="36"></a>
 
-[Features](#features) &nbsp;·&nbsp; [Install](#install) &nbsp;·&nbsp; [Shortcuts](#keyboard-and-mouse) &nbsp;·&nbsp; [Configuration](#configuration) &nbsp;·&nbsp; [For developers](#for-developers)
+[**Docs: jolt.synrgs.tech**](https://jolt.synrgs.tech) &nbsp;·&nbsp; [Features](#features) &nbsp;·&nbsp; [Install](#install) &nbsp;·&nbsp; [Shortcuts](#keyboard-and-mouse) &nbsp;·&nbsp; [Configuration](#configuration) &nbsp;·&nbsp; [For developers](#for-developers)
 
 <br>
 
@@ -68,6 +68,8 @@ Folders open instantly. One small file, no dependencies, no telemetry.
 ---
 
 ## Install
+
+The full guide, with every feature explained, is at **[jolt.synrgs.tech](https://jolt.synrgs.tech)**.
 
 Download `jolt.exe` from the [latest release](https://github.com/SynrgStudio/jolt/releases/latest). It isn't signed, so
 Windows SmartScreen may warn you the first time: More info → Run anyway. See the [code signing policy](#code-signing-policy).
