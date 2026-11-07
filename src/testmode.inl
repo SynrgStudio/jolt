@@ -51,6 +51,8 @@ void TestLog(const std::wstring& s) {
 }
 
 // Prepares the test data folder: a fresh copy of the user's configuration.
+std::wstring SessionRoundTrip();  // app.cpp
+
 void TestPrepareData() {
     wchar_t tmp[MAX_PATH];
     GetTempPathW(MAX_PATH, tmp);
@@ -657,12 +659,8 @@ void TestRunStep() {
             TestKey(s.arg);
         } else if (s.cmd == L"type") {
             for (wchar_t c : s.arg) SendMessageW(TestKeyTarget(), WM_CHAR, c, 1);
-        } else if (s.cmd == L"session") {  // saves it and reads it back: tabs and which are pinned
-            SaveSession();
-            const Session ses = LoadSession();
-            std::wstring out = L"session: " + std::to_wstring(ses.tabs.size()) + L" tabs, pinned";
-            for (int i : ses.pinned) out += L" " + ses.tabs[i].first;
-            TestLog(out);
+        } else if (s.cmd == L"session") {  // saves it and reads it back
+            TestLog(SessionRoundTrip());
         } else if (s.cmd == L"palette") {  // the Ctrl+P or Ctrl+K list: how many, where, and its first rows
             std::wstring out = L"palette: " + std::to_wstring(g_pal.hits.size()) + L" rows, sel " + std::to_wstring(g_pal.sel) + L", first " + std::to_wstring(g_pal.first) + L", index " +
                                std::to_wstring(g_ixRes.hits.size()) + L" of " + std::to_wstring(g_ixRes.total) + L":";

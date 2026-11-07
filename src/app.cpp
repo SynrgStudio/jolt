@@ -3670,6 +3670,15 @@ void TouchSession() { SetTimer(g_hwnd, kTimerSession, 2000, nullptr); }  // save
 
 // Reloads everything in %APPDATA%\Jolt (config, favorites, menu) after a change on disk.
 constexpr UINT_PTR kTimerConfig = 4;
+// For the tests: tabs and which are pinned, as they come back from the file.
+std::wstring SessionRoundTrip() {
+    SaveSession();
+    const Session ses = LoadSession();
+    std::wstring out = L"session: " + std::to_wstring(ses.tabs.size()) + L" tabs, pinned";
+    for (int i : ses.pinned) out += L" " + ses.tabs[i].first;
+    return out;
+}
+
 // Signature (date and size) of the files the user edits; session.txt and recents.txt don't count.
 std::wstring ConfigSignature() {
     std::wstring sig;
