@@ -347,7 +347,7 @@ void DrawPreview(float W, float H) {
         FormatDate(e.mtime, buf, 64);
         modified = buf;
     }
-    constexpr int kInfoRows = 4;
+    constexpr int kInfoRows = 5;
     std::pair<const wchar_t*, std::wstring> info[kInfoRows];
     if (e.isDir()) {
         std::wstring contains, size;
@@ -375,6 +375,11 @@ void DrawPreview(float W, float H) {
         info[2] = {L"Modified", modified};
         if (rowMatches && g_pv.res && g_pv.res->kind == 1 && !g_pv.res->thumb)
             info[3] = {L"Dimensions", std::to_wstring(g_pv.res->imgW) + L" × " + std::to_wstring(g_pv.res->imgH)};
+    }
+    if (const auto* tags = TagsOf(rowPath)) {
+        std::wstring all;
+        for (const std::wstring& x : *tags) all += (all.empty() ? L"" : L", ") + x;
+        info[4] = {L"Tags", all};
     }
     const float infoH = 34 + kInfoRows * 20 + 10;
     const float top = y0 + pad, bot = std::max(top + 60, y1 - infoH - 6);
@@ -463,7 +468,16 @@ void DrawPreview(float W, float H) {
     Text(name, g_fmtNameBold.Get(), L, y, R, y + 26);
     y += 30;
     for (auto& [label, value] : info) {
-        if (!value.empty()) PvInfoLine(label, value, L, R, y);
-        else y += 20;
+        if (value.empty()) {
+            y += 20;
+        } else if (wcscmp(label, L"Tags") == 0) {  // the tags as labels, not text
+            Color(cFaint);
+            Text(label, wcslen(label), g_fmtName.Get(), L, y, L + 90, y + 20);
+            float xe;
+            DrawTagLabels(rowPath, L + 90, y + 10, R, 1.f, xe);
+            y += 20;
+        } else {
+            PvInfoLine(label, value, L, R, y);
+        }
     }
 }

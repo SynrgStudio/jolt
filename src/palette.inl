@@ -12,7 +12,7 @@ struct PalItem {
 
 struct Palette {
     bool open = false;
-    int mode = 0;        // 0 = commands (Ctrl+K), 1 = Go to (Ctrl+P)
+    int mode = 0;        // 0 = commands (Ctrl+K), 1 = Go to (Ctrl+P), 2 = tags for the selection
     std::wstring text;
     std::wstring match;  // what's being searched for (in Go to with a typed path: whatever follows the last slash)
     std::vector<PalItem> all;
@@ -54,11 +54,13 @@ std::wstring ShortcutFor(Cmd cmd) {
 }
 
 void GotoBuild();
+void TagBuild();
 
 void PaletteFilter() {
     g_pal.hits.clear();
     g_pal.match = g_pal.text;
     if (g_pal.mode == 1) GotoBuild();
+    if (g_pal.mode == 2) TagBuild();
     std::wstring pat = Lower(g_pal.match);
     for (size_t i = 0; i < g_pal.all.size(); ++i) {
         const PalItem& it = g_pal.all[i];
@@ -177,6 +179,42 @@ void PaletteOpen(int mode = 0) {
     if (mode == 0) PaletteBuild();
     PaletteFilter();
     Invalidate();
+}
+
+// ---- tags: the palette lists the known tags (checked when the whole selection has one) and offers
+// to create whatever is typed.
+void TagPaletteOpen() {
+    g_tagTargets = SelectedFullPaths(T());
+    if (g_tagTargets.empty()) {
+        S.message = L"Select something to tag";
+        Invalidate();
+        return;
+    }
+    PaletteOpen(2);
+}
+
+void TagBuild() {
+    g_pal.all.clear();
+    const std::wstring text = Trim(g_pal.text);
+    bool exists = false;
+    for (const std::wstring& name : AllTags()) {
+        bool all = !g_tagTargets.empty();
+        for (const std::wstring& p : g_tagTargets) all &= HasTag(p, name);
+        PalItem it;
+        it.title = (all ? L"\u2713  " : L"") + name;
+        it.detail = all ? L"on the selection: Enter takes it off" : L"tag: Enter puts it on";
+        it.run = [name] { TagToggle(g_tagTargets, name); };
+        if (_wcsicmp(name.c_str(), text.c_str()) == 0) exists = true;
+        g_pal.all.push_back(std::move(it));
+    }
+    if (!text.empty() && !exists) {
+        PalItem it;
+        it.title = L"New tag: " + text;
+        it.detail = L"creates it and puts it on the selection";
+        it.bonus = -50;  // the tags that match what is typed come first; this one only when none does
+        it.run = [text] { TagToggle(g_tagTargets, text); };
+        g_pal.all.push_back(std::move(it));
+    }
 }
 
 // ---- Go to (Ctrl+P): recents, favorites, system places, drives, or a typed path
@@ -457,7 +495,7 @@ void DrawPalette(float W, float H) {
     float tw = MeasureW(shown, g_fmtName.Get());
     if (shown.empty()) {
         Color(cFaint);
-        Text(g_pal.mode == 1 ? L"Go to…  recents, favorites, places, drives or a path" : L"Type a command…",
+        Text(g_pal.mode == 1 ? L"Go to…  recents, favorites, places, drives or a path" : g_pal.mode == 2 ? L"Tag…  pick one, or type a new name" : L"Type a command…",
              g_fmtName.Get(), px + 38, py, px + pw - 12, py + kPalInputH);
     } else {
         Color(cText);

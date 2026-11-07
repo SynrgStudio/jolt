@@ -451,6 +451,8 @@ void RegisterPopupClass(HINSTANCE inst) {
 
 // ================================================================ Shell context menu
 constexpr UINT kCmdFirst = 1, kCmdLast = 0x6FFF, kCmdFav = 0x7000, kCmdCustom = 0x7100;  // kCmdCustom + index: the user's commands
+constexpr UINT kCmdTagNew = 0x7FFF, kCmdTag = 0x8000;                                   // kCmdTag + index into AllTags()
+void TagPaletteOpen();  // palette.inl
 void RunCustomCommand(int i);  // ops.inl
 
 // The user's commands ([commands]) at the end of a Shell menu, so the editor can hide or move them like the rest.
@@ -917,6 +919,31 @@ void OpenShellMenu(POINT screenPt, int row) {
     g_shellMenu = CreateShellMenu(folder, names, KeyDown(VK_SHIFT));
     if (!g_shellMenu) return;
     std::vector<MenuItem> items = ApplyMenuCfg(ctx, WithCustomCommands(ReadMenu(*g_shellMenu, g_shellMenu->hmenu)), false);
+    if (row >= 0) {  // Tags: the known ones (checked when the whole selection has one) and a new one
+        MenuItem tg, sep;
+        tg.text = L"Tags";
+        tg.key = L"jolt:tags";
+        const std::vector<std::wstring> all = AllTags(), sel = SelectedFullPaths(t);
+        for (size_t i = 0; i < all.size() && i < 2000; ++i) {
+            MenuItem it;
+            it.text = all[i];
+            it.id = kCmdTag + static_cast<UINT>(i);
+            it.checked = !sel.empty();
+            for (const std::wstring& p : sel) it.checked = it.checked && HasTag(p, all[i]);
+            tg.sub.push_back(it);
+        }
+        if (!all.empty()) {
+            MenuItem s;
+            s.sep = true;
+            tg.sub.push_back(s);
+        }
+        MenuItem nw;
+        nw.text = L"New tag…";
+        nw.id = kCmdTagNew;
+        tg.sub.push_back(nw);
+        sep.sep = true;
+        items.insert(items.begin(), {tg, sep});
+    }
     std::wstring favPath;  // on a single folder, it can be added to favorites without entering it
     if (ctx == L"folder" && SelCount(t) == 1) {
         favPath = RowPath(t, t.sel);
@@ -932,6 +959,15 @@ void OpenShellMenu(POINT screenPt, int row) {
         [screenPt, favPath](UINT id) {
             if (id == kCmdFav) {
                 FavAdd(favPath);
+                return;
+            }
+            if (id == kCmdTagNew) {
+                TagPaletteOpen();
+                return;
+            }
+            if (id >= kCmdTag) {
+                const std::vector<std::wstring> all = AllTags();
+                if (id - kCmdTag < all.size()) TagToggle(SelectedFullPaths(T()), all[id - kCmdTag]);
                 return;
             }
             if (id >= kCmdCustom) {

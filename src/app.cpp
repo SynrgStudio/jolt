@@ -598,9 +598,11 @@ void AddTree(const Tab& t, const Listing* l, int depth, std::vector<Row>& out) {
 //   newer:7d  older:2w  modified:today   date (d h w m y; "today" since midnight)
 //   !tmp  !.bak  !*.log             exclude: name contains, extension, pattern
 //   report*.pdf  ?.txt              wildcard pattern on the name
+//   tag:urgent  !tag:done           items with (without) a tag
 struct FilterSpec {
     std::wstring fuzzy;  // lowercase
     std::vector<std::wstring> exts, notExts, notNames, globs, notGlobs;
+    std::vector<std::wstring> tags, notTags;  // tag:urgent / !tag:done
     uint64_t minSize = 0, maxSize = UINT64_MAX;
     bool sized = false;
     int64_t newerThan = 0, olderThan = 0;  // FILETIME; 0 = no limit
@@ -655,6 +657,10 @@ FilterSpec ParseFilter(const std::wstring& filter) {
         const bool neg = tok[0] == L'!';
         if (neg) tok.erase(0, 1);
         if (tok.empty()) continue;
+        if (tok.rfind(L"tag:", 0) == 0) {
+            for (const std::wstring& x : SplitList(tok.substr(4))) (neg ? s.notTags : s.tags).push_back(x);
+            continue;
+        }
         auto ext = [&](std::wstring e) {
             if (e.empty()) return;
             if (e[0] != L'.') e.insert(0, 1, L'.');
@@ -738,6 +744,8 @@ bool FilterPass(const FilterSpec& s, const Entry& e, const wchar_t* name, size_t
     return FuzzyMatch(name, n, s.fuzzy, score, pos);
 }
 
+#include "tags.inl"
+
 void BuildRows(Tab& t) {
     t.rows.clear();
     ++t.rowsGen;
@@ -762,7 +770,16 @@ void BuildRows(Tab& t) {
         if (r.e < 0) continue;
         const Entry& e = r.l->entries[r.e];
         int sc;
-        if (FilterPass(spec, e, r.l->name(e), e.nameLen, sc, nullptr)) hits.push_back({sc, static_cast<int>(i)});
+        if (!FilterPass(spec, e, r.l->name(e), e.nameLen, sc, nullptr)) continue;
+        if (!spec.tags.empty() || !spec.notTags.empty()) {
+            if (r.l->path.empty()) continue;
+            const std::wstring full = Join(r.l->path, r.l->name(e));
+            bool ok = true;
+            for (const std::wstring& tg : spec.tags) ok &= HasTag(full, tg);
+            for (const std::wstring& tg : spec.notTags) ok &= !HasTag(full, tg);
+            if (!ok) continue;
+        }
+        hits.push_back({sc, static_cast<int>(i)});
     }
     std::stable_sort(hits.begin(), hits.end(), [](auto& a, auto& b) { return a.first > b.first; });
     std::vector<Row> out;
@@ -1882,7 +1899,7 @@ void CreateTextParams() {
                                       def->GetPixelGeometry(), DWRITE_RENDERING_MODE_GDI_CLASSIC, &g_textParams);
 }
 ComPtr<IDWriteTextFormat> g_fmtName, g_fmtNameBold, g_fmtRight, g_fmtIcon, g_fmtIconSm, g_fmtCap, g_fmtCrumb, g_fmtTab, g_fmtSide,
-    g_fmtSection, g_fmtHeader, g_fmtStatus, g_fmtStatusR, g_fmtCenter, g_fmtMono, g_fmtMonoR, g_fmtCell;
+    g_fmtSection, g_fmtHeader, g_fmtStatus, g_fmtStatusR, g_fmtCenter, g_fmtMono, g_fmtMonoR, g_fmtCell, g_fmtTag;
 
 bool FontExists(const wchar_t* family) {
     ComPtr<IDWriteFontCollection> fc;
@@ -1933,6 +1950,7 @@ void CreateFormats() {
     g_fmtStatus = MakeFormat(ui, sz, DWRITE_TEXT_ALIGNMENT_LEADING);
     g_fmtStatusR = MakeFormat(ui, sz, DWRITE_TEXT_ALIGNMENT_TRAILING);
     g_fmtCenter = MakeFormat(ui, sz, DWRITE_TEXT_ALIGNMENT_CENTER);
+    g_fmtTag = MakeFormat(ui, smallSz, DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_FONT_WEIGHT_SEMI_BOLD, false);  // the name inside a tag label
     g_fmtCell = MakeFormat(ui, sz, DWRITE_TEXT_ALIGNMENT_CENTER);  // grid names: centered, up to two lines
     g_fmtCell->SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP);
     g_fmtCell->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
@@ -2608,6 +2626,64 @@ void DrawHeader(int pane) {
 
 void DrawBox(int pane, float listTop, float listBot);  // boxselect.inl
 
+// The little discs after a name: one per tag (where a label wouldn't fit: the grid cells).
+void DrawTagDots(const std::wstring& full, float x, float cy, float a, float& xEnd) {
+    xEnd = x;
+    const auto* tags = TagsOf(full);
+    if (!tags) return;
+    for (const std::wstring& t : *tags) {
+        Round(D2D1::RectF(xEnd, cy - 3.5f, xEnd + 7, cy + 3.5f), 3.5f, TagColor(t), a);
+        xEnd += 10;
+    }
+    xEnd += 4;
+}
+
+// A tag as a little label: a rectangle with a pointed left end (and its hole), the name inside. Draws as many as fit
+// before xMax, the rest as dots; xEnd is where the row may go on.
+void DrawTagLabels(const std::wstring& full, float x, float cy, float xMax, float a, float& xEnd) {
+    xEnd = x;
+    const auto* tags = TagsOf(full);
+    if (!tags) return;
+    const float h = std::clamp(kRow - 6.f, 14.f, 17.f), top = std::floor(cy - h / 2), bot = top + h, notch = std::floor(h / 2), r = 3;
+    const float mid = (top + bot) / 2;
+    bool dots = false;
+    for (const std::wstring& t : *tags) {
+        const UINT32 col = TagColor(t);
+        if (!dots) {
+            const float tw = std::ceil(MeasureW(t, g_fmtTag.Get())), w = notch + tw + 11;
+            if (xEnd + w <= xMax) {
+                ComPtr<ID2D1PathGeometry> g;
+                ComPtr<ID2D1GeometrySink> s;
+                if (SUCCEEDED(g_d2d->CreatePathGeometry(&g)) && SUCCEEDED(g->Open(&s))) {
+                    s->BeginFigure(D2D1::Point2F(xEnd, mid), D2D1_FIGURE_BEGIN_FILLED);
+                    s->AddLine(D2D1::Point2F(xEnd + notch, top));
+                    s->AddLine(D2D1::Point2F(xEnd + w - r, top));
+                    s->AddArc(D2D1::ArcSegment(D2D1::Point2F(xEnd + w, top + r), D2D1::SizeF(r, r), 0, D2D1_SWEEP_DIRECTION_CLOCKWISE, D2D1_ARC_SIZE_SMALL));
+                    s->AddLine(D2D1::Point2F(xEnd + w, bot - r));
+                    s->AddArc(D2D1::ArcSegment(D2D1::Point2F(xEnd + w - r, bot), D2D1::SizeF(r, r), 0, D2D1_SWEEP_DIRECTION_CLOCKWISE, D2D1_ARC_SIZE_SMALL));
+                    s->AddLine(D2D1::Point2F(xEnd + notch, bot));
+                    s->EndFigure(D2D1_FIGURE_END_CLOSED);
+                    s->Close();
+                    Color(col, 0.92f * a);
+                    g_rt->FillGeometry(g.Get(), g_brush.Get());
+                }
+                Round(D2D1::RectF(xEnd + notch - 0.5f, mid - 1.5f, xEnd + notch + 2.5f, mid + 1.5f), 1.5f, cBg, 0.9f * a);  // the hole
+                // dark text on a light tag, light on a dark one
+                const float lum = (0.299f * ((col >> 16) & 255) + 0.587f * ((col >> 8) & 255) + 0.114f * (col & 255)) / 255.f;
+                Color(lum > 0.5f ? 0x15151A : 0xF2F2F6, a);
+                Text(t, g_fmtTag.Get(), xEnd + notch + 5, top, xEnd + w - 4, bot);
+                xEnd += w + 5;
+                continue;
+            }
+            dots = true;  // no room for another label: the rest as dots
+        }
+        if (xEnd + 7 > xMax) break;
+        Round(D2D1::RectF(xEnd, mid - 3.5f, xEnd + 7, mid + 3.5f), 3.5f, col, a);
+        xEnd += 10;
+    }
+    xEnd += 4;
+}
+
 // A grid cell: the thumbnail (the small icon until it arrives) and the name under it, two lines at most.
 void DrawGridCell(const Entry& e, const wchar_t* name, const std::wstring& full, const D2D1_RECT_F& cell, float y, const Geo& geo,
                   float a, const std::wstring& filterPat) {
@@ -2632,12 +2708,15 @@ void DrawGridCell(const Entry& e, const wchar_t* name, const std::wstring& full,
                 break;
             }
     const D2D1_RECT_F tr = D2D1::RectF(cell.left + 4, boxT + box + 4, cell.right - 4, y + geo.cellH - 4);
+    const UINT32 nameCol = NameColorFor(name, e.nameLen, e.isDir(), cText);
     if (!filterPat.empty()) {
-        TextHighlighted(std::wstring(name, shownLen), filterPat, g_fmtCell.Get(), tr.left, tr.top, tr.right, tr.bottom, cText, cAccent, a);
+        TextHighlighted(std::wstring(name, shownLen), filterPat, g_fmtCell.Get(), tr.left, tr.top, tr.right, tr.bottom, nameCol, cAccent, a);
     } else {
-        Color(cText, a);
+        Color(nameCol, a);
         Text(name, shownLen, g_fmtCell.Get(), tr.left, tr.top, tr.right, tr.bottom);
     }
+    float xe;
+    DrawTagDots(full, cell.left + 10, y + 12, a, xe);  // the tag dots, in the cell's corner
 }
 
 void DrawList(int pane, float H) {
@@ -2748,16 +2827,18 @@ void DrawList(int pane, float H) {
                 Color(cText, a);
                 Text(DriveLabel(name[0]), g_fmtName.Get(), textX, y, c.nameR, y + kRow);
             } else if (!t.filter.empty()) {
-                TextHighlighted(std::wstring(name, shownLen), filterPat, g_fmtName.Get(), textX, y, c.nameR, y + kRow, cText, cAccent, a);
+                TextHighlighted(std::wstring(name, shownLen), filterPat, g_fmtName.Get(), textX, y, c.nameR, y + kRow, NameColorFor(name, e.nameLen, e.isDir(), cText), cAccent, a);
             } else {
-                Color(cText, a);
+                Color(NameColorFor(name, e.nameLen, e.isDir(), cText), a);
                 Text(name, shownLen, g_fmtName.Get(), textX, y, c.nameR, y + kRow);
             }
+            float tagEnd = 0;  // the tag labels, right after the name, as far as the column goes
+            if (!drives && TagsOf(full)) DrawTagLabels(full, textX + MeasureW(std::wstring(name, shownLen), g_fmtName.Get()) + 8, y + kRow / 2, c.nameR - 3, a, tagEnd);
             // in the flat list (filter or search), where each thing is
             if (flat && row.depth > 0 && row.l->path.size() > t.path.size()) {
                 std::wstring rel = row.l->path.substr(t.path.size());
                 while (!rel.empty() && rel[0] == L'\\') rel.erase(0, 1);
-                float w = MeasureW(std::wstring(name, shownLen), g_fmtName.Get());
+                float w = std::max(MeasureW(std::wstring(name, shownLen), g_fmtName.Get()), tagEnd - textX);
                 if (textX + w + 14 < nameEnd - 30) {
                     Color(selected && focused ? 0x9FB3D9 : cFaint, a);
                     Text(rel, g_fmtName.Get(), textX + w + 14, y, nameEnd, y + kRow);
@@ -3189,6 +3270,7 @@ void CommitRename(bool follow = true) {
     UndoRecordRename(Join(dir, oldName.c_str()), Join(dir, newName.c_str()));
     if (follow) t.pendingSelect = Key(dir) == Key(t.path) ? newName : Join(dir, newName.c_str());
     TreeFollow(t, Join(dir, oldName.c_str()), Join(dir, newName.c_str()));
+    TagsFollow(Join(dir, oldName.c_str()), Join(dir, newName.c_str()));
     Enqueue(dir, JobKind::Revalidate);
 }
 
@@ -3394,7 +3476,7 @@ constexpr UINT_PTR kTimerConfig = 4;
 // Signature (date and size) of the files the user edits; session.txt and recents.txt don't count.
 std::wstring ConfigSignature() {
     std::wstring sig;
-    for (const wchar_t* n : {L"config.txt", L"favorites.txt", L"menu.txt", L"views.txt"}) {
+    for (const wchar_t* n : {L"config.txt", L"favorites.txt", L"menu.txt", L"views.txt", L"tags.txt"}) {
         WIN32_FILE_ATTRIBUTE_DATA d{};
         if (GetFileAttributesExW((ConfigDir() + L"\\" + n).c_str(), GetFileExInfoStandard, &d))
             sig += std::to_wstring(d.ftLastWriteTime.dwLowDateTime) + L"." + std::to_wstring(d.nFileSizeLow) + L";";
@@ -3420,6 +3502,7 @@ void ReloadConfig() {
     HeatRefresh();
     LoadMenuCfg();
     LoadViews();
+    LoadTags();
     SyncGlobalSort();
     CreateFormats();
     UpdateEditFont();
@@ -3652,6 +3735,7 @@ void RunCommand(Cmd cmd) {
         case Cmd::ZoomReset: SetUiZoom(12); break;
         case Cmd::RowsTaller: SetRowHeight(kRow + 1); break;
         case Cmd::RowsShorter: SetRowHeight(kRow - 1); break;
+        case Cmd::Tag: TagPaletteOpen(); break;
         case Cmd::ViewList: SetLayout(0); break;
         case Cmd::ViewGrid: if (!LayoutOf(t)) SetLayout(144); break;
         case Cmd::ViewBigger: StepLayout(1); break;
@@ -4779,6 +4863,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdLine, int show) {
     LoadConfig();
     CreateFormats();
     LoadFavs();
+    LoadTags();
     g_configSig = ConfigSignature();
 
     BootMark(L"config");
