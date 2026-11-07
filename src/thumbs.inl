@@ -130,7 +130,7 @@ bool ThumbProduce(IWICImagingFactory* wic, const std::wstring& path, int size, i
     const std::wstring file = ThumbFile(path, size, mtime);
     if (mtime && ThumbLoadPng(wic, file, out, w, h)) {
         // the icon ones are marked by a trailing "i" file next to them: cheap and keeps one format
-        isIcon = PathExists(file + L".i");
+        isIcon = GetFileAttributesW((file + L".i").c_str()) != INVALID_FILE_ATTRIBUTES;
         return true;
     }
     ComPtr<IShellItemImageFactory> f;

@@ -23,6 +23,7 @@ struct Step {
 struct View {
     std::vector<Step> steps;
     bool sub = false;   // also applies to subfolders (folder views only)
+    int layout = 0;     // 0: list; otherwise a grid of thumbnails with cells of this size (DIPs)
     std::wstring path;  // folder (empty = all)
 };
 
@@ -149,12 +150,15 @@ void SaveViews() {
         L"#   collapse = all|today|first   (how groups start: all collapsed, all except today, all except the first)\n"
         L"#   show = ... / hide = ...  with: name contains X, extension pdf docx, newer N (days),\n"
         L"#            older N, larger N (MB), smaller N, folders, files, hidden\n"
+        L"#   layout = list | grid 144   (a grid of thumbnails, with the cell size; Ctrl+Alt+wheel changes it)\n"
         L"# [all] applies to all folders; [C:\\path] only to that one (subfolders = yes: also inside it).\n\n";
     s += L"[all]\n";
+    if (g_viewAll.layout) s += L"layout = grid " + std::to_wstring(g_viewAll.layout) + L"\n";
     for (const Step& st : g_viewAll.steps) s += StepLine(st) + L"\n";
     for (auto& [k, v] : g_views) {
         s += L"\n[" + v.path + L"]\n";
         if (v.sub) s += L"subfolders = yes\n";
+        if (v.layout) s += L"layout = grid " + std::to_wstring(v.layout) + L"\n";
         for (const Step& st : v.steps) s += StepLine(st) + L"\n";
     }
     std::ofstream out(f, std::ios::binary);
@@ -195,6 +199,12 @@ bool LoadViews() {
         std::wstring key = Lower(Trim(line.substr(0, eq))), val = Trim(line.substr(eq + 1));
         if (key == L"subfolders") {
             cur->sub = ParseBool(val);
+            continue;
+        }
+        if (key == L"layout") {
+            const std::wstring v = Lower(val);
+            cur->layout = v.rfind(L"grid", 0) == 0 ? std::clamp(_wtoi(v.c_str() + 4), 48, 400) : 0;
+            if (v.rfind(L"grid", 0) == 0 && cur->layout == 48 && _wtoi(v.c_str() + 4) == 0) cur->layout = 144;  // "grid" alone
             continue;
         }
         Step s;

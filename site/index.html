@@ -127,6 +127,7 @@
 <tr><td><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd></td><td>reopen the last closed tab, in its place and with its history</td></tr>
 <tr><td><kbd>Alt</kbd>+<kbd>1</kbd> … <kbd>Alt</kbd>+<kbd>9</kbd></td><td>go to that tab (9: the last one). <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>W</kbd> closes the others</td></tr>
 <tr><td><kbd>Ctrl</kbd>+wheel / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+wheel</td><td>over the tab bar: switch tab / move the active tab</td></tr>
+<tr><td><kbd>Ctrl</kbd>+<kbd>Alt</kbd>+wheel</td><td><strong>view</strong>: up, a grid of thumbnails with bigger and bigger cells; down, back to the list. Per folder. See <a href="#views">views</a></td></tr>
 <tr><td><kbd>Ctrl</kbd>+<kbd>S</kbd></td><td><strong>split view</strong>: two panes, each with its own tabs. <kbd>Tab</kbd> switches pane; drag the divider (double click: half and half)</td></tr>
 <tr><td><kbd>F5</kbd> / <kbd>F6</kbd></td><td>in split view: copy / move the selection to the other pane's folder</td></tr>
 <tr><td>drag the tab bar</td><td>move the window (double click maximizes; right click: system menu)</td></tr>
@@ -225,6 +226,8 @@ sort = name asc
 group = day
 folders = first
 hide = extension tmp part crdownload</code></pre>
+<h3>List or grid</h3>
+<p>Each folder can be a <strong>grid of thumbnails</strong> instead of a list. <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+wheel up makes the cells bigger (80 to 256 px), down goes back to the list; the palette has the same as commands. In the grid, the arrows walk the cells, and everything else works as in the list: typing filters, box select, drag and drop, the preview. The thumbnails come from the Shell (photos, videos, PDF, Office, and the icon for the rest) and are cached on disk, so a folder you have seen opens with its pictures already there. It is saved per folder in <code>views.txt</code> as <code>layout = grid 144</code>.</p>
 <p>Quick toggles in the palette (<kbd>Ctrl</kbd>+<kbd>K</kbd>): show or hide folders, files, hidden files (<kbd>Ctrl</kbd>+<kbd>H</kbd>) and extensions; group this folder by day or type; collapse or expand all groups; sort by type; more or less space between rows. Any of them can get a key with a click.</p>
 
 <h2 id="commands">Custom commands</h2>
