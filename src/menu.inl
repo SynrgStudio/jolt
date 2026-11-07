@@ -450,7 +450,26 @@ void RegisterPopupClass(HINSTANCE inst) {
 }
 
 // ================================================================ Shell context menu
-constexpr UINT kCmdFirst = 1, kCmdLast = 0x6FFF, kCmdFav = 0x7000;
+constexpr UINT kCmdFirst = 1, kCmdLast = 0x6FFF, kCmdFav = 0x7000, kCmdCustom = 0x7100;  // kCmdCustom + index: the user's commands
+void RunCustomCommand(int i);  // ops.inl
+
+// The user's commands ([commands]) at the end of a Shell menu, so the editor can hide or move them like the rest.
+std::vector<MenuItem> WithCustomCommands(std::vector<MenuItem> items) {
+    for (size_t i = 0; i < g_cfg.custom.size(); ++i) {
+        if (i == 0 && !items.empty()) {
+            MenuItem s;
+            s.sep = true;
+            s.key = L"---";
+            items.push_back(s);
+        }
+        MenuItem it;
+        it.text = g_cfg.custom[i].name;
+        it.key = L"jolt:" + Lower(g_cfg.custom[i].name);
+        it.id = kCmdCustom + static_cast<UINT>(i);
+        items.push_back(it);
+    }
+    return items;
+}
 
 struct ShellMenu {
     ComPtr<IShellFolder> psf;
@@ -897,7 +916,7 @@ void OpenShellMenu(POINT screenPt, int row) {
     }
     g_shellMenu = CreateShellMenu(folder, names, KeyDown(VK_SHIFT));
     if (!g_shellMenu) return;
-    std::vector<MenuItem> items = ApplyMenuCfg(ctx, ReadMenu(*g_shellMenu, g_shellMenu->hmenu), false);
+    std::vector<MenuItem> items = ApplyMenuCfg(ctx, WithCustomCommands(ReadMenu(*g_shellMenu, g_shellMenu->hmenu)), false);
     std::wstring favPath;  // on a single folder, it can be added to favorites without entering it
     if (ctx == L"folder" && SelCount(t) == 1) {
         favPath = RowPath(t, t.sel);
@@ -913,6 +932,10 @@ void OpenShellMenu(POINT screenPt, int row) {
         [screenPt, favPath](UINT id) {
             if (id == kCmdFav) {
                 FavAdd(favPath);
+                return;
+            }
+            if (id >= kCmdCustom) {
+                RunCustomCommand(static_cast<int>(id - kCmdCustom));
                 return;
             }
             if (!g_shellMenu) return;
@@ -1056,7 +1079,7 @@ void EditorLoadCtx(EditorCtx& c) {
         c.sample = L"";
         return;
     }
-    c.items = ApplyMenuCfg(c.ctx, ReadMenu(*c.sm, c.sm->hmenu), true, &c.visible);
+    c.items = ApplyMenuCfg(c.ctx, WithCustomCommands(ReadMenu(*c.sm, c.sm->hmenu)), true, &c.visible);
 }
 
 float EditorListH() {

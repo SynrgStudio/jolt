@@ -382,6 +382,60 @@ void OpenTerminal() {
     }
 }
 
+// One of the user's commands ([commands] in config.txt): the first word is the program, the rest its
+// arguments, with {file} {files} {dir} {name} filled in from the cursor and the selection.
+void RunCustomCommand(int i) {
+    if (i < 0 || i >= static_cast<int>(g_cfg.custom.size())) return;
+    const Config::Custom& c = g_cfg.custom[i];
+    Tab& t = T();
+    const bool onItem = t.sel >= 0 && t.sel < Count() && !IsHeader(t, t.sel) && !RowDir(t, t.sel).empty();
+    const std::wstring dir = onItem ? RowDir(t, t.sel) : t.path;
+    const std::wstring file = onItem ? RowPath(t, t.sel) : dir;
+    std::wstring files;
+    for (const std::wstring& f : SelectedFullPaths(t)) files += (files.empty() ? L"\"" : L" \"") + f + L"\"";
+    if (files.empty()) files = L"\"" + file + L"\"";
+    const std::wstring& line = c.line;
+    // program: quoted, or up to the first space
+    std::wstring program, args;
+    if (!line.empty() && line[0] == L'"') {
+        size_t q = line.find(L'"', 1);
+        program = line.substr(1, q == std::wstring::npos ? std::wstring::npos : q - 1);
+        if (q != std::wstring::npos) args = Trim(line.substr(q + 1));
+    } else {
+        size_t sp = line.find(L' ');
+        program = line.substr(0, sp);
+        if (sp != std::wstring::npos) args = Trim(line.substr(sp + 1));
+    }
+    if (dir.empty() && args.find(L'{') != std::wstring::npos) {
+        S.message = L"Go into a folder to run " + c.name;
+        Invalidate();
+        return;
+    }
+    auto fill = [&](const wchar_t* tag, const std::wstring& value) {
+        for (size_t p = args.find(tag); p != std::wstring::npos; p = args.find(tag, p + value.size())) args.replace(p, wcslen(tag), value);
+    };
+    fill(L"{files}", files);
+    fill(L"{file}", file);
+    fill(L"{dir}", dir);
+    fill(L"{name}", onItem ? RowName(t, t.sel) : LeafOf(dir));
+    if (g_test) {  // tests don't start programs
+        S.message = L"Run: " + program + (args.empty() ? L"" : L" " + args) + L" | in " + dir;
+        Invalidate();
+        return;
+    }
+    SHELLEXECUTEINFOW si{sizeof(si)};
+    si.fMask = SEE_MASK_FLAG_NO_UI;
+    si.hwnd = g_hwnd;
+    si.lpFile = program.c_str();
+    si.lpParameters = args.empty() ? nullptr : args.c_str();
+    si.lpDirectory = dir.empty() ? nullptr : dir.c_str();
+    si.nShow = SW_SHOWNORMAL;
+    if (!ShellExecuteExW(&si)) {
+        S.message = L"Couldn't run " + c.name + L": " + ErrorText(GetLastError());
+        Invalidate();
+    }
+}
+
 // File Explorer in the current folder, with the highlighted item already selected.
 void OpenInExplorer() {
     Tab& t = T();

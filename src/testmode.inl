@@ -642,6 +642,11 @@ void TestRunStep() {
                     RunCommand(c.cmd);
                     found = true;
                 }
+            for (size_t i = 0; i < g_cfg.custom.size() && !found; ++i)
+                if (Lower(s.arg) == Lower(g_cfg.custom[i].name)) {
+                    RunCommand(CustomCmd(i));
+                    found = true;
+                }
             if (!found) TestLog(L"unknown command: " + s.arg);
         } else if (s.cmd == L"capture") {
             TestCapture(s.arg.empty() ? L"capture.png" : s.arg);

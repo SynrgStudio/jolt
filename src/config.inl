@@ -10,8 +10,12 @@ enum class Cmd {
     Terminal, OpenExplorer, RealLocation, CollapseGroups, ExpandGroups, GroupByDay, GroupByType, NoGroups,
     SortByType, ZoomIn, ZoomOut, ZoomReset, RowsTaller, RowsShorter, EmptyRecycleBin,
     Undo, Redo,
-    Install, Quit
+    Install, Quit,
+    CustomFirst = 1000  // + index into g_cfg.custom: the user's own commands
 };
+inline bool IsCustom(Cmd c) { return static_cast<int>(c) >= static_cast<int>(Cmd::CustomFirst); }
+inline int CustomIndex(Cmd c) { return static_cast<int>(c) - static_cast<int>(Cmd::CustomFirst); }
+inline Cmd CustomCmd(size_t i) { return static_cast<Cmd>(static_cast<int>(Cmd::CustomFirst) + static_cast<int>(i)); }
 enum : UINT { ModCtrl = 1, ModShift = 2, ModAlt = 4 };
 
 struct KeyBind {
@@ -30,6 +34,10 @@ struct Config {
     std::wstring globalKey = L"Win+J";
     bool colDate = true, colSize = true;
     std::vector<KeyBind> keys;
+    struct Custom {
+        std::wstring name, line;  // "Open in VS Code", "code \"{dir}\""
+    };
+    std::vector<Custom> custom;  // [commands], in file order
 } g_cfg;
 
 struct CmdDef {
@@ -272,6 +280,15 @@ void WriteDefaultConfig() {
         "# The Up/Down arrows, PageUp/PageDown, Home/End (with Shift they extend the selection), Esc,\n"
         "# Ctrl+Space, Ctrl+1..9 (favorites) and Alt+1..9 (tabs) are fixed.\n";
     for (const CmdDef& c : kCommands) s += Utf8(std::wstring(c.name) + L" = " + c.defaults + L"    # " + c.help + L"\n");
+    s +=
+        "\n[commands]\n"
+        "# Your own commands: name = program and arguments. They appear in Ctrl+K and in the right-click menu,\n"
+        "# and get a shortcut by their name in [shortcuts] (open in vs code = Ctrl+Alt+V).\n"
+        "# {file} the highlighted item, {files} everything selected (quoted), {dir} the folder, {name} the item's name.\n"
+        "# The program runs in the folder; a name alone is found in PATH.\n"
+        "# Open in VS Code = code \"{dir}\"\n"
+        "# Edit with Notepad = notepad \"{file}\"\n"
+        "# PowerShell here = wt -d \"{dir}\" powershell\n";
     out << s;
 }
 
@@ -302,6 +319,18 @@ void LoadConfig() {
     }
     std::vector<KeyBind> userKeys;
     bool anyKeys = false;
+    std::vector<std::pair<std::wstring, std::wstring>> customKeys;  // [shortcuts] lines naming a custom command
+    // the configured command replaces its default keys; the user's keys win over any other default
+    auto bindUser = [&](Cmd cmd, const std::wstring& val) {
+        anyKeys = true;
+        std::vector<KeyBind> saved = std::move(g_cfg.keys);
+        g_cfg.keys.clear();
+        AddBindings(cmd, val);
+        userKeys.insert(userKeys.end(), g_cfg.keys.begin(), g_cfg.keys.end());
+        g_cfg.keys = std::move(saved);
+        g_cfg.keys.erase(std::remove_if(g_cfg.keys.begin(), g_cfg.keys.end(), [&](const KeyBind& k) { return k.cmd == cmd; }),
+                         g_cfg.keys.end());
+    };
     std::string raw((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     if (raw.size() >= 3 && static_cast<unsigned char>(raw[0]) == 0xEF) raw.erase(0, 3);
     std::wstring text = Wide(raw), section;
@@ -320,8 +349,10 @@ void LoadConfig() {
         }
         size_t eq = line.find(L'=');
         if (eq == std::wstring::npos) continue;
-        std::wstring key = Lower(Trim(line.substr(0, eq))), val = Trim(line.substr(eq + 1));
-        if (section == L"general") {
+        std::wstring rawKey = Trim(line.substr(0, eq)), key = Lower(rawKey), val = Trim(line.substr(eq + 1));
+        if (section == L"commands") {
+            if (!rawKey.empty() && !val.empty()) g_cfg.custom.push_back({rawKey, val});
+        } else if (section == L"general") {
             if (key == L"font" && !val.empty()) g_cfg.font = val;
             else if (key == L"font_size") g_cfg.fontSize = std::clamp(static_cast<float>(_wtof(val.c_str())), 8.f, 32.f);
             else if (key == L"row_height") kRow = std::clamp(static_cast<float>(_wtof(val.c_str())), 16.f, 60.f);
@@ -355,21 +386,18 @@ void LoadConfig() {
                     if (h.size() == 6) *c.var = static_cast<UINT32>(wcstoul(h.c_str(), nullptr, 16));
                 }
         } else if (section == L"shortcuts") {
+            bool builtin = false;
             for (const CmdDef& c : kCommands)
                 if (key == c.name) {
-                    anyKeys = true;
-                    std::vector<KeyBind> saved = std::move(g_cfg.keys);
-                    g_cfg.keys.clear();
-                    AddBindings(c.cmd, val);
-                    userKeys.insert(userKeys.end(), g_cfg.keys.begin(), g_cfg.keys.end());
-                    g_cfg.keys = std::move(saved);
-                    // the configured command replaces its default keys
-                    g_cfg.keys.erase(std::remove_if(g_cfg.keys.begin(), g_cfg.keys.end(),
-                                                    [&](const KeyBind& k) { return k.cmd == c.cmd; }),
-                                     g_cfg.keys.end());
+                    builtin = true;
+                    bindUser(c.cmd, val);
                 }
+            if (!builtin) customKeys.push_back({key, val});
         }
     }
+    for (const auto& [key, val] : customKeys)
+        for (size_t i = 0; i < g_cfg.custom.size(); ++i)
+            if (Lower(g_cfg.custom[i].name) == key) bindUser(CustomCmd(i), val);
     if (anyKeys) {
         // the user's keys take priority over any other default binding
         for (const KeyBind& u : userKeys)
@@ -425,7 +453,7 @@ void ConfigWriteShortcut(const std::wstring& cmdName, const std::wstring& specs,
         if (eq == std::wstring::npos) continue;
         std::wstring key = Lower(Trim(tb.substr(0, eq))), val = Trim(tb.substr(eq + 1));
         std::wstring pad = comment.empty() ? L"" : L"    " + comment;
-        if (key == cmdName) {
+        if (key == Lower(cmdName)) {
             lines[i] = cmdName + L" = " + specs + pad;
             written = true;
             continue;

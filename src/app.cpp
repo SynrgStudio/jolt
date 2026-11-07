@@ -3319,6 +3319,10 @@ void RevalidateVisible() {
 // Runs a command from the shortcut table.
 void RunCommand(Cmd cmd) {
     Tab& t = T();
+    if (IsCustom(cmd)) {
+        RunCustomCommand(CustomIndex(cmd));
+        return;
+    }
     switch (cmd) {
         case Cmd::None: break;
         case Cmd::Up:

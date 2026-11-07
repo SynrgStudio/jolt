@@ -202,6 +202,19 @@ save** (so do `favorites.txt` and `menu.txt`). Sections:
 - `[shortcuts]`: one command per line with its keys (`up = Backspace, Left, Alt+Up`). By default, as
   in a commander: **→ enters the highlighted folder and ← goes up one level**. The up/down arrows, PageUp/PageDown,
   Home/End, Esc, Ctrl+Space, Ctrl+1..9 and Alt+1..9 are fixed. If you delete an option, it returns to its default value.
+- `[commands]`: **your own commands**, `name = program and arguments`, with `{file}` (the highlighted item),
+  `{files}` (everything selected, quoted), `{dir}` (the folder) and `{name}`. They show up in Ctrl+K and at the end
+  of the right-click menu (where the menu editor can hide or move them), and take a shortcut in `[shortcuts]` by
+  their name, or with a click on them in the palette. The program runs in the folder; a bare name is found in PATH.
+  ```
+  [commands]
+  Open in VS Code = code "{dir}"
+  Edit with Notepad = notepad "{file}"
+  PowerShell here = wt -d "{dir}" powershell
+
+  [shortcuts]
+  open in vs code = Ctrl+Alt+V
+  ```
 
 ## Views: sort, group and filter (per folder)
 
