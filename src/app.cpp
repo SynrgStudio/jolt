@@ -14,6 +14,9 @@
 #include <shlwapi.h>
 #include <shlobj.h>
 #include <sddl.h>
+#include <lm.h>
+#include <winnetwk.h>
+#include <map>
 #include <commctrl.h>
 #include <commoncontrols.h>
 #include <dwmapi.h>
@@ -41,6 +44,8 @@
 #include "version.h"
 
 #pragma comment(linker, "\"/manifestdependency:type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'\"")
+#pragma comment(lib, "netapi32.lib")
+#pragma comment(lib, "mpr.lib")
 #pragma comment(lib, "oleaut32.lib")  // UI Automation for test mode (SysFreeString)
 
 using Microsoft::WRL::ComPtr;
@@ -128,11 +133,23 @@ bool FoldersFirstFor(SortBy by) {
 
 // Folders that aren't on any disk. Their paths are Windows' own names for them.
 const std::wstring kBinPath = L"::{645FF040-5081-101B-9F08-00AA002F954E}";
+const std::wstring kNetPath = L"::{F02C1A0D-BE21-4350-88B0-7367FC96EF3C}";
 inline bool IsVirtual(const std::wstring& p) { return p.size() > 2 && p[0] == L':' && p[1] == L':'; }
 inline bool IsBin(const std::wstring& p) { return IsVirtual(p) && _wcsicmp(p.c_str(), kBinPath.c_str()) == 0; }
-inline std::wstring VirtualTitle(const std::wstring& p) { return IsBin(p) ? L"Recycle Bin" : L""; }
+inline bool IsNet(const std::wstring& p) { return IsVirtual(p) && _wcsicmp(p.c_str(), kNetPath.c_str()) == 0; }
+inline std::wstring VirtualTitle(const std::wstring& p) { return IsBin(p) ? L"Recycle Bin" : IsNet(p) ? L"Network" : L""; }
+// \\server, with no share after it, and \\server\share
+inline bool IsServerPath(const std::wstring& p) { return p.size() > 2 && p[0] == L'\\' && p[1] == L'\\' && p.find(L'\\', 2) == std::wstring::npos; }
+inline bool IsSharePath(const std::wstring& p) {
+    if (p.size() < 5 || p[0] != L'\\' || p[1] != L'\\') return false;
+    const size_t a = p.find(L'\\', 2);
+    return a != std::wstring::npos && a + 1 < p.size() && p.find(L'\\', a + 1) == std::wstring::npos;
+}
+inline bool IsOnNetwork(const std::wstring& p) { return IsNet(p) || (p.size() > 2 && p[0] == L'\\' && p[1] == L'\\'); }
 std::wstring VirtualJoin(const std::wstring& dir, const wchar_t* name);  // bin.inl
 void BinEnumerate(Listing& out);
+void NetEnumerateComputers(Listing& out);  // net.inl
+void NetEnumerateShares(const std::wstring& server, Listing& out);
 
 // ---------------------------------------------------------------- background work
 enum class JobKind { Load, Revalidate, Prefetch };
@@ -153,6 +170,24 @@ std::condition_variable g_qcv;
 std::deque<std::shared_ptr<Job>> g_high, g_low;
 std::atomic<uint64_t> g_navGen{0};
 
+void RunJob(const std::shared_ptr<Job>& j) {
+    auto l = std::make_shared<Listing>();
+    double t0 = NowMs();
+    if (IsBin(j->path)) BinEnumerate(*l);
+    else if (IsNet(j->path)) NetEnumerateComputers(*l);
+    else if (IsServerPath(j->path)) NetEnumerateShares(j->path, *l);
+    else EnumerateDir(j->path, EnumMethod::Nt, *l);
+    double t1 = NowMs();
+    SortBy by = static_cast<SortBy>(g_sortBy.load());
+    SortListing(*l, by, g_sortAsc.load(), FoldersFirstFor(by));
+    j->enumMs = t1 - t0;
+    j->sortMs = NowMs() - t1;
+    j->result = std::move(l);
+    SetEvent(j->done);
+    auto* hold = new std::shared_ptr<Job>(j);
+    if (!PostMessageW(g_hwnd, WM_APP_RESULT, 0, reinterpret_cast<LPARAM>(hold))) delete hold;
+}
+
 void WorkerMain() {
     for (;;) {
         std::shared_ptr<Job> j;
@@ -164,23 +199,13 @@ void WorkerMain() {
             q.pop_front();
         }
         // An old prefetch is useless if the user has moved elsewhere.
-        bool stale = j->kind == JobKind::Prefetch && j->gen != g_navGen.load();
-        if (!stale) {
-            auto l = std::make_shared<Listing>();
-            double t0 = NowMs();
-            if (IsBin(j->path)) BinEnumerate(*l);
-            else EnumerateDir(j->path, EnumMethod::Nt, *l);
-            double t1 = NowMs();
-            SortBy by = static_cast<SortBy>(g_sortBy.load());
-            SortListing(*l, by, g_sortAsc.load(), FoldersFirstFor(by));
-            j->enumMs = t1 - t0;
-            j->sortMs = NowMs() - t1;
-            j->result = std::move(l);
+        if (j->kind == JobKind::Prefetch && j->gen != g_navGen.load()) {
+            SetEvent(j->done);
+            continue;
         }
-        SetEvent(j->done);
-        if (stale) continue;
-        auto* hold = new std::shared_ptr<Job>(j);
-        if (!PostMessageW(g_hwnd, WM_APP_RESULT, 0, reinterpret_cast<LPARAM>(hold))) delete hold;
+        // a server that is off can take half a minute to say so: everything else keeps going
+        if (IsOnNetwork(j->path)) std::thread(RunJob, j).detach();
+        else RunJob(j);
     }
 }
 
@@ -270,7 +295,8 @@ std::wstring ParentOf(const std::wstring& p) {
     if (p.empty() || IsDriveRoot(p)) return L"";
     size_t pos = p.find_last_of(L'\\');
     if (pos == std::wstring::npos) return L"";
-    if (p.rfind(L"\\\\", 0) == 0 && p.find(L'\\', 2) == pos) return L"";  // \\server\share
+    if (IsServerPath(p)) return kNetPath;
+    if (IsSharePath(p)) return p.substr(0, pos);
     std::wstring par = p.substr(0, pos);
     if (par.size() == 2 && par[1] == L':') par += L'\\';
     return par;
@@ -550,7 +576,7 @@ int g_capHover = 0, g_capPressed = 0;
 
 
 void AddRecent(const std::wstring& p) {
-    if (p.empty()) return;
+    if (p.empty() || IsVirtual(p)) return;  // those are always in the sidebar
     std::wstring k = Key(p);
     g_recents.erase(std::remove_if(g_recents.begin(), g_recents.end(), [&](const std::wstring& r) { return Key(r) == k; }),
                     g_recents.end());
@@ -560,6 +586,7 @@ void AddRecent(const std::wstring& p) {
 
 #include "heat.inl"
 #include "bin.inl"
+#include "net.inl"
 
 // --- rows
 int RowCount(const Tab& t) { return static_cast<int>(t.rows.size()); }
@@ -1212,6 +1239,7 @@ void SetWatchAll() {
                 for (const std::wstring& dir : BinDirs()) v.push_back({dir, false});
             continue;
         }
+        if (IsServerPath(t.path)) continue;
         bool dup = false;
         for (auto& w : v) dup |= Key(w.first) == Key(t.path);
         if (!dup) v.push_back({t.path, !t.expanded.empty()});
@@ -1996,6 +2024,9 @@ void IconThreadMain() {
                     idx = sfi.iIcon;
                 CoTaskMemFree(pidl);
             }
+        } else if (IsServerPath(p) || IsSharePath(p)) {  // asking the server could take half a minute, and the icons wait in line
+            SHSTOCKICONINFO sii{sizeof(sii)};
+            if (SUCCEEDED(SHGetStockIconInfo(IsServerPath(p) ? SIID_SERVER : SIID_SERVERSHARE, SHGSI_SYSICONINDEX, &sii))) idx = sii.iSysImageIndex;
         } else if (IsVirtual(p)) {
             PIDLIST_ABSOLUTE pidl = nullptr;
             if (SUCCEEDED(SHParseDisplayName(p.c_str(), nullptr, &pidl, 0, nullptr))) {
@@ -2518,7 +2549,11 @@ void DrawToolbar(int pane) {
         std::wstring acc;
         size_t start = 0;
         bool unc = t.path.rfind(L"\\\\", 0) == 0;
-        if (unc) start = 2;
+        if (unc) {
+            start = 2;
+            const std::wstring title = VirtualTitle(kNetPath);
+            crumbs.push_back({title, kNetPath, MeasureW(title, g_fmtCrumb.Get()) + 18});
+        }
         for (;;) {
             size_t pos = t.path.find(L'\\', start);
             std::wstring seg = t.path.substr(start, pos == std::wstring::npos ? std::wstring::npos : pos - start);
@@ -2698,6 +2733,7 @@ void DrawSidebar(float H) {
         if (hoverDrive) SetTimer(g_hwnd, kTimerDisk, kDiskTickMs, nullptr);
         else KillTimer(g_hwnd, kTimerDisk);
     }
+    item(VirtualTitle(kNetPath), kNetPath, false, -1);
     item(VirtualTitle(kBinPath), kBinPath, false, -1);
     g_sideHotFirst = static_cast<int>(g_sidePaths.size());
     const float bottom = H - kStatus - 6;
@@ -2938,7 +2974,7 @@ void DrawList(int pane, float H) {
         DrawFolderError(t, L, R, listTop);
     } else if (t.list && n == 0) {
         Color(cDim);
-        Text(t.recursive && !t.recDone ? L"Searching…" : !t.filter.empty() ? L"No matches" : L"Empty folder",
+        Text(t.recursive && !t.recDone ? L"Searching…" : !t.filter.empty() ? L"No matches" : IsServerPath(t.path) ? L"No shared folders" : L"Empty folder",
              g_fmtCenter.Get(), L, listTop, R, listTop + 80);
     } else if (t.list) {
         const bool focused = (g_test ? g_testActive && !g_renaming && !g_editing : GetFocus() == g_hwnd) && pane == g_act;
@@ -3151,6 +3187,7 @@ void DrawStatus(int pane, float H) {
             return sum;
         };
         wchar_t buf[64];
+        if (IsNet(t.path)) left += g_netLooking ? L"   ·   looking for computers…" : L"   ·   Ctrl+L and \\\\name goes straight to one";
         if (!t.recursive && !t.path.empty()) {
             if (uint64_t total = bytesOf(false)) {
                 FormatSize(total, buf, 64);
@@ -3353,6 +3390,10 @@ void CommitPathEdit() {
         Navigate(T(), kBinPath, true);
         return;
     }
+    if (_wcsicmp(t.c_str(), L"Network") == 0 || _wcsicmp(t.c_str(), L"shell:NetworkPlacesFolder") == 0 || IsNet(t)) {
+        Navigate(T(), kNetPath, true);
+        return;
+    }
     wchar_t expanded[4096];
     ExpandEnvironmentStringsW(t.c_str(), expanded, 4096);
     t = expanded;
@@ -3360,6 +3401,10 @@ void CommitPathEdit() {
     wchar_t full[4096];
     if (!GetFullPathNameW(t.c_str(), 4096, full, nullptr)) return;
     std::wstring p = Normalize(full);
+    if (p.rfind(L"\\\\", 0) == 0) {  // asking here would freeze the window if the server doesn't answer: the folder's page will say
+        Navigate(T(), p, true);
+        return;
+    }
     DWORD a = GetFileAttributesW(ToExtendedPath(p).c_str());
     if (a == INVALID_FILE_ATTRIBUTES) {
         S.message = L"Not found: " + p;
@@ -3856,13 +3901,13 @@ void RevalidateVisible() {
 // Runs a command from the shortcut table.
 void RunCommand(Cmd cmd) {
     Tab& t = T();
-    if (IsBin(t.path)) {  // what's in there isn't files to work with until it comes back
-        if (cmd == Cmd::Delete) {
+    if (IsVirtual(t.path)) {  // what's in there isn't files to work with
+        if (IsBin(t.path) && cmd == Cmd::Delete) {
             BinDeleteSelection();
             return;
         }
-        if (BinRefuses(cmd)) {
-            S.message = L"In the Recycle Bin: restore it first";
+        if (BinRefuses(cmd) || cmd == Cmd::Delete) {
+            S.message = IsBin(t.path) ? L"In the Recycle Bin: restore it first" : L"These are computers, not files";
             Invalidate();
             return;
         }
@@ -5072,6 +5117,7 @@ std::wstring ArgPath() {
             continue;
         }
         if (IsBin(a)) return kBinPath;
+        if (IsNet(a)) return kNetPath;
         if (a.rfind(L"--", 0) == 0 || a.rfind(L"::", 0) == 0 || a.rfind(L"/select,", 0) == 0) continue;  // "::{...}": virtual shell folder, no path
         while (!a.empty() && a.back() == L'"') a.pop_back();
         if (a.size() == 2 && a[1] == L':') a += L'\\';
@@ -5122,7 +5168,7 @@ std::wstring DefaultPath() {
 
 // Does it exist and is it a folder?
 bool FolderExists(const std::wstring& p) {
-    if (IsVirtual(p)) return true;
+    if (IsVirtual(p) || IsServerPath(p)) return true;
     DWORD a = GetFileAttributesW(ToExtendedPath(p).c_str());
     return a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_DIRECTORY);
 }
@@ -5249,6 +5295,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdLine, int show) {
 
     // previous session: window, sidebar, sort and tabs
     Session ses = LoadSession();
+    for (const std::wstring& r : g_recents) NetRememberPath(r);
     if (g_adminWindow) {  // the position and the sidebar, but only the folder it came for
         ses.tabs.clear();
         ses.split = false;

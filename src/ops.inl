@@ -442,6 +442,7 @@ void OpenInExplorer() {
     std::wstring args;
     if (t.path.empty()) args = L"shell:MyComputerFolder";
     if (IsBin(t.path)) args = L"shell:RecycleBinFolder";
+    if (IsNet(t.path)) args = L"shell:NetworkPlacesFolder";
     else if (t.sel >= 0 && t.sel < Count() && !IsHeader(t, t.sel)) args = L"/select,\"" + RowPath(t, t.sel) + L"\"";
     else args = L"\"" + t.path + L"\"";
     if (g_test) {
