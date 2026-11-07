@@ -451,6 +451,7 @@ struct Row {
     const Listing* l;
     int e;
     int depth;
+    uint8_t closeness = 0;  // a name close to what was typed: how close, in percent. 0: a real match
 };
 
 struct Tab {
@@ -464,6 +465,7 @@ struct Tab {
     int anchor = 0;              // start of the Shift range
     std::vector<uint8_t> selMask;  // parallel to rows
     std::wstring filter;           // fuzzy filter text ("" = no filter)
+    int nearRows = 0;              // how many of the rows are only close to it
     std::vector<Row> rows;         // visible rows: flattened tree and, with a filter, sorted by score
     // tree: expanded folders (key -> path) and their listings
     std::unordered_map<std::wstring, std::wstring> expanded;
@@ -757,7 +759,8 @@ bool GlobMatch(const wchar_t* name, size_t n, const std::wstring& pat) {
 }
 
 // Does the entry pass the typed filter? score and pos come from the fuzzy words.
-bool FilterPass(const FilterSpec& s, const Entry& e, const wchar_t* name, size_t n, int& score, std::vector<int>* pos) {
+bool FilterPass(const FilterSpec& s, const Entry& e, const wchar_t* name, size_t n, int& score, std::vector<int>* pos,
+                const NearPattern& close, int& percent) {
     if (s.kind == 1 && !e.isDir()) return false;
     if (s.kind == 2 && e.isDir()) return false;
     if (s.sized && (e.isDir() || e.size < s.minSize || e.size > s.maxSize)) return false;
@@ -777,13 +780,18 @@ bool FilterPass(const FilterSpec& s, const Entry& e, const wchar_t* name, size_t
         if (!GlobMatch(name, n, g)) return false;
     for (const std::wstring& g : s.notGlobs)
         if (GlobMatch(name, n, g)) return false;
-    return FuzzyMatch(name, n, s.fuzzy, score, pos);
+    const bool real = FuzzyMatch(name, n, s.fuzzy, score, pos);
+    if (real && score > kNearFloor / 2) return true;
+    percent = NearMatch(name, n, close);
+    if (percent) score = NearScore(percent, n);
+    return real || percent;
 }
 
 #include "tags.inl"
 
 void BuildRows(Tab& t) {
     t.rows.clear();
+    t.nearRows = 0;
     ++t.rowsGen;
     if (!t.list) return;
     if (t.recursive) {
@@ -803,6 +811,7 @@ void BuildRows(Tab& t) {
         return;
     }
     const FilterSpec spec = ParseFilter(t.filter);
+    const NearPattern close(spec.fuzzy, g_cfg.typoMin);
     if (&t == &T() && spec.content != g_grepTerm) {
         if (spec.content.empty()) GrepStop();
         else GrepStart(spec.content);
@@ -812,8 +821,8 @@ void BuildRows(Tab& t) {
         const Row& r = t.rows[i];
         if (r.e < 0) continue;
         const Entry& e = r.l->entries[r.e];
-        int sc;
-        if (!FilterPass(spec, e, r.l->name(e), e.nameLen, sc, nullptr)) continue;
+        int sc, percent = 0;
+        if (!FilterPass(spec, e, r.l->name(e), e.nameLen, sc, nullptr, close, percent)) continue;
         if (!spec.content.empty()) {  // only files whose text has it; the unread ones appear as they are read
             if (e.isDir() || r.l->path.empty()) continue;
             const std::wstring full = Join(r.l->path, r.l->name(e));
@@ -832,6 +841,8 @@ void BuildRows(Tab& t) {
             for (const std::wstring& tg : spec.notTags) ok &= !HasTag(full, tg);
             if (!ok) continue;
         }
+        t.rows[i].closeness = static_cast<uint8_t>(percent);
+        t.nearRows += percent != 0;
         hits.push_back({sc, static_cast<int>(i)});
     }
     std::stable_sort(hits.begin(), hits.end(), [](auto& a, auto& b) { return a.first > b.first; });
@@ -2772,7 +2783,7 @@ void DrawTagLabels(const std::wstring& full, float x, float cy, float xMax, floa
 
 // A grid cell: the thumbnail (the small icon until it arrives) and the name under it, two lines at most.
 void DrawGridCell(const Entry& e, const wchar_t* name, const std::wstring& full, const D2D1_RECT_F& cell, float y, const Geo& geo,
-                  float a, const std::wstring& filterPat) {
+                  float a, const std::wstring& filterPat, int closeness) {
     const float box = static_cast<float>(geo.size), boxL = cell.left + kCellPadX / 2, boxT = y + 6;
     bool drawn = false;
     if (Thumb* th = ThumbGet(full, geo.size, e.mtime)) {
@@ -2803,6 +2814,14 @@ void DrawGridCell(const Entry& e, const wchar_t* name, const std::wstring& full,
     }
     float xe;
     DrawTagDots(full, cell.left + 10, y + 12, a, xe);  // the tag dots, in the cell's corner
+    if (closeness) {  // over the picture, so it needs a background
+        const std::wstring pct = std::to_wstring(closeness) + L"%";
+        const float w = MeasureW(pct, g_fmtTag.Get()) + 10;
+        const D2D1_RECT_F r = D2D1::RectF(cell.right - w - 6, y + 8, cell.right - 6, y + 25);
+        Round(r, 4, 0x000000, 0.6f * a);
+        Color(0xC9C9D1, a);
+        Text(pct, g_fmtTag.Get(), r.left + 5, r.top, r.right, r.bottom);
+    }
 }
 
 void DrawList(int pane, float H) {
@@ -2881,7 +2900,7 @@ void DrawList(int pane, float H) {
                 g_rt->DrawRoundedRectangle(D2D1::RoundedRect(D2D1::RectF(rr.left + 0.5f, rr.top + 0.5f, rr.right - 0.5f, rr.bottom - 0.5f), 5, 5), g_brush.Get(), 1.5f);
             }
             if (geo.grid) {
-                DrawGridCell(e, name, full, cell, y, geo, a, filterPat);
+                DrawGridCell(e, name, full, cell, y, geo, a, filterPat, row.closeness);
                 continue;
             }
             const float indent = flat ? 0.f : row.depth * kIndent;
@@ -2920,6 +2939,12 @@ void DrawList(int pane, float H) {
             if (!drives && TagsOf(full)) DrawTagLabels(full, textX + MeasureW(std::wstring(name, shownLen), g_fmtName.Get()) + 8, y + kRow / 2, c.nameR - 3, a, tagEnd);
             // in the flat list (filter or search), where each thing is
             float afterName = std::max(textX + MeasureW(std::wstring(name, shownLen), g_fmtName.Get()), tagEnd) + 14;
+            if (row.closeness && afterName < nameEnd - 24) {  // not a real match: how close it is
+                const std::wstring pct = std::to_wstring(row.closeness) + L"%";
+                Color(selected && focused ? 0x9FB3D9 : cFaint, a);
+                Text(pct, g_fmtName.Get(), afterName - 6, y, nameEnd, y + kRow);
+                afterName += MeasureW(pct, g_fmtName.Get()) + 8;
+            }
             if (e.isDir() && !drives && !g_folderNotes.empty()) afterName = DrawFolderNote(full, afterName, nameEnd, y, a, selected && focused);
             if (flat && row.depth > 0 && row.l->path.size() > t.path.size()) {
                 std::wstring rel = row.l->path.substr(t.path.size());
@@ -3050,12 +3075,13 @@ void DrawStatus(int pane, float H) {
         Text(t.filter, g_fmtName.Get(), box.left + 26 + lw, box.top, box.right, box.bottom);
         if (activePane) Fill(D2D1::RectF(box.left + 26 + lw + tw + 1, box.top + 5, box.left + 26 + lw + tw + 2, box.bottom - 5), cText);
         lx = box.right + 10;
+        const std::wstring close = t.nearRows ? L", " + Thousands(t.nearRows) + L" close" : L"";
         if (t.recursive) {
-            left = (t.filter.empty() ? Thousands(n) + L" items" : Thousands(n) + L" matches") + L" in " +
+            left = (t.filter.empty() ? Thousands(n) + L" items" : Thousands(n) + L" matches" + close) + L" in " +
                    Thousands(t.recDirs) + (t.recDirs == 1 ? L" folder" : L" folders") +
                    (t.recDone ? L"   ·   Esc goes back" : L"   ·   searching…");
         } else {
-            left = Thousands(n) + (n == 1 ? L" match" : L" matches") + L"   ·   Esc clears";
+            left = Thousands(n) + (n == 1 ? L" match" : L" matches") + close + L"   ·   Esc clears";
         }
         if (!g_grepTerm.empty() && activePane && S.message.empty()) {
             const int pending = g_grepPending.load();

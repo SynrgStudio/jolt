@@ -167,6 +167,7 @@
 <tr><td><code>content:word</code> &nbsp; <code>content:"two words"</code></td><td><strong>search inside the files</strong>: keeps the text files whose content has it, and shows the line around the match next to the name. Files are read in the background (UTF-8, UTF-16 or the system code page; binaries and files over 32 MB are skipped). With <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>F</kbd> it covers the subfolders too</td></tr>
 <tr><td><code>tag:urgent</code> &nbsp; <code>!tag:done</code></td><td>items with (or without) a <a href="#files">tag</a></td></tr>
 </table>
+<p><strong>Typos are forgiven.</strong> Names close to what you typed appear under the real matches, with how close they are in grey next to the name: <code>filepocker</code> finds <code>filepicker</code> at 90%, and swapped letters stay at 100% (<code>filepikcer</code>). It works in subfolder search, <kbd>Ctrl</kbd>+<kbd>P</kbd> and <kbd>Ctrl</kbd>+<kbd>K</kbd> too. <code>filter_typos</code> in <code>config.txt</code> sets the lowest percentage, 75 by default, or <code>no</code> to turn it off.</p>
 <p class="ex">Examples: <code>content:TODO .cpp</code> — source files with a TODO. &nbsp; <code>invoice .pdf newer:30d</code> — the invoices of the last month. &nbsp; <code>&gt;500mb !.iso</code> — what is taking space, except disc images. &nbsp; <code>type:folder old</code> — folders with "old" in the name.</p>
 <p>Only the words light up in the names. The status bar shows how many match.</p>
 

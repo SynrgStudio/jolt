@@ -625,7 +625,10 @@ void TestRunStep() {
             TestLog(out);
         } else if (s.cmd == L"rows") {  // what the list shows, in order
             std::wstring names;
-            for (int i = 0; i < RowCount(T()) && i < 40; ++i) names += L" " + (IsHeader(T(), i) ? L"[" + RowName(T(), i) + L"]" : RowName(T(), i));
+            for (int i = 0; i < RowCount(T()) && i < 40; ++i) {
+                names += L" " + (IsHeader(T(), i) ? L"[" + RowName(T(), i) + L"]" : RowName(T(), i));
+                if (T().rows[i].closeness) names += L"(" + std::to_wstring(T().rows[i].closeness) + L"%)";
+            }
             TestLog(L"rows: " + std::to_wstring(RowCount(T())) + names);
         } else if (s.cmd == L"rename_preview") {  // the rename panel's rows: old -> new, with problems
             std::wstring out = L"rename_preview: " + std::to_wstring(g_rn.changing) + L" change, " + std::to_wstring(g_rn.problems) + L" problems";
