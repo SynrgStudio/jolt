@@ -16,6 +16,7 @@
 #include <sddl.h>
 #include <lm.h>
 #include <winnetwk.h>
+#include <bcrypt.h>
 #include <map>
 #include <commctrl.h>
 #include <commoncontrols.h>
@@ -46,6 +47,7 @@
 #pragma comment(linker, "\"/manifestdependency:type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'\"")
 #pragma comment(lib, "netapi32.lib")
 #pragma comment(lib, "mpr.lib")
+#pragma comment(lib, "bcrypt.lib")  // SHA-256 to compare duplicates
 #pragma comment(lib, "oleaut32.lib")  // UI Automation for test mode (SysFreeString)
 
 using Microsoft::WRL::ComPtr;
@@ -522,6 +524,17 @@ struct Row {
     uint8_t closeness = 0;  // a name close to what was typed: how close, in percent. 0: a real match
 };
 
+// A set of identical files found by Ctrl+Alt+F (dups.inl): where each copy is, the oldest first.
+struct DupFile {
+    std::wstring dirKey, name;
+    int hint = -1;  // its index in the folder's listing last time
+};
+struct DupSet {
+    uint64_t size = 0;
+    std::vector<DupFile> files;
+    int shown = 0;  // copies in the rows right now
+};
+
 struct Tab {
     std::wstring path;
     std::shared_ptr<const Listing> list;
@@ -547,7 +560,12 @@ struct Tab {
     uint64_t recGen = 0;
     int recDirs = 0;
     std::vector<std::shared_ptr<const Listing>> rec;
-    std::unordered_set<std::wstring> recKeys;  // the folders in rec, by key
+    std::unordered_map<std::wstring, const Listing*> recKeys;  // the folders in rec, by key
+    // duplicates (Ctrl+Alt+F): a subfolder search whose rows are the sets of identical files
+    bool dups = false, dupHashing = false, dupDone = false;
+    uint64_t dupGen = 0;
+    std::vector<DupSet> dupSets;
+    std::shared_ptr<Listing> dupHead;  // its groups are the sets' titles
     float scroll = 0;
     // grid view: one rect per row in content coordinates (see RowRect), rebuilt when the rows or the width change
     std::vector<D2D1_RECT_F> cells;
@@ -861,11 +879,18 @@ bool FilterPass(const FilterSpec& s, const Entry& e, const wchar_t* name, size_t
 
 #include "tags.inl"
 
+void BuildDupRows(Tab& t);  // dups.inl
+std::wstring DupStatus(const Tab& t);
+
 void BuildRows(Tab& t) {
     t.rows.clear();
     t.nearRows = 0;
     ++t.rowsGen;
     if (!t.list) return;
+    if (t.recursive && t.dups) {
+        BuildDupRows(t);
+        return;
+    }
     if (t.recursive) {
         const bool hide = !g_cfg.showHidden;
         for (const auto& l : t.rec) {
@@ -3027,7 +3052,7 @@ void DrawList(int pane, float H) {
         DrawFolderError(t, L, R, listTop);
     } else if (t.list && n == 0) {
         Color(cDim);
-        Text(t.recursive && !t.recDone ? L"Searching…" : !t.filter.empty() ? L"No matches" : IsServerPath(t.path) ? L"No shared folders" : L"Empty folder",
+        Text(t.dups && !t.dupDone ? L"Looking for duplicates…" : t.recursive && !t.recDone ? L"Searching…" : t.dups && t.filter.empty() ? L"No duplicates" : !t.filter.empty() ? L"No matches" : IsServerPath(t.path) ? L"No shared folders" : L"Empty folder",
              g_fmtCenter.Get(), L, listTop, R, listTop + 80);
     } else if (t.list) {
         const bool focused = (g_test ? g_testActive && !g_renaming && !g_editing : GetFocus() == g_hwnd) && pane == g_act;
@@ -3052,6 +3077,7 @@ void DrawList(int pane, float H) {
                 const auto& gr = row.l->groups[static_cast<size_t>(-1 - row.e)];
                 size_t end = static_cast<size_t>(-row.e) < row.l->groups.size() ? row.l->groups[-row.e].first : row.l->entries.size();
                 std::wstring cnt = Thousands(static_cast<int>(end - gr.first));
+                if (t.dups && static_cast<size_t>(-1 - row.e) < t.dupSets.size()) cnt = Thousands(t.dupSets[-1 - row.e].shown) + L" copies";
                 float tw = MeasureW(gr.second, g_fmtSection.Get());
                 const bool gfold = GroupFolded(t, row.l, static_cast<size_t>(-1 - row.e));
                 const bool ghov = hoverHeader == i && pane == g_hoverPane;
@@ -3259,13 +3285,13 @@ void DrawStatus(int pane, float H) {
     float lx = g.TL + kPad + 2;
     if (!t.filter.empty() || t.recursive) {
         // filter box, File Pilot style: magnifier + text + count
-        std::wstring label = t.recursive ? L"in subfolders:" : L"";
+        std::wstring label = t.dups ? L"duplicates:" : t.recursive ? L"in subfolders:" : L"";
         float lw = label.empty() ? 0 : MeasureW(label, g_fmtName.Get()) + 6;
         float tw = MeasureW(t.filter, g_fmtName.Get());
         D2D1_RECT_F box = D2D1::RectF(lx - 4, y0 + 3, lx + 30 + lw + tw + 12, H - 3);
         Round(box, 5, cAccent, 0.18f);
         Color(cAccent);
-        Glyph(t.recursive ? 0xE8B7 : 0xE721, g_fmtIconSm.Get(), box.left + 4, box.top, box.left + 24, box.bottom);
+        Glyph(t.dups ? 0xE8C8 : t.recursive ? 0xE8B7 : 0xE721, g_fmtIconSm.Get(), box.left + 4, box.top, box.left + 24, box.bottom);
         if (!label.empty()) {
             Color(0x9FB3D9);
             Text(label, g_fmtName.Get(), box.left + 26, box.top, box.right, box.bottom);
@@ -3275,7 +3301,9 @@ void DrawStatus(int pane, float H) {
         if (activePane) Fill(D2D1::RectF(box.left + 26 + lw + tw + 1, box.top + 5, box.left + 26 + lw + tw + 2, box.bottom - 5), cText);
         lx = box.right + 10;
         const std::wstring close = t.nearRows ? L", " + Thousands(t.nearRows) + L" close" : L"";
-        if (t.recursive) {
+        if (t.dups) {
+            left = DupStatus(t);
+        } else if (t.recursive) {
             left = (t.filter.empty() ? Thousands(n) + L" items" : Thousands(n) + L" matches" + close) + L" in " +
                    Thousands(t.recDirs) + (t.recDirs == 1 ? L" folder" : L" folders") +
                    (t.recDone ? L"   ·   Esc goes back" : L"   ·   searching…");
@@ -3710,6 +3738,7 @@ void ViewEditorOpen(int pane);
 #include "viewedit.inl"
 #include "ops.inl"
 #include "search.inl"
+#include "dups.inl"
 #include "syntax.inl"
 #include "grep.inl"
 #include "preview.inl"
@@ -4053,6 +4082,16 @@ void RunCommand(Cmd cmd) {
         case Cmd::SearchSubfolders:
             if (t.recursive) StopRecursive(t, true);
             else StartRecursive(t);
+            break;
+        case Cmd::FindDuplicates: {
+            const bool was = t.dups;
+            if (t.recursive) StopRecursive(t, true);
+            if (!was) StartRecursive(t, true);
+            break;
+        }
+        case Cmd::SelectExtraCopies:
+            SelectExtraCopies(t);
+            Invalidate();
             break;
         case Cmd::Expand: SetExpanded(t, t.sel, !IsExpanded(t, t.sel)); break;
         case Cmd::Collapse: Collapse(); break;
@@ -4656,6 +4695,9 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return 0;
         case WM_APP_REC:
             ApplyRecBatch(reinterpret_cast<RecBatch*>(lp));
+            return 0;
+        case WM_APP_DUP:
+            DupApply(wp, lp);
             return 0;
         case WM_APP_GREP:
             ApplyGrepResult(reinterpret_cast<GrepResult*>(lp));

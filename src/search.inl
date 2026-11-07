@@ -46,7 +46,11 @@ void RecThread(std::wstring root, uint64_t gen, bool showHidden, SortBy by, bool
     if (g_recActive == gen) post(true);
 }
 
-void StartRecursive(Tab& t) {
+void DupStart(Tab& t);  // dups.inl
+extern std::atomic<uint64_t> g_dupActive;
+
+// dups: look for duplicate files instead (dups.inl)
+void StartRecursive(Tab& t, bool dups = false) {
     if (t.path.empty() || IsVirtual(t.path) || !t.list || t.list->error) {
         S.message = L"Subfolder search needs a folder";
         Invalidate();
@@ -62,6 +66,10 @@ void StartRecursive(Tab& t) {
     t.recGen = gen;
     t.rec.clear();
     t.recKeys.clear();
+    t.dups = dups;
+    t.dupHashing = t.dupDone = false;
+    t.dupSets.clear();
+    t.dupHead.reset();
     Rebuild(t, &p, L"");
     SortBy by = static_cast<SortBy>(g_sortBy.load());
     std::thread(RecThread, t.path, gen, g_cfg.showHidden, by, g_sortAsc.load(), FoldersFirstFor(by)).detach();
@@ -71,9 +79,11 @@ void StartRecursive(Tab& t) {
 void StopRecursive(Tab& t, bool rebuild) {
     if (!t.recursive) return;
     if (g_recActive == t.recGen) ++g_recActive;
+    if (t.dups && g_dupActive == t.dupGen) ++g_dupActive;  // a comparison still running stops
     Place p;
     if (rebuild) p = SavePlace(t);
     t.recursive = false;
+    t.dups = t.dupHashing = t.dupDone = false;
     t.filter.clear();
     if (rebuild) {
         // what was selected may be in a subfolder: it's lost, unless it's here
@@ -85,6 +95,8 @@ void StopRecursive(Tab& t, bool rebuild) {
     }
     t.rec.clear();
     t.recKeys.clear();
+    t.dupSets.clear();
+    t.dupHead.reset();
     Invalidate();
 }
 
@@ -96,9 +108,10 @@ void ApplyRecBatch(RecBatch* b) {
         Place p = SavePlace(t);
         bool wasEmpty = t.rows.empty();
         for (auto& l : b->lists)
-            if (t.recKeys.insert(Key(l->path)).second) t.rec.push_back(l);  // already there if Jolt reloaded it meanwhile
+            if (t.recKeys.emplace(Key(l->path), l.get()).second) t.rec.push_back(l);  // already there if Jolt reloaded it meanwhile
         t.recDirs = b->dirs;
         t.recDone = b->done;
+        if (t.dups && t.recDone && !t.dupHashing && !t.dupDone) DupStart(t);
         if (wasEmpty) {
             BuildRows(t);
             t.selMask.assign(t.rows.size(), 0);
@@ -169,12 +182,9 @@ bool RecTake(Tab& t, const std::shared_ptr<const Listing>& l) {
     }
     Place p = SavePlace(t);  // before anything is released: the rows point to the listings
     if (!l->error) {
-        if (known) {
-            *at = l;
-        } else {
-            t.rec.push_back(l);
-            t.recKeys.insert(k);
-        }
+        if (!known) t.rec.push_back(l);
+        else *at = l;
+        t.recKeys[k] = l.get();
     }
     if (!gone.empty())
         std::erase_if(t.rec, [&](const std::shared_ptr<const Listing>& r) {

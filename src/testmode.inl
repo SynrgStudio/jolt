@@ -632,7 +632,8 @@ void TestRunStep() {
         } else if (s.cmd == L"rows") {  // what the list shows, in order
             std::wstring names;
             for (int i = 0; i < RowCount(T()) && i < 40; ++i) {
-                std::wstring n = IsHeader(T(), i) ? L"[" + RowName(T(), i) + L"]" : RowName(T(), i);
+                const Row& r = T().rows[i];
+                std::wstring n = IsHeader(T(), i) ? L"[" + r.l->groups[static_cast<size_t>(-1 - r.e)].second + L"]" : RowName(T(), i);
                 if (T().recursive && Key(RowDir(T(), i)) != Key(T().path))  // results: where it is, below the root
                     n = RowPath(T(), i).substr(T().path.size() + (T().path.back() == L'\\' ? 0 : 1));
                 names += L" " + n;

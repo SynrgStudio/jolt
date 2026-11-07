@@ -2,7 +2,7 @@
 
 Every planned feature, one line per GitHub issue. A line is checked and struck through when its PR is merged.
 
-**24 of 81 done.**
+**25 of 81 done.**
 
 ## Navigation
 
@@ -17,12 +17,12 @@ Every planned feature, one line per GitHub issue. A line is checked and struck t
 
 ## Search
 
-5 of 6 done.
+6 of 6 done.
 
 - [x] ~~[#7](https://github.com/SynrgStudio/jolt/issues/7) Filter syntax while typing: *.png, >10mb, ext:pdf, !tmp~~
 - [x] ~~[#8](https://github.com/SynrgStudio/jolt/issues/8) Search by content (grep) with highlighted matches~~
 - [x] ~~[#9](https://github.com/SynrgStudio/jolt/issues/9) Operate on search results: move, delete, rename from the results list~~
-- [ ] [#10](https://github.com/SynrgStudio/jolt/issues/10) Find duplicate files (size + hash)
+- [x] ~~[#10](https://github.com/SynrgStudio/jolt/issues/10) Find duplicate files (size + hash)~~
 - [x] ~~[#95](https://github.com/SynrgStudio/jolt/issues/95) Typo-tolerant search: close names under the real matches, with their percentage~~
 - [x] ~~[#97](https://github.com/SynrgStudio/jolt/issues/97) Ctrl+P: results at once, more of them, exact names and programs first~~
 
