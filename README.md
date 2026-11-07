@@ -127,6 +127,7 @@ works too). Options in `config.txt`: `run_in_background`, `global_hotkey`, `tray
 | F5 / F6 | in split view: copy / move the selection to the other pane's folder |
 | Alt+R | **folder sizes**: calculates every folder in the list (or the selected ones); all their subfolders end up calculated too, and they are remembered between sessions (`%LOCALAPPDATA%\Jolt\sizes.bin`). Sorting by size takes them into account |
 | F2 | rename (the name without the extension is selected); **Tab / Shift+Tab** saves and moves to the next / previous one |
+| F2 with several selected, Ctrl+F2 | **rename several at once**: a new name as a pattern (`{name}` `{NAME}` `{Name}` `{ext}` `{n}` `{n:3}` `{n:3:10}` `{date}` `{parent}`), find and replace (plain, or `/regex/` with `$1`), and a preview of every result with conflicts marked. Enter renames, Ctrl+Z takes it all back |
 | Ctrl+N / Ctrl+Shift+N | new file / new folder, ready to rename |
 | Ctrl+Shift+D | duplicate ("name - Copy.ext") |
 | Ctrl+Shift+G | **group in a new folder**: moves the selection into a new folder next to it (named after the item if there is one) and starts renaming it. Ctrl+Z undoes it in two steps |

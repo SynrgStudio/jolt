@@ -38,4 +38,5 @@
 #include <bit>
 #include <unordered_map>
 #include <unordered_set>
+#include <regex>
 #include <vector>
