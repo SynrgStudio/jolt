@@ -10,7 +10,7 @@ constexpr UINT_PTR kTimerPreview = 6;
 struct PreviewResult {
     uint64_t gen = 0;
     std::wstring path;
-    int kind = 0;  // 0 nothing, 1 image, 2 text
+    int kind = 0;  // 0 nothing, 1 image, 2 text, 3 not on this PC
     ComPtr<IWICBitmap> bmp;
     UINT imgW = 0, imgH = 0;  // original size (already rotated)
     bool thumb = false;       // Shell thumbnail or icon (not enlarged)
@@ -221,11 +221,17 @@ void PreviewThread() {
         r->gen = gen;
         r->path = path;
         SHFILEINFOW sfi{};
-        if (SHGetFileInfoW(path.c_str(), 0, &sfi, sizeof(sfi), SHGFI_TYPENAME)) r->typeName = sfi.szTypeName;
+        const bool online = OnlineOnlyPath(path);
+        if (SHGetFileInfoW(path.c_str(), online ? FILE_ATTRIBUTE_NORMAL : 0, &sfi, sizeof(sfi), SHGFI_TYPENAME | (online ? SHGFI_USEFILEATTRIBUTES : 0)))
+            r->typeName = sfi.szTypeName;
         std::wstring ext = ExtOf(path.c_str(), path.size());
-        bool done = wic && PvIsImage(ext) && PvImage(wic.Get(), path, *r);
-        if (!done && !PvIsBinary(ext)) done = PvText(path, *r);
-        if (!done && wic) PvThumb(wic.Get(), path, *r);
+        if (online) {  // a thumbnail Windows already has, at most: reading it would download it
+            if (!wic || !PvThumb(wic.Get(), path, *r)) r->kind = 3;
+        } else {
+            bool done = wic && PvIsImage(ext) && PvImage(wic.Get(), path, *r);
+            if (!done && !PvIsBinary(ext)) done = PvText(path, *r);
+            if (!done && wic) PvThumb(wic.Get(), path, *r);
+        }
         PreviewResult* raw = r.release();
         if (!PostMessageW(g_hwnd, WM_APP_PREVIEW, 0, reinterpret_cast<LPARAM>(raw))) delete raw;
     }
@@ -380,6 +386,8 @@ void DrawPreview(float W, float H) {
         info[2] = {L"Modified", modified};
         if (rowMatches && g_pv.res && g_pv.res->kind == 1 && !g_pv.res->thumb)
             info[3] = {L"Dimensions", std::to_wstring(g_pv.res->imgW) + L" × " + std::to_wstring(g_pv.res->imgH)};
+        else if (OnlineOnly(e.attrs)) info[3] = {L"Storage", L"Online only"};
+        else if (e.attrs & FILE_ATTRIBUTE_PINNED) info[3] = {L"Storage", L"Always on this PC"};
     }
     if (const auto* tags = TagsOf(rowPath)) {
         std::wstring all;
@@ -435,6 +443,14 @@ void DrawPreview(float W, float H) {
             g_rt->DrawBitmap(g_pv.d2d.Get(), D2D1::RectF(dx, dy, dx + dw, dy + dh), 1.f,
                              D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
         }
+    } else if (g_pv.res && g_pv.res->kind == 3) {
+        const float mid = (top + bot) / 2;
+        Color(cFaint);
+        Glyph(gCloud, g_fmtIcon.Get(), L, mid - 44, R, mid - 18);
+        Color(cDim);
+        Text(L"Online only", g_fmtCenter.Get(), L, mid - 18, R, mid + 2);
+        Color(cFaint);
+        Text(L"Open it to download it", g_fmtCenter.Get(), L, mid + 2, R, mid + 22);
     } else if (g_pv.res && g_pv.res->kind == 2) {
         const float lh = 16;
         const std::wstring& s = g_pv.res->text;

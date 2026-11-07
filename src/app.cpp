@@ -71,7 +71,7 @@ UINT32 cBg = 0x1A1A1E, cTabBar = 0x0F0F12, cTop = 0x202024, cSide = 0x151518, cB
 constexpr wchar_t gBack = 0xE72B, gFwd = 0xE72A, gUp = 0xE74A, gAdd = 0xE710, gClose = 0xE8BB, gChevron = 0xE76C,
                   gPc = 0xE977, gStar = 0xE734, gSortUp = 0xE96D, gSortDown = 0xE96E, gFolder = 0xE8B7,
                   gFile = 0xE7C3, gDrive = 0xEDA2, gMin = 0xE921, gMax = 0xE922, gRestore = 0xE923,
-                  gPaneClose = 0xE89F, gPaneOpen = 0xE8A0, gPin = 0xE718;
+                  gPaneClose = 0xE89F, gPaneOpen = 0xE8A0, gPin = 0xE718, gCloud = 0xE753, gCheck = 0xE73E;
 
 constexpr UINT WM_APP_RESULT = WM_APP + 1, WM_APP_CHANGED = WM_APP + 2, WM_APP_ICON = WM_APP + 3;
 constexpr UINT_PTR kTimerRevalidate = 1, kTimerPrefetch = 2, kTimerTabSlide = 12;
@@ -1910,6 +1910,7 @@ int g_iconFolder = -1, g_iconFile = -1;
 
 bool NeedsPerPathIcon(const Entry& e, const wchar_t* name) {
     if (e.isDir()) return true;
+    if (OnlineOnly(e.attrs)) return false;  // the icon of a program is inside it: reading it would download it
     std::wstring ext = ExtOf(name, e.nameLen);
     return ext == L".exe" || ext == L".lnk" || ext == L".ico" || ext == L".url" || ext == L".scr" ||
            ext == L".cur" || ext == L".appref-ms";
@@ -1972,6 +1973,11 @@ void IconThreadMain() {
                     idx = sfi.iIcon;
                 CoTaskMemFree(pidl);
             }
+        } else if (OnlineOnlyPath(p)) {  // by its type: nothing is read
+            const bool dir = (GetFileAttributesW(ToExtendedPath(p).c_str()) & FILE_ATTRIBUTE_DIRECTORY) != 0;
+            if (SHGetFileInfoW(p.c_str(), dir ? FILE_ATTRIBUTE_DIRECTORY : FILE_ATTRIBUTE_NORMAL, &sfi, sizeof(sfi),
+                               SHGFI_USEFILEATTRIBUTES | SHGFI_SYSICONINDEX | SHGFI_SMALLICON))
+                idx = sfi.iIcon;
         } else if (SHGetFileInfoW(p.c_str(), 0, &sfi, sizeof(sfi), SHGFI_SYSICONINDEX | SHGFI_SMALLICON)) {
             idx = sfi.iIcon;
         }
@@ -2868,6 +2874,12 @@ void DrawGridCell(const Entry& e, const wchar_t* name, const std::wstring& full,
     }
     float xe;
     DrawTagDots(full, cell.left + 10, y + 12, a, xe);  // the tag dots, in the cell's corner
+    if (g_cfg.cloudStatus && (OnlineOnly(e.attrs) || (e.attrs & FILE_ATTRIBUTE_PINNED))) {  // same: over the picture
+        const D2D1_RECT_F r = D2D1::RectF(cell.right - 28, boxT + box - 22, cell.right - 6, boxT + box - 2);
+        Round(r, 4, 0x000000, 0.6f * a);
+        Color(0xC9C9D1, a);
+        Glyph(OnlineOnly(e.attrs) ? gCloud : gCheck, g_fmtCap.Get(), r.left, r.top, r.right, r.bottom);
+    }
     if (closeness) {  // over the picture, so it needs a background
         const std::wstring pct = std::to_wstring(closeness) + L"%";
         const float w = MeasureW(pct, g_fmtTag.Get()) + 10;
@@ -2998,6 +3010,11 @@ void DrawList(int pane, float H) {
                 Color(selected && focused ? 0x9FB3D9 : cFaint, a);
                 Text(pct, g_fmtName.Get(), afterName - 6, y, nameEnd, y + kRow);
                 afterName += MeasureW(pct, g_fmtName.Get()) + 8;
+            }
+            if (g_cfg.cloudStatus && !drives && (OnlineOnly(e.attrs) || (e.attrs & FILE_ATTRIBUTE_PINNED))) {  // where it is, in a cloud folder
+                Color(selected && focused ? 0x9FB3D9 : cDim, a);
+                Glyph(OnlineOnly(e.attrs) ? gCloud : gCheck, g_fmtCap.Get(), afterName - 8, y, afterName + 8, y + kRow);
+                afterName += 16;
             }
             if (e.isDir() && !drives && !g_folderNotes.empty()) afterName = DrawFolderNote(full, afterName, nameEnd, y, a, selected && focused);
             if (flat && row.depth > 0 && row.l->path.size() > t.path.size()) {

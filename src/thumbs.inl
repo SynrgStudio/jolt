@@ -141,7 +141,10 @@ bool ThumbProduce(IWICImagingFactory* wic, const std::wstring& path, int size, i
     isIcon = false;
     // small sizes (the grid) fit the box; big ones (the preview) take the largest the Shell has
     const DWORD fit = size > 256 ? SIIGBF_BIGGERSIZEOK : SIIGBF_RESIZETOFIT;
-    if (FAILED(f->GetImage(SIZE{size, size}, fit | SIIGBF_THUMBNAILONLY, &hb)) || !hb) {
+    // not on this PC: what Windows has in its cache or nothing, because making a thumbnail or an icon would download it
+    if (OnlineOnlyPath(path)) {
+        if (FAILED(f->GetImage(SIZE{size, size}, fit | SIIGBF_THUMBNAILONLY | SIIGBF_INCACHEONLY, &hb)) || !hb) return false;
+    } else if (FAILED(f->GetImage(SIZE{size, size}, fit | SIIGBF_THUMBNAILONLY, &hb)) || !hb) {
         hb = nullptr;
         const int is = std::min(size, 256);
         if (FAILED(f->GetImage(SIZE{is, is}, SIIGBF_ICONONLY, &hb)) || !hb) return false;

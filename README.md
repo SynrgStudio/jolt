@@ -144,6 +144,7 @@ works too). Options in `config.txt`: `run_in_background`, `global_hotkey`, `tray
 | drag and drop | between Jolt's folders, panes, tabs, favorites and drives, and from/to other apps; same rules as File Explorer (Ctrl copies, Shift moves) |
 | Ctrl+Enter / middle click | open folder in a new tab |
 | Ctrl+Alt+P, or right click on a tab | **pin the tab**: it stays at the left with a short name, Ctrl+W and "close the others" leave it alone, and it comes back with the session |
+| cloud folders | in OneDrive and the like, a **cloud** next to the name marks what is online only and a **check** what is always on this PC, in the list, the grid and the preview (`cloud_status` in `config.txt` turns the marks off). Listing, the preview, thumbnails, icons and content search **never download anything**: an online-only file shows as such until you open it |
 | a folder that can't be opened | Jolt stays where it is and says why in grey **next to the name**, with what can be done: *Open as administrator*, or *Go to the real folder* on Windows' protected links like `Application Data`. A typed path shows the same on the folder's page |
 | Ctrl+Shift+Enter | open the highlighted folder, or this one, in a **window as administrator**. It's a separate Jolt with a badge on the title bar that lists every folder, closes for real and leaves your session alone; the global shortcut and Win+E hide it and bring it back along with the normal window. What you open from it runs as administrator too |
 | Backspace / Alt+↑ / ↑ button | parent folder |
