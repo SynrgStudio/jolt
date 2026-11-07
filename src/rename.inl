@@ -6,6 +6,7 @@ struct RnItem {
     std::wstring dir, oldName, newName;
     bool isDir = false;
     int64_t mtime = 0, ctime = 0;
+    std::wstring rnd[3], uuid;  // random pools (letters+digits, letters, digits) and a UUID, drawn once per item so the preview holds still
     int problem = 0;  // 0 fine, 1 invalid characters, 2 exists already, 3 repeated among the results
 };
 enum class RnK { None, Edit0, Edit1, Edit2, Rename, Cancel };
@@ -63,6 +64,24 @@ std::wstring RnDate(int64_t ft, std::wstring fmt) {
     return out;
 }
 
+// Random text for {random} and {uuid}: drawn from the system's generator, once per item.
+void RnDrawRandom(RnItem& it) {
+    static const wchar_t* sets[3] = {L"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789",
+                                     L"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz", L"0123456789"};
+    std::random_device rd;  // MSVC's is the system's cryptographic generator
+    for (int k = 0; k < 3; ++k) {
+        const size_t n = wcslen(sets[k]);
+        for (int i = 0; i < 64; ++i) it.rnd[k] += sets[k][rd() % n];
+    }
+    unsigned b[4];
+    for (unsigned& v : b) v = rd();
+    b[1] = (b[1] & 0xFFFF0FFF) | 0x4000;  // version 4
+    b[2] = (b[2] & 0x3FFFFFFF) | 0x80000000;  // variant
+    wchar_t s[40];
+    swprintf(s, 40, L"%08x-%04x-%04x-%04x-%04x%08x", b[0], b[1] >> 16, b[1] & 0xFFFF, b[2] >> 16, b[2] & 0xFFFF, b[3]);
+    it.uuid = s;
+}
+
 std::wstring RnCase(std::wstring s, const std::wstring& how) {
     if (how == L"upper") {
         CharUpperBuffW(s.data(), static_cast<DWORD>(s.size()));
@@ -81,7 +100,8 @@ std::wstring RnCase(std::wstring s, const std::wstring& how) {
 
 // The pattern applied to one item:
 //   {name} {name:lower} {name:upper} {name:title} (also {NAME} and {Name}), {ext} and the same options,
-//   {n} {n:3} {n:3:10} {n:3:10:5} (padding, start, step), {date} {date:YYYYMMDD_hhmm} {time} {created} {created:...}, {parent}
+//   {n} {n:3} {n:3:10} {n:3:10:5} (padding, start, step), {date} {date:YYYYMMDD_hhmm} {time} {created} {created:...}, {parent},
+//   {random} {random:12} {random:12:letters} {random:6:digits} and {uuid}
 std::wstring RnExpand(const std::wstring& pat, const std::wstring& name, const std::wstring& ext, const RnItem& it, int index) {
     std::wstring out;
     for (size_t i = 0; i < pat.size();) {
@@ -125,6 +145,12 @@ std::wstring RnExpand(const std::wstring& pat, const std::wstring& name, const s
             out += RnDate(it.ctime, parts.size() > 1 ? parts[1] : L"");
         } else if (head == L"parent") {
             out += LeafOf(it.dir);
+        } else if (head == L"random") {
+            const int len = parts.size() > 1 ? std::clamp(_wtoi(parts[1].c_str()), 1, 64) : 8;
+            const std::wstring kind = parts.size() > 2 ? Lower(parts[2]) : L"";
+            out += it.rnd[kind == L"letters" || kind == L"alpha" ? 1 : kind == L"digits" ? 2 : 0].substr(0, len);
+        } else if (head == L"uuid") {
+            out += opt == L"upper" ? RnCase(it.uuid, L"upper") : it.uuid;
         } else {
             out += L"{" + tag + L"}";  // not a placeholder: left as typed
         }
@@ -225,6 +251,7 @@ void RenameManyOpen() {
         WIN32_FILE_ATTRIBUTE_DATA d;
         if (GetFileAttributesExW(ToExtendedPath(Join(it.dir, it.oldName.c_str())).c_str(), GetFileExInfoStandard, &d))
             it.ctime = (static_cast<int64_t>(d.ftCreationTime.dwHighDateTime) << 32) | d.ftCreationTime.dwLowDateTime;
+        RnDrawRandom(it);
         items.push_back(std::move(it));
     }
     if (items.empty()) return;
@@ -381,7 +408,7 @@ void DrawRenamePanel(float W, float H) {
     field(2, L"Replace", half + 8, x + kRnW - 20, ry);
     ry += kRnEditRow;
     Color(cFaint);
-    Text(g_rn.regexError.empty() ? L"{name}  {name:lower}  {NAME}  {Name}  {ext}  {n}  {n:3:10:5}  {date}  {date:YYYYMMDD_hhmm}  {time}  {created}  {parent}     Find: text or /regex/, $1 in Replace"
+    Text(g_rn.regexError.empty() ? L"{name}  {name:lower}  {NAME}  {Name}  {ext}  {n}  {n:3:10:5}  {date}  {date:YYYYMMDD_hhmm}  {time}  {created}  {parent}  {random:8}  {uuid}     Find: text or /regex/, $1 in Replace"
                                  : g_rn.regexError,
          g_fmtStatus.Get(), x + 24, ry + 2, x + kRnW - 20, ry + kRnHint);
     ry += kRnHint;
