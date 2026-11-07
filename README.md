@@ -143,6 +143,7 @@ works too). Options in `config.txt`: `run_in_background`, `global_hotkey`, `tray
 | Ctrl+Z / Ctrl+Y or Ctrl+Shift+Z | **undo / redo** what was done from Jolt in this session (up to 100 steps): rename, move, copy, duplicate, create and send to the Recycle Bin. It never overwrites anything or touches what changed afterwards, and what it removes goes to the Recycle Bin. It doesn't cover what replaced or merged with something that already existed, or permanent deletion |
 | drag and drop | between Jolt's folders, panes, tabs, favorites and drives, and from/to other apps; same rules as File Explorer (Ctrl copies, Shift moves) |
 | Ctrl+Enter / middle click | open folder in a new tab |
+| Ctrl+Alt+P, or right click on a tab | **pin the tab**: it stays at the left with a short name, Ctrl+W and "close the others" leave it alone, and it comes back with the session |
 | a folder that can't be opened | Jolt stays where it is and says why in grey **next to the name**, with what can be done: *Open as administrator*, or *Go to the real folder* on Windows' protected links like `Application Data`. A typed path shows the same on the folder's page |
 | Ctrl+Shift+Enter | open the highlighted folder, or this one, in a **window as administrator**. It's a separate Jolt with a badge on the title bar that lists every folder, closes for real and leaves your session alone; the global shortcut and Win+E hide it and bring it back along with the normal window. What you open from it runs as administrator too |
 | Backspace / Alt+↑ / ↑ button | parent folder |

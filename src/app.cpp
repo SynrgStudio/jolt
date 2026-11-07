@@ -60,7 +60,7 @@ float g_pvDragX = 0, g_pvDragW = 0;
 constexpr float kSideRow = 25.f;
 float kDateW = 118.f, kSizeW = 72.f;  // configurable (and draggable from the header)
 constexpr float kDateMin = 64.f, kDateMax = 400.f, kSizeMin = 48.f, kSizeMax = 300.f;
-constexpr float kPad = 12.f, kTabMaxW = 190.f, kTabMinW = 70.f;
+constexpr float kPad = 12.f, kTabMaxW = 190.f, kTabMinW = 70.f, kTabPinMaxW = 112.f;
 constexpr float kIcon = 16.f;
 
 // Colors (configurable in config.txt; these are the defaults)
@@ -71,7 +71,7 @@ UINT32 cBg = 0x1A1A1E, cTabBar = 0x0F0F12, cTop = 0x202024, cSide = 0x151518, cB
 constexpr wchar_t gBack = 0xE72B, gFwd = 0xE72A, gUp = 0xE74A, gAdd = 0xE710, gClose = 0xE8BB, gChevron = 0xE76C,
                   gPc = 0xE977, gStar = 0xE734, gSortUp = 0xE96D, gSortDown = 0xE96E, gFolder = 0xE8B7,
                   gFile = 0xE7C3, gDrive = 0xEDA2, gMin = 0xE921, gMax = 0xE922, gRestore = 0xE923,
-                  gPaneClose = 0xE89F, gPaneOpen = 0xE8A0;
+                  gPaneClose = 0xE89F, gPaneOpen = 0xE8A0, gPin = 0xE718;
 
 constexpr UINT WM_APP_RESULT = WM_APP + 1, WM_APP_CHANGED = WM_APP + 2, WM_APP_ICON = WM_APP + 3;
 constexpr UINT_PTR kTimerRevalidate = 1, kTimerPrefetch = 2, kTimerTabSlide = 12;
@@ -460,6 +460,7 @@ struct Tab {
     bool loading = false;
     bool has = false;
     int pane = 0;                // 0 = left, 1 = right (split view)
+    bool pinned = false;         // stays at the left of its pane, small, and doesn't close
     std::wstring pendingSelect;  // name (in the folder) or full path to select when it appears
     int sel = 0;                 // cursor
     int anchor = 0;              // start of the Shift range
@@ -1407,6 +1408,7 @@ int NeighborInPane(int pane, int i) {
 }
 
 void SetSplit(bool on);
+void KeepPinnedFirst();
 bool FolderExists(const std::wstring& p);
 
 // Closed tabs, to reopen them where they were and with their history.
@@ -1418,6 +1420,11 @@ struct ClosedTab {
 std::vector<ClosedTab> g_closedTabs;
 
 void CloseTab(int i) {
+    if (g_tabs[i]->pinned) {
+        S.message = L"This tab is pinned: unpin it to close it";
+        Invalidate();
+        return;
+    }
     if (g_tabs.size() == 1) {
         PostMessageW(g_hwnd, WM_CLOSE, 0, 0);
         return;
@@ -1464,12 +1471,40 @@ void ReopenTab() {
                 if (p >= idx) ++p;
             g_cur = g_paneCur[g_act] = idx;
         }
+        KeepPinnedFirst();
         Invalidate();
         TouchSession();
         return;
     }
     S.message = L"No closed tabs";
     Invalidate();
+}
+
+// The pinned tabs of each pane go first; the others keep their order.
+void KeepPinnedFirst() {
+    Tab* const cur = g_tabs[g_cur].get();
+    Tab* const paneCur[2] = {g_tabs[g_paneCur[0]].get(), g_tabs[g_paneCur[1]].get()};
+    for (int pane = 0; pane < 2; ++pane) {
+        std::vector<size_t> at;
+        for (size_t i = 0; i < g_tabs.size(); ++i)
+            if (g_tabs[i]->pane == pane) at.push_back(i);
+        std::vector<std::unique_ptr<Tab>> mine;
+        for (size_t i : at) mine.push_back(std::move(g_tabs[i]));
+        std::stable_partition(mine.begin(), mine.end(), [](const auto& t) { return t->pinned; });
+        for (size_t k = 0; k < at.size(); ++k) g_tabs[at[k]] = std::move(mine[k]);
+    }
+    for (int i = 0; i < static_cast<int>(g_tabs.size()); ++i) {
+        if (g_tabs[i].get() == cur) g_cur = i;
+        for (int p = 0; p < 2; ++p)
+            if (g_tabs[i].get() == paneCur[p]) g_paneCur[p] = i;
+    }
+}
+
+void SetPinned(int i, bool on) {
+    g_tabs[i]->pinned = on;
+    KeepPinnedFirst();
+    Invalidate();
+    TouchSession();
 }
 
 // Tabs of the active pane, in order.
@@ -1509,7 +1544,7 @@ void MoveTab(int d) {
     const std::vector<int> idx = ActiveTabs();
     const int n = static_cast<int>(idx.size());
     const int to = static_cast<int>(std::find(idx.begin(), idx.end(), g_cur) - idx.begin()) + d;
-    if (to < 0 || to >= n) return;
+    if (to < 0 || to >= n || g_tabs[idx[to]]->pinned != T().pinned) return;  // the pinned ones stay together
     std::swap(g_tabs[g_cur], g_tabs[idx[to]]);
     TabSlideBy(*g_tabs[g_cur], static_cast<float>(d));
     g_cur = g_paneCur[g_act] = idx[to];
@@ -1522,7 +1557,7 @@ void CloseOtherTabs() {
     const Tab* keep = &T();
     const int act = g_act;
     for (int i = static_cast<int>(g_tabs.size()) - 1; i >= 0; --i)
-        if (g_tabs[i].get() != keep && (!g_split || g_tabs[i]->pane == act)) CloseTab(i);
+        if (g_tabs[i].get() != keep && !g_tabs[i]->pinned && (!g_split || g_tabs[i]->pane == act)) CloseTab(i);
 }
 
 void GoBack() {
@@ -2259,9 +2294,26 @@ void DrawTabGroup(int pane, float x0, float xEnd, bool activeWnd) {
         if (!g_split || g_tabs[i]->pane == pane) idx.push_back(i);
     const int n = static_cast<int>(idx.size());
     if (!n) return;
-    const float avail = xEnd - x0 - 30;  // room for the "+"
-    float tw = std::min(kTabMaxW, std::max(36.f, avail / n));
-    if (avail / n >= kTabMinW) tw = std::clamp(avail / n, kTabMinW, kTabMaxW);
+    // pinned tabs take what their short name needs, and the others share the rest
+    std::vector<float> widths(n, 0.f);
+    float pinnedW = 0;
+    int rest = n;
+    for (int k = 0; k < n; ++k)
+        if (g_tabs[idx[k]]->pinned) {
+            widths[k] = std::clamp(std::ceil(MeasureW(TabTitle(*g_tabs[idx[k]]), g_fmtTab.Get())) + 42.f, 58.f, kTabPinMaxW);
+            pinnedW += widths[k];
+            --rest;
+        }
+    const float avail = xEnd - x0 - 30 - pinnedW;  // room for the "+"
+    float tw = std::min(kTabMaxW, std::max(36.f, avail / std::max(rest, 1)));
+    if (avail / std::max(rest, 1) >= kTabMinW) tw = std::clamp(avail / std::max(rest, 1), kTabMinW, kTabMaxW);
+    for (float& w : widths)
+        if (w == 0) w = tw;
+    auto xOf = [&](int k) {
+        float x = x0;
+        for (int j = 0; j < k; ++j) x += widths[j];
+        return x;
+    };
     const float top = 7, bot = kTabH;
     const int visible = g_split ? g_paneCur[pane] : g_cur;
     // the visible tab goes last, so it passes over the other one when moving
@@ -2274,7 +2326,7 @@ void DrawTabGroup(int pane, float x0, float xEnd, bool activeWnd) {
     if (order.back() >= 0 && idx[order.back()] == visible) {
         TabPill& pill = g_pill[pane];
         Tab& vt = *g_tabs[visible];
-        const float vx = x0 + order.back() * tw + TabSlide(vt) * tw;
+        const float vx = xOf(order.back()) + TabSlide(vt) * tw;
         if (&vt != pill.tab) {
             if (pill.tab) {
                 pill.from = pill.x - vx;
@@ -2290,15 +2342,15 @@ void DrawTabGroup(int pane, float x0, float xEnd, bool activeWnd) {
         if (pillOff != 0) {
             // beneath the titles, so it doesn't cover them as it passes
             SetTimer(g_hwnd, kTimerTabSlide, 15, nullptr);
-            Round(D2D1::RectF(pill.x, top, pill.x + tw - 4, bot + 8), 7, cTop);
+            Round(D2D1::RectF(pill.x, top, pill.x + widths[order.back()] - 4, bot + 8), 7, cTop);
         }
     }
     for (int k : order) {
         const int i = idx[k];
-        const float x = x0 + k * tw;
+        const float x = xOf(k);
         const float off = TabSlide(*g_tabs[i]) * tw;
         if (off != 0) SetTimer(g_hwnd, kTimerTabSlide, 15, nullptr);
-        const D2D1_RECT_F home = D2D1::RectF(x, top, x + tw - 4, bot);  // clicks go to its final place
+        const D2D1_RECT_F home = D2D1::RectF(x, top, x + widths[k] - 4, bot);  // clicks go to its final place
         D2D1_RECT_F r = home;
         r.left += off;
         r.right += off;
@@ -2313,10 +2365,12 @@ void DrawTabGroup(int pane, float x0, float xEnd, bool activeWnd) {
                   i == g_dropTab ? 0.25f : 0.05f);
         }
         std::wstring title = TabTitle(*g_tabs[i]);
-        bool showClose = cur || hov;
+        const bool pin = g_tabs[i]->pinned;
+        bool showClose = (cur || hov) && !pin;
         float textR = showClose ? r.right - 26 : r.right - 10;
         Color(cur && activePane && activeWnd ? cText : cDim);
-        Text(title, g_fmtTab.Get(), r.left + 12, r.top, textR, r.bottom);
+        if (pin) Glyph(gPin, g_fmtIconSm.Get(), r.left + 8, r.top, r.left + 24, r.bottom);
+        Text(title, g_fmtTab.Get(), r.left + (pin ? 26 : 12), r.top, textR, r.bottom);
         if (showClose) {
             D2D1_RECT_F cr = D2D1::RectF(r.right - 24, (top + bot) / 2 - 8, r.right - 8, (top + bot) / 2 + 8);
             if (IsHover(HitKind::TabClose, i)) Round(cr, 4, 0xFFFFFF, 0.12f);
@@ -2326,7 +2380,7 @@ void DrawTabGroup(int pane, float x0, float xEnd, bool activeWnd) {
         }
         g_hits.push_back({home, HitKind::Tab, i});
     }
-    const float x = x0 + n * tw;
+    const float x = xOf(n);
     D2D1_RECT_F plus = D2D1::RectF(x + 2, (top + bot) / 2 - 11, x + 24, (top + bot) / 2 + 11);
     if (IsHover(HitKind::TabNew, pane)) Round(plus, 5, 0xFFFFFF, 0.08f);
     Color(cDim);
@@ -3537,6 +3591,8 @@ void SaveSession() {
     out << "active=" << g_cur << '\n';
     out << "visible=" << g_paneCur[0] << ',' << g_paneCur[1] << '\n';
     for (auto& t : g_tabs) out << (t->pane ? "tab2=" : "tab=") << Utf8(t->path) << '\n';
+    for (size_t i = 0; i < g_tabs.size(); ++i)
+        if (g_tabs[i]->pinned) out << "pinned=" << i << '\n';
     std::wstring rf = RecentsFile();
     if (!rf.empty()) {
         std::ofstream ro(rf, std::ios::binary);
@@ -3547,6 +3603,7 @@ void SaveSession() {
 
 struct Session {
     std::vector<std::pair<std::wstring, int>> tabs;  // path, pane
+    std::vector<int> pinned;                         // indexes into tabs
     int active = 0, visible[2] = {-1, -1};
     bool hasWindow = false;
     RECT rc{};
@@ -3569,6 +3626,7 @@ Session LoadSession() {
         std::string k = line.substr(0, eq), v = line.substr(eq + 1);
         if (k == "tab") s.tabs.push_back({Wide(v), 0});
         else if (k == "tab2") s.tabs.push_back({Wide(v), 1});
+        else if (k == "pinned") s.pinned.push_back(atoi(v.c_str()));
         else if (k == "active") s.active = atoi(v.c_str());
         else if (k == "visible") sscanf_s(v.c_str(), "%d,%d", &s.visible[0], &s.visible[1]);
         else if (k == "sidebar") s.sidebar = v != "0";
@@ -3612,6 +3670,15 @@ void TouchSession() { SetTimer(g_hwnd, kTimerSession, 2000, nullptr); }  // save
 
 // Reloads everything in %APPDATA%\Jolt (config, favorites, menu) after a change on disk.
 constexpr UINT_PTR kTimerConfig = 4;
+// For the tests: tabs and which are pinned, as they come back from the file.
+std::wstring SessionRoundTrip() {
+    SaveSession();
+    const Session ses = LoadSession();
+    std::wstring out = L"session: " + std::to_wstring(ses.tabs.size()) + L" tabs, pinned";
+    for (int i : ses.pinned) out += L" " + ses.tabs[i].first;
+    return out;
+}
+
 // Signature (date and size) of the files the user edits; session.txt and recents.txt don't count.
 std::wstring ConfigSignature() {
     std::wstring sig;
@@ -3859,6 +3926,7 @@ void RunCommand(Cmd cmd) {
             Invalidate();
             break;
         case Cmd::ReopenTab: ReopenTab(); break;
+        case Cmd::PinTab: SetPinned(g_cur, !t.pinned); break;
         case Cmd::CloseOthers: CloseOtherTabs(); break;
         case Cmd::Terminal: OpenTerminal(); break;
         case Cmd::OpenExplorer: OpenInExplorer(); break;
@@ -4666,6 +4734,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             ClientToScreen(hwnd, &pt);
             const Hit side = HitAt(x, y);
             if (side.kind == HitKind::Side) OpenSideMenu(side.idx, pt);
+            else if (side.kind == HitKind::Tab || side.kind == HitKind::TabClose) OpenTabMenu(side.idx, pt);
             else if (side.kind == HitKind::Crumb) CrumbMenu(CrumbSiblingsDir(g_crumbPaths[side.idx]), side.r);
             else if (side.kind == HitKind::CrumbChev) CrumbMenu(g_crumbPaths[side.idx], side.r);
             else if (PaneAt(x, y) == g_act && y >= ListTop() && y < ListBottom()) OpenShellMenu(pt, HitRow(x, y));
@@ -5145,6 +5214,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdLine, int show) {
         g_act = g_split ? pane : 0;
         NewTab(p, false, g_act);
         newIdx[i] = static_cast<int>(g_tabs.size()) - 1;
+        g_tabs.back()->pinned = std::find(ses.pinned.begin(), ses.pinned.end(), static_cast<int>(i)) != ses.pinned.end();
     }
     auto mapIdx = [&](int old, int pane) {
         if (old >= 0 && old < static_cast<int>(newIdx.size()) && newIdx[old] >= 0 && g_tabs[newIdx[old]]->pane == pane)

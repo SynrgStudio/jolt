@@ -51,6 +51,8 @@ void TestLog(const std::wstring& s) {
 }
 
 // Prepares the test data folder: a fresh copy of the user's configuration.
+std::wstring SessionRoundTrip();  // app.cpp
+
 void TestPrepareData() {
     wchar_t tmp[MAX_PATH];
     GetTempPathW(MAX_PATH, tmp);
@@ -569,7 +571,7 @@ void TestRunStep() {
             SendMessageW(g_hwnd, WM_COPYDATA, 0, reinterpret_cast<LPARAM>(&cd));
         } else if (s.cmd == L"tabs") {
             std::wstring all;
-            for (auto& t : g_tabs) all += L" | " + t->path;
+            for (auto& t : g_tabs) all += L" | " + t->path + (t->pinned ? L" (pinned)" : L"");
             TestLog(L"tabs:" + all + L" | active " + T().path);
         } else if (s.cmd == L"disk") {
             g_cfg.openDrives = s.arg.find(L"yes") != std::wstring::npos;
@@ -657,6 +659,8 @@ void TestRunStep() {
             TestKey(s.arg);
         } else if (s.cmd == L"type") {
             for (wchar_t c : s.arg) SendMessageW(TestKeyTarget(), WM_CHAR, c, 1);
+        } else if (s.cmd == L"session") {  // saves it and reads it back
+            TestLog(SessionRoundTrip());
         } else if (s.cmd == L"palette") {  // the Ctrl+P or Ctrl+K list: how many, where, and its first rows
             std::wstring out = L"palette: " + std::to_wstring(g_pal.hits.size()) + L" rows, sel " + std::to_wstring(g_pal.sel) + L", first " + std::to_wstring(g_pal.first) + L", index " +
                                std::to_wstring(g_ixRes.hits.size()) + L" of " + std::to_wstring(g_ixRes.total) + L":";

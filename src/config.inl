@@ -9,7 +9,7 @@ enum class Cmd {
     Properties, FolderSizes, ShowFolders, ShowFiles, ShowHidden, ShowExtensions, ReopenTab, CloseOthers,
     Terminal, OpenExplorer, RealLocation, CollapseGroups, ExpandGroups, GroupByDay, GroupByType, NoGroups,
     SortByType, ZoomIn, ZoomOut, ZoomReset, RowsTaller, RowsShorter, EmptyRecycleBin,
-    Undo, Redo, OpenAsAdmin,
+    Undo, Redo, OpenAsAdmin, PinTab,
     Install, Quit, RenameMany, FolderSiblings, ViewList, ViewGrid, ViewBigger, ViewSmaller, Tag, PreviewWrap,
     CustomFirst = 1000  // + index into g_cfg.custom: the user's own commands
 };
@@ -107,6 +107,7 @@ const CmdDef kCommands[] = {
     {L"show_extensions", Cmd::ShowExtensions, L"", L"show or hide extensions (toggle file extensions)"},
     {L"reopen_tab", Cmd::ReopenTab, L"Ctrl+Shift+T", L"reopen the last closed tab"},
     {L"close_others", Cmd::CloseOthers, L"Ctrl+Alt+W", L"close the other tabs"},
+    {L"pin_tab", Cmd::PinTab, L"Ctrl+Alt+P", L"pin the tab, or unpin it: it stays at the left, small, and doesn't close"},
     {L"terminal", Cmd::Terminal, L"Ctrl+Alt+T", L"open the terminal in this folder (console, cmd, powershell)"},
     {L"open_explorer", Cmd::OpenExplorer, L"Ctrl+Alt+E", L"open in Windows File Explorer"},
     {L"real_location", Cmd::RealLocation, L"Ctrl+Alt+L", L"go to the real location of a shortcut"},
