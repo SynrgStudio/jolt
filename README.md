@@ -168,6 +168,7 @@ works too). Options in `config.txt`: `run_in_background`, `global_hotkey`, `tray
 | Ctrl+K → "sort by type", "space between rows", "empty the Recycle Bin" | no default shortcut; the Recycle Bin asks for Windows confirmation |
 | Ctrl+R | reload |
 | F12 | show/hide timings |
+| status bar | item count and total size of the folder; with several items selected, their count and size too (calculated folders count) |
 
 </details>
 

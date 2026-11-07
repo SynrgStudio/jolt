@@ -2496,8 +2496,32 @@ void DrawStatus(int pane, float H) {
                     items += static_cast<int>(end - t.list->groups[gi].first);
                 }
         left = Thousands(items) + (items == 1 ? L" item" : L" items");
+        // sizes: the files, plus the folders whose size has been calculated
+        auto bytesOf = [&](bool selectedOnly) {
+            uint64_t sum = 0;
+            for (int i = 0; i < n; ++i) {
+                if (IsHeader(t, i) || (selectedOnly && !IsSel(t, i))) continue;
+                const Entry& e = EntryAt(t, i);
+                if (!e.isDir()) sum += e.size;
+                else if (DirSize ds; g_dsAny && DirSizeOf(Key(RowPath(t, i)), ds)) sum += ds.bytes;
+            }
+            return sum;
+        };
+        wchar_t buf[64];
+        if (!t.recursive && !t.path.empty()) {
+            if (uint64_t total = bytesOf(false)) {
+                FormatSize(total, buf, 64);
+                left += L"  ·  " + std::wstring(buf);
+            }
+        }
         int s = SelCount(t);
-        if (s > 1) left += L"   ·   " + Thousands(s) + L" selected";
+        if (s > 1) {
+            left += L"   ·   " + Thousands(s) + L" selected";
+            if (uint64_t sel = bytesOf(true)) {
+                FormatSize(sel, buf, 64);
+                left += L"  ·  " + std::wstring(buf);
+            }
+        }
     }
     float lx = g.TL + kPad + 2;
     if (!t.filter.empty() || t.recursive) {
