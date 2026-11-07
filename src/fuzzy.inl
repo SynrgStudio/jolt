@@ -91,6 +91,34 @@ bool FuzzyMatch(const wchar_t* text, size_t n, const std::wstring& pat, int& sco
     return true;
 }
 
+// Among many matches, what was probably meant: a name that is exactly what was typed, and programs. Points on top of
+// FuzzyMatch's score. A program only counts with the word whole in its name, not with its letters here and there.
+constexpr int kExactProgram = 6000, kExactName = 4000, kProgramName = 2000;
+
+int NameRank(const wchar_t* name, size_t n, const std::wstring& pat) {
+    const size_t m = pat.size();
+    if (m == 0 || m > n) return 0;
+    size_t stem = n;
+    for (size_t i = n; i > 0; --i)
+        if (name[i - 1] == L'.') {
+            stem = i - 1;
+            break;
+        }
+    bool program = false;
+    for (const wchar_t* ext : {L".exe", L".lnk", L".bat", L".appref-ms"})  // not .cmd: those are the shims in node_modules
+        program |= n - stem == wcslen(ext) && _wcsnicmp(name + stem, ext, n - stem) == 0;
+    auto sameAt = [&](size_t at) {
+        for (size_t k = 0; k < m; ++k)
+            if (FzLower(name[at + k]) != FzLower(pat[k])) return false;
+        return true;
+    };
+    if ((stem == m || n == m) && sameAt(0)) return program ? kExactProgram : kExactName;
+    if (program)
+        for (size_t at = 0; at + m <= n; ++at)
+            if (sameAt(at)) return kProgramName;
+    return 0;
+}
+
 // ---- typos: names close to what was typed, for when FuzzyMatch finds nothing in them.
 // The pattern is compared with the best stretch of the name, its letters in order. A wrong, extra or missing letter is
 // a mistake; two neighbours swapped are not, all the letters are right. The result is the percentage of letters right,

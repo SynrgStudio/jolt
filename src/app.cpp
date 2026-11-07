@@ -4426,15 +4426,16 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             std::unique_ptr<IdxResult> r(reinterpret_cast<IdxResult*>(lp));
             if (r->gen != g_ixGen) return 0;
             g_ixRes = std::move(*r);
-            if (g_pal.open && g_pal.mode == 1) {
-                // keep the selection if it had already moved
-                std::wstring keep = g_pal.sel > 0 && g_pal.sel < static_cast<int>(g_pal.hits.size()) ? g_pal.all[g_pal.hits[g_pal.sel].first].path : L"\x01";
-                PaletteFilter();
-                for (int i = 0; i < static_cast<int>(g_pal.hits.size()); ++i)
-                    if (g_pal.all[g_pal.hits[i].first].path == keep) g_pal.sel = i;
-                PaletteEnsureVisible();
-                Invalidate();
-            }
+            PaletteRefresh();
+            return 0;
+        }
+        case WM_APP_IDXGONE: {
+            std::unique_ptr<IdxGone> g(reinterpret_cast<IdxGone*>(lp));
+            auto at = std::find(g_ixRes.hits.begin(), g_ixRes.hits.end(), g->path);
+            if (g->gen != g_ixGen || at == g_ixRes.hits.end()) return 0;
+            g_ixRes.hits.erase(at);
+            --g_ixRes.total;
+            PaletteRefresh();
             return 0;
         }
         case WM_APP_CHANGED:

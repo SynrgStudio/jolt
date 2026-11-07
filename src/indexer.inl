@@ -51,10 +51,20 @@ std::atomic<uint64_t> g_ixGen{0};  // current search
 struct IdxResult {
     uint64_t gen = 0;
     std::wstring query;
-    std::vector<std::pair<std::wstring, bool>> hits;  // path, is folder
+    std::vector<std::wstring> hits;
+    uint64_t total = 0;  // how many there are, shown or not
+    size_t limit = 0;    // how many were asked for
 };
 IdxResult g_ixRes;          // last result (window thread)
 std::wstring g_ixAsked;     // last search requested
+size_t g_ixLimit = 0;       // how many results of it are wanted: more as the list is scrolled
+constexpr size_t kIdxPage = 200, kIdxMost = 12800;
+// Something in the results no longer exists.
+struct IdxGone {
+    uint64_t gen;
+    std::wstring path;
+};
+constexpr UINT WM_APP_IDXGONE = WM_APP + 12;
 
 // Status bar notice (from any thread).
 constexpr UINT WM_APP_IDXMSG = WM_APP + 9;
@@ -408,7 +418,7 @@ std::wstring IdxPath(const IdxVolume& v, uint32_t i) {
 }
 
 // Searches on a separate thread and notifies the window with the best results.
-void IdxSearch(std::wstring query, uint64_t gen) {
+void IdxSearch(std::wstring query, uint64_t gen, size_t limit) {
     std::vector<std::shared_ptr<const IdxVolume>> vols;
     std::vector<std::wstring> added;
     {
@@ -423,7 +433,8 @@ void IdxSearch(std::wstring query, uint64_t gen) {
         uint32_t vol, node;  // vol = UINT32_MAX: from "added"
         bool operator<(const Hit& o) const { return key > o.key; }  // min-heap
     };
-    const size_t kTop = 80;
+    const size_t kTop = limit;  // per thread: they could all be in one
+    std::atomic<uint64_t> total{0};
     unsigned nth = std::max(1u, std::min(8u, std::thread::hardware_concurrency()));
     // Every name through keyOf, on several threads, keeping the best of each.
     auto scan = [&](auto keyOf, std::vector<Hit>& out) {
@@ -455,28 +466,32 @@ void IdxSearch(std::wstring query, uint64_t gen) {
         for (auto& x : th) x.join();
         for (auto& p : part) out.insert(out.end(), p.begin(), p.end());
     };
-    // The best ones, to the window.
+    // The best ones, to the window, without touching the disks: on a mechanical one checking each result takes up to
+    // half a second the first time, and that's what used to make the list wait.
     auto publish = [&](std::vector<Hit>& all) {
         std::sort(all.begin(), all.end(), [](const Hit& a, const Hit& b) { return a.key > b.key; });
         auto res = std::make_unique<IdxResult>();
         res->gen = gen;
         res->query = query;
+        res->total = total;
+        res->limit = limit;
         std::unordered_set<std::wstring> seen;
         for (const Hit& h : all) {
-            if (res->hits.size() >= 40) break;
+            if (res->hits.size() >= limit) break;
             std::wstring p = h.vol == UINT32_MAX ? added[h.node] : IdxPath(*vols[h.vol], h.node);
-            DWORD a = GetFileAttributesW(ToExtendedPath(p).c_str());  // deleted items aren't shown
-            if (a == INVALID_FILE_ATTRIBUTES || !seen.insert(Key(p)).second) continue;
-            res->hits.push_back({p, (a & FILE_ATTRIBUTE_DIRECTORY) != 0});
+            if (seen.insert(Key(p)).second) res->hits.push_back(std::move(p));
         }
+        std::vector<std::wstring> shown = res->hits;
         IdxResult* raw = res.release();
         if (!PostMessageW(g_hwnd, WM_APP_IDX, 0, reinterpret_cast<LPARAM>(raw))) delete raw;
+        return shown;
     };
     std::vector<Hit> all;
     scan([&](const wchar_t* name, const IdxNode& nd, int& key) {
         int sc;
         if (!FuzzyMatch(name, nd.nameLen, pat, sc, nullptr)) return false;
-        key = sc * 8 - std::min<int>(nd.depth, 40) + (nd.dir ? 4 : 0);
+        key = (sc + NameRank(name, nd.nameLen, pat)) * 8 - std::min<int>(nd.depth, 40) + (nd.dir ? 4 : 0);
+        total.fetch_add(1, std::memory_order_relaxed);
         return true;
     }, all);
     if (g_ixGen != gen) return;
@@ -484,34 +499,60 @@ void IdxSearch(std::wstring query, uint64_t gen) {
     int sc;
     for (uint32_t i = 0; i < added.size(); ++i) {
         std::wstring leaf = LeafOf(added[i]);
-        if (FuzzyMatch(leaf.c_str(), leaf.size(), pat, sc, nullptr)) all.push_back({sc * 8, UINT32_MAX, i});
+        if (FuzzyMatch(leaf.c_str(), leaf.size(), pat, sc, nullptr)) {
+            all.push_back({(sc + NameRank(leaf.c_str(), leaf.size(), pat)) * 8, UINT32_MAX, i});
+            ++total;
+        }
     }
-    publish(all);
+    std::vector<std::wstring> shown = publish(all);
     // Then the names close to it, in a second pass: going through all the disks again takes longer than the real
     // matches, and those shouldn't have to wait. A list full of good matches has no room for them anyway.
     const auto good = std::count_if(all.begin(), all.end(), [](const Hit& h) { return h.key > kNearFloor / 2; });
-    if (close.mistakes < 0 || good >= 40) return;
-    const size_t known = all.size();
-    scan([&](const wchar_t* name, const IdxNode& nd, int& key) {
-        const int percent = NearMatch(name, nd.nameLen, close);
-        if (!percent) return false;
-        key = NearScore(percent, nd.nameLen);
-        return true;
-    }, all);
-    if (g_ixGen != gen) return;
-    for (uint32_t i = 0; i < added.size(); ++i) {
-        std::wstring leaf = LeafOf(added[i]);
-        if (const int percent = NearMatch(leaf.c_str(), leaf.size(), close)) all.push_back({NearScore(percent, leaf.size()), UINT32_MAX, i});
+    if (close.mistakes >= 0 && good < 40) {
+        const size_t known = all.size();
+        scan([&](const wchar_t* name, const IdxNode& nd, int& key) {
+            const int percent = NearMatch(name, nd.nameLen, close);
+            if (!percent) return false;
+            key = NearScore(percent, nd.nameLen);
+            ++total;
+            return true;
+        }, all);
+        if (g_ixGen != gen) return;
+        for (uint32_t i = 0; i < added.size(); ++i) {
+            std::wstring leaf = LeafOf(added[i]);
+            if (const int percent = NearMatch(leaf.c_str(), leaf.size(), close)) {
+                all.push_back({NearScore(percent, leaf.size()), UINT32_MAX, i});
+                ++total;
+            }
+        }
+        if (all.size() > known) shown = publish(all);
     }
-    if (all.size() > known) publish(all);
+    // With the list already on screen, what no longer exists comes off it. In the background so it doesn't get in the
+    // way of the disks, and only while this is still the search that matters.
+    SetThreadPriority(GetCurrentThread(), THREAD_MODE_BACKGROUND_BEGIN);
+    for (const std::wstring& p : shown) {
+        if (g_ixGen != gen) return;
+        if (GetFileAttributesW(ToExtendedPath(p).c_str()) != INVALID_FILE_ATTRIBUTES || GetLastError() == ERROR_ACCESS_DENIED) continue;
+        auto* gone = new IdxGone{gen, p};
+        if (!PostMessageW(g_hwnd, WM_APP_IDXGONE, 0, reinterpret_cast<LPARAM>(gone))) delete gone;
+    }
 }
 
 void IdxRequest(const std::wstring& query) {
     if (query == g_ixAsked) return;
     g_ixAsked = query;
+    g_ixLimit = kIdxPage;
     uint64_t gen = ++g_ixGen;
     if (query.size() < 2) return;
-    std::thread(IdxSearch, query, gen).detach();
+    std::thread(IdxSearch, query, gen, g_ixLimit).detach();
+}
+
+// The end of the list is near: the same search, with room for more.
+void IdxMore() {
+    if (g_ixRes.query != g_ixAsked || g_ixRes.limit < g_ixLimit || g_ixRes.hits.size() >= g_ixRes.total || g_ixLimit >= kIdxMost) return;
+    g_ixLimit *= 2;
+    const uint64_t gen = ++g_ixGen;
+    std::thread(IdxSearch, g_ixAsked, gen, g_ixLimit).detach();
 }
 
 void IdxStart() { std::thread(IdxBuilder).detach(); }
