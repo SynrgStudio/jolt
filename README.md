@@ -130,6 +130,7 @@ works too). Options in `config.txt`: `run_in_background`, `global_hotkey`, `tray
 | Ctrl+Shift+D | duplicate ("name - Copy.ext") |
 | Ctrl+Shift+G | **group in a new folder**: moves the selection into a new folder next to it (named after the item if there is one) and starts renaming it. Ctrl+Z undoes it in two steps |
 | Ctrl+Shift+C | copy the path of the selection (or of the folder), with quotes only if needed |
+| Ctrl+Alt+C | copy the name of the selection (or of the folder). Ctrl+K → "copy the path with forward slashes" gives `C:/Users/...` |
 | Alt+Enter | Windows properties |
 | Ctrl+C / Ctrl+X / Ctrl+V | copy, cut and paste, compatible with File Explorer (Windows progress, conflicts and undo) |
 | Del / Shift+Del | to the Recycle Bin / delete permanently |

@@ -39,8 +39,9 @@ bool SetClipboardText(const std::wstring& s) {
 }
 
 // Ctrl+Shift+C: the path of the selection (one per line), or of the folder if nothing is selected.
-// Quotes are added only when needed.
-void CopyPathText() {
+// Quotes are added only when needed. Name: just the name, with its extension. Unix: forward slashes, no quotes.
+enum class CopyWhat { Path, Name, Unix };
+void CopyPathText(CopyWhat what) {
     Tab& t = T();
     std::vector<std::wstring> paths;
     for (int i = 0; i < Count(); ++i)
@@ -49,12 +50,17 @@ void CopyPathText() {
     if (paths.empty()) return;
     std::wstring text;
     for (size_t i = 0; i < paths.size(); ++i) {
-        const std::wstring& p = paths[i];
-        bool quote = p.find_first_of(L" &()[]{}^=;!'+,`~") != std::wstring::npos;
+        std::wstring p = paths[i];
+        if (what == CopyWhat::Name) p = IsDriveRoot(p) ? p : LeafOf(p);
+        if (what == CopyWhat::Unix) std::replace(p.begin(), p.end(), L'\\', L'/');
+        bool quote = what == CopyWhat::Path && p.find_first_of(L" &()[]{}^=;!'+,`~") != std::wstring::npos;
         text += (i ? L"\r\n" : L"") + (quote ? L"\"" + p + L"\"" : p);
     }
-    if (SetClipboardText(text))
-        S.message = paths.size() == 1 ? L"Path copied: " + paths[0] : Thousands(static_cast<int>(paths.size())) + L" paths copied";
+    if (SetClipboardText(text)) {
+        const wchar_t* one = what == CopyWhat::Name ? L"Name copied: " : L"Path copied: ";
+        const wchar_t* many = what == CopyWhat::Name ? L" names copied" : L" paths copied";
+        S.message = paths.size() == 1 ? one + text : Thousands(static_cast<int>(paths.size())) + many;
+    }
     Invalidate();
 }
 
