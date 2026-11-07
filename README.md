@@ -145,6 +145,7 @@ works too). Options in `config.txt`: `run_in_background`, `global_hotkey`, `tray
 | Backspace / Alt+↑ / ↑ button | parent folder |
 | Alt+← / Alt+→ / mouse side buttons | back / forward |
 | click on a path breadcrumb | go to that folder (middle click: in a new tab) |
+| click on the chevron after a breadcrumb, right click on a breadcrumb, or Alt+Down | **folder dropdown**: the folders inside that one, or the ones next to it, opened on the folder you are in. Click to go (middle click: in a new tab), or use the arrows, Page Up/Down, Home/End and type the first letters to jump |
 | Ctrl+L or click on the free space of the path | type a path (accepts `%VARIABLES%`) |
 | Ctrl+K | **command palette**: all commands, sorting, favorites, tabs and configuration. **Click a command's shortcut** → press the new key and it is saved in `config.txt` (Del removes it, Esc cancels) |
 | Ctrl+T / Ctrl+W / Ctrl+Tab | new tab / close / next (in the active pane) |

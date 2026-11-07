@@ -61,6 +61,8 @@ struct MenuItem {
     std::vector<MenuItem> sub;   // own submenu
     HBITMAP hbm = nullptr;       // icon (owned by the HMENU or the ShellMenu)
     bool ownerDrawn = false;     // hbm is the whole row, drawn by the extension
+    int icon = -1;               // or a system icon, the one of iconPath as soon as it's known
+    std::wstring iconPath;
     bool hasSub() const { return hsub != nullptr || !sub.empty(); }
 };
 
@@ -74,19 +76,28 @@ struct PopupLevel {
     std::vector<MenuItem> items;
     int hover = -1;
     int openSub = -1;  // item whose submenu is open
+    int mark = -1;     // the item you are on: shown as such, and where the keyboard starts
+    float scroll = 0, viewH = 0, contentH = 0;  // a list taller than the menu scrolls
     RECT rc{};
     std::unordered_map<HBITMAP, ComPtr<ID2D1Bitmap>> bmps;
+    std::unordered_map<int, ComPtr<ID2D1Bitmap>> icons;
 };
 
 struct Popup {
     std::vector<std::unique_ptr<PopupLevel>> levels;
     std::function<void(UINT)> onSelect;
     std::function<void(HMENU, int, std::vector<MenuItem>&)> loadSub;
+    std::function<void(UINT)> onMiddle;  // middle click on an item, in the menus that want it
     int pendingLevel = -1, pendingItem = -1;
+    float maxH = 0;  // 0: as tall as the screen
+    int mark = -1;
+    std::wstring typed;  // what was typed to jump to an item
+    DWORD typedAt = 0;
     bool open() const { return !levels.empty(); }
 } g_popup;
 
 constexpr UINT_PTR kTimerSub = 7;
+constexpr DWORD kPopupTypeMs = 900;  // typing to jump to an item: a pause starts a new word
 constexpr wchar_t kPopupClass[] = L"JoltPopup";
 
 float ItemH(const MenuItem& m) { return m.sep ? kMenuSep : kMenuRow; }
@@ -94,9 +105,18 @@ float ItemH(const MenuItem& m) { return m.sep ? kMenuSep : kMenuRow; }
 void MenuSize(const std::vector<MenuItem>& items, float& w, float& h) {
     w = 160;
     h = 2 * kMenuPad;
+    // measuring text is slow: in a folder with thousands of subfolders only the longest names decide the width
+    size_t minLen = 0;
+    if (items.size() > 256) {
+        std::vector<size_t> lens;
+        lens.reserve(items.size());
+        for (const MenuItem& m : items) lens.push_back(m.text.size());
+        std::nth_element(lens.begin(), lens.begin() + 255, lens.end(), std::greater<size_t>());
+        minLen = lens[255];
+    }
     for (const MenuItem& m : items) {
         h += ItemH(m);
-        if (m.sep) continue;
+        if (m.sep || m.text.size() < minLen) continue;
         float tw = kMenuTextX + MeasureW(m.text, g_fmtName.Get()) + 28;
         if (!m.shortcut.empty()) tw += MeasureW(m.shortcut, g_fmtRight.Get()) + 24;
         if (m.ownerDrawn && m.hbm) {
@@ -110,7 +130,7 @@ void MenuSize(const std::vector<MenuItem>& items, float& w, float& h) {
 }
 
 int ItemAt(const PopupLevel& L, float y) {
-    float top = kMenuPad;
+    float top = kMenuPad - L.scroll;
     for (size_t i = 0; i < L.items.size(); ++i) {
         float hh = ItemH(L.items[i]);
         if (y >= top && y < top + hh) return static_cast<int>(i);
@@ -120,9 +140,18 @@ int ItemAt(const PopupLevel& L, float y) {
 }
 
 float ItemTop(const PopupLevel& L, int idx) {
-    float top = kMenuPad;
+    float top = kMenuPad - L.scroll;
     for (int i = 0; i < idx; ++i) top += ItemH(L.items[i]);
     return top;
+}
+
+float MaxScroll(const PopupLevel& L) { return std::max(0.f, L.contentH - L.viewH); }
+
+void EnsureItemVisible(PopupLevel& L, int idx) {
+    const float top = ItemTop(L, idx), bot = top + ItemH(L.items[idx]);
+    if (top < kMenuPad) L.scroll += top - kMenuPad;
+    else if (bot > L.viewH - kMenuPad) L.scroll += bot - (L.viewH - kMenuPad);
+    L.scroll = std::clamp(L.scroll, 0.f, MaxScroll(L));
 }
 
 bool CreatePopupTarget(PopupLevel& L) {
@@ -157,10 +186,17 @@ void DrawLevel(PopupLevel& L) {
     Color(cBorder);
     g_rt->DrawRoundedRectangle(D2D1::RoundedRect(D2D1::RectF(0.5f, 0.5f, W - 0.5f, sz.height - 0.5f), 6, 6),
                                g_brush.Get(), 1.f);
-    float y = kMenuPad;
+    const bool scrolls = L.contentH > L.viewH;
+    if (scrolls) g_rt->PushAxisAlignedClip(D2D1::RectF(1, 1, W - 1, sz.height - 1), D2D1_ANTIALIAS_MODE_ALIASED);
+    float y = kMenuPad - L.scroll;
     for (size_t i = 0; i < L.items.size(); ++i) {
         const MenuItem& m = L.items[i];
         float hh = ItemH(m);
+        if (y + hh <= 0) {  // above the visible part
+            y += hh;
+            continue;
+        }
+        if (y >= sz.height) break;
         if (m.sep) {
             HLine(kMenuIconX, W - kMenuIconX, y + hh / 2);
             y += hh;
@@ -168,7 +204,20 @@ void DrawLevel(PopupLevel& L) {
         }
         bool hov = static_cast<int>(i) == L.hover || static_cast<int>(i) == L.openSub;
         if (hov && m.enabled) Round(D2D1::RectF(5, y + 1, W - 5, y + hh - 1), 5, 0xFFFFFF, 0.09f);
-        if (m.hbm) {
+        if (static_cast<int>(i) == L.mark) Round(D2D1::RectF(5, y + 6, 8, y + hh - 6), 1.5f, cAccent);
+        int icon = m.icon;
+        if (!m.iconPath.empty()) {
+            const int known = IconForPathCached(m.iconPath);
+            if (known >= 0) icon = known;
+            else if (known == -2) RequestIcon(m.iconPath);
+        }
+        if (icon >= 0) {
+            auto it = L.icons.find(icon);
+            if (it == L.icons.end()) it = L.icons.emplace(icon, MakeIconBitmap(icon)).first;
+            if (it->second)
+                g_rt->DrawBitmap(it->second.Get(), D2D1::RectF(kMenuIconX, y + (hh - 16) / 2, kMenuIconX + 16, y + (hh + 16) / 2),
+                                 m.enabled ? 1.f : 0.5f, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
+        } else if (m.hbm) {
             auto it = L.bmps.find(m.hbm);
             if (it == L.bmps.end()) it = L.bmps.emplace(m.hbm, BitmapFromHBitmap(m.hbm)).first;
             if (it->second) {
@@ -205,8 +254,15 @@ void DrawLevel(PopupLevel& L) {
         }
         y += hh;
     }
+    if (scrolls) {
+        g_rt->PopAxisAlignedClip();
+        const float trackH = sz.height - 8, thumbH = std::max(24.f, trackH * L.viewH / L.contentH);
+        const float thumbY = 4 + (trackH - thumbH) * (L.scroll / MaxScroll(L));
+        Round(D2D1::RectF(W - 5, thumbY, W - 2, thumbY + thumbH), 1.5f, 0xFFFFFF, 0.2f);
+    }
     if (g_rt->EndDraw() == D2DERR_RECREATE_TARGET) {
         L.bmps.clear();
+        L.icons.clear();
         L.brush.Reset();
         L.rt.Reset();
     }
@@ -216,6 +272,7 @@ void PopupCloseFrom(int level) {
     while (static_cast<int>(g_popup.levels.size()) > level) {
         PopupLevel& L = *g_popup.levels.back();
         L.bmps.clear();
+        L.icons.clear();
         L.brush.Reset();
         L.rt.Reset();
         DestroyWindow(L.hwnd);
@@ -232,7 +289,12 @@ void PopupClose() {
     if (GetCapture() == g_popup.levels[0]->hwnd) ReleaseCapture();
     PopupCloseFrom(0);
     g_popup.onSelect = nullptr;
+    g_popup.onMiddle = nullptr;
     g_popup.loadSub = nullptr;
+    if (g_crumbMenuOpen) {
+        g_crumbMenuOpen = false;
+        Invalidate();
+    }
 }
 
 void PopupShowLevel(std::vector<MenuItem> items, const RECT& anchor, bool isSub) {
@@ -240,12 +302,20 @@ void PopupShowLevel(std::vector<MenuItem> items, const RECT& anchor, bool isSub)
     L->items = std::move(items);
     float w, h;
     MenuSize(L->items, w, h);
-    int pw = MulDiv(static_cast<int>(w), g_dpi, 96), ph = MulDiv(static_cast<int>(h), g_dpi, 96);
     POINT ref{anchor.left, anchor.top};
     HMONITOR mon = MonitorFromPoint(ref, MONITOR_DEFAULTTONEAREST);
     MONITORINFO mi{sizeof(mi)};
     GetMonitorInfoW(mon, &mi);
     const RECT& wa = mi.rcWork;
+    L->contentH = h;
+    h = std::min(h, (wa.bottom - wa.top) * 96.f / g_dpi);  // never taller than the screen: the rest scrolls
+    if (!isSub && g_popup.maxH > 0) h = std::min(h, g_popup.maxH);
+    L->viewH = h;
+    if (!isSub && g_popup.mark >= 0 && g_popup.mark < static_cast<int>(L->items.size())) {
+        L->mark = g_popup.mark;  // it opens with the marked item in the middle
+        L->scroll = std::clamp(ItemTop(*L, L->mark) - (h - kMenuRow) / 2, 0.f, MaxScroll(*L));
+    }
+    int pw = MulDiv(static_cast<int>(w), g_dpi, 96), ph = MulDiv(static_cast<int>(h), g_dpi, 96);
     int x, y;
     if (isSub) {
         x = anchor.right - MulDiv(4, g_dpi, 96);
@@ -272,11 +342,14 @@ void PopupShowLevel(std::vector<MenuItem> items, const RECT& anchor, bool isSub)
 }
 
 void PopupOpen(std::vector<MenuItem> items, const RECT& anchor, std::function<void(UINT)> onSelect,
-               std::function<void(HMENU, int, std::vector<MenuItem>&)> loadSub = nullptr) {
+               std::function<void(HMENU, int, std::vector<MenuItem>&)> loadSub = nullptr, float maxH = 0, int mark = -1) {
     PopupClose();
     if (items.empty()) return;
     g_popup.onSelect = std::move(onSelect);
     g_popup.loadSub = std::move(loadSub);
+    g_popup.maxH = maxH;
+    g_popup.mark = mark;
+    g_popup.typed.clear();
     PopupShowLevel(std::move(items), anchor, false);
 }
 
@@ -320,19 +393,33 @@ void PopupKey(WPARAM vk) {
     int li = static_cast<int>(g_popup.levels.size()) - 1;
     PopupLevel& L = *g_popup.levels[li];
     int n = static_cast<int>(L.items.size());
-    auto step = [&](int dir) {
-        int i = L.hover;
+    const int cur = L.hover >= 0 ? L.hover : L.mark;
+    auto show = [&](int i) {
+        L.hover = i;
+        EnsureItemVisible(L, i);
+        InvalidateRect(L.hwnd, nullptr, FALSE);
+    };
+    auto step = [&](int dir, int from) {
+        int i = from;
         for (int k = 0; k < n; ++k) {
             i = (i + dir + n) % n;
             if (!L.items[i].sep && L.items[i].enabled) break;
         }
-        L.hover = i;
-        InvalidateRect(L.hwnd, nullptr, FALSE);
+        show(i);
+    };
+    auto page = [&](int dir) {  // a page further, stopping at the ends
+        int i = std::clamp(cur + dir * std::max(1, static_cast<int>(L.viewH / kMenuRow) - 1), 0, n - 1);
+        while (i >= 0 && i < n && (L.items[i].sep || !L.items[i].enabled)) i += dir;
+        if (i >= 0 && i < n) show(i);
     };
     switch (vk) {
         case VK_ESCAPE: PopupClose(); break;
-        case VK_DOWN: step(+1); break;
-        case VK_UP: step(-1); break;
+        case VK_DOWN: step(+1, cur); break;
+        case VK_UP: step(-1, std::max(cur, 0)); break;
+        case VK_HOME: step(+1, -1); break;
+        case VK_END: step(-1, 0); break;
+        case VK_NEXT: page(+1); break;
+        case VK_PRIOR: page(-1); break;
         case VK_RIGHT:
             if (L.hover >= 0 && L.items[L.hover].hasSub()) {
                 PopupOpenSub(li, L.hover);
@@ -345,11 +432,50 @@ void PopupKey(WPARAM vk) {
         case VK_LEFT:
             if (li > 0) PopupCloseFrom(li);
             break;
-        case VK_RETURN:
         case VK_SPACE:
+            if (!g_popup.typed.empty() && GetTickCount() - g_popup.typedAt <= kPopupTypeMs) break;  // part of a name
+            [[fallthrough]];
+        case VK_RETURN:
             if (L.hover >= 0) PopupSelect(li, L.hover);
             break;
     }
+}
+
+// Typing goes to the item that starts with it; the same letter again, to the next one with it.
+void PopupChar(wchar_t c) {
+    if (!g_popup.open() || c < 32) return;
+    const DWORD now = GetTickCount();
+    if (now - g_popup.typedAt > kPopupTypeMs) g_popup.typed.clear();
+    if (c == L' ' && g_popup.typed.empty()) return;
+    g_popup.typedAt = now;
+    g_popup.typed += c;
+    const std::wstring& s = g_popup.typed;
+    const bool again = s.find_first_not_of(s[0]) == std::wstring::npos;
+    const size_t len = again ? 1 : s.size();
+    PopupLevel& L = *g_popup.levels.back();
+    const int n = static_cast<int>(L.items.size()), cur = L.hover >= 0 ? L.hover : L.mark;
+    for (int k = again ? 1 : 0; k <= n; ++k) {  // a longer word may still be on the current item
+        const int i = (std::max(cur, 0) + k) % n;
+        const MenuItem& m = L.items[i];
+        if (m.sep || !m.enabled || _wcsnicmp(m.text.c_str(), s.c_str(), len) != 0) continue;
+        L.hover = i;
+        EnsureItemVisible(L, i);
+        InvalidateRect(L.hwnd, nullptr, FALSE);
+        return;
+    }
+}
+
+void PopupWheel(int delta, POINT pt) {
+    if (!g_popup.open()) return;
+    int li = PopupLevelAt(pt);
+    if (li < 0) li = static_cast<int>(g_popup.levels.size()) - 1;
+    PopupLevel& L = *g_popup.levels[li];
+    const float to = std::clamp(L.scroll - delta * 3.f * kMenuRow / WHEEL_DELTA, 0.f, MaxScroll(L));
+    if (to == L.scroll) return;
+    PopupCloseFrom(li + 1);
+    L.scroll = to;
+    if (PtInRect(&L.rc, pt)) L.hover = ItemAt(L, (pt.y - L.rc.top) * 96.f / g_dpi);  // what is under the cursor now
+    InvalidateRect(L.hwnd, nullptr, FALSE);
 }
 
 LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
@@ -432,6 +558,23 @@ LRESULT CALLBACK PopupProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             }
             return 0;
         }
+        case WM_MBUTTONUP: {
+            POINT pt{GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
+            ClientToScreen(hwnd, &pt);
+            const int li = PopupLevelAt(pt);
+            if (li < 0 || !g_popup.onMiddle) return 0;
+            PopupLevel& L = *g_popup.levels[li];
+            const int item = ItemAt(L, (pt.y - L.rc.top) * 96.f / g_dpi);
+            if (item < 0 || L.items[item].sep || !L.items[item].enabled || !L.items[item].id) return 0;
+            const UINT id = L.items[item].id;
+            auto cb = g_popup.onMiddle;
+            PopupClose();
+            cb(id);
+            return 0;
+        }
+        case WM_MOUSEWHEEL:
+            PopupWheel(GET_WHEEL_DELTA_WPARAM(wp), POINT{GET_X_LPARAM(lp), GET_Y_LPARAM(lp)});
+            return 0;
         case WM_CAPTURECHANGED:
             if (g_popup.open() && hwnd == g_popup.levels[0]->hwnd && reinterpret_cast<HWND>(lp) != hwnd) PopupClose();
             return 0;
@@ -1037,6 +1180,117 @@ void OpenAppMenu(const RECT& anchorScreen) {
             case CmdQuit: BgQuit(); break;
         }
     });
+}
+
+// ================================================================ breadcrumb dropdown
+// The folders inside a folder, from the chevron after its segment; a right click on a segment lists that segment's
+// siblings, which is the same list one level up. It opens on the folder you are in, or on the way to it.
+struct CrumbWait {
+    std::wstring dir;
+    RECT anchor{};
+    HWND popup = nullptr;  // the "Loading…" menu it will replace, if it's still open
+} g_crumbWait;
+
+// Where a segment's siblings are. The top of a tree has none: there, its own contents.
+std::wstring CrumbSiblingsDir(const std::wstring& p) {
+    if (p.rfind(L"\\\\", 0) == 0) {  // \\server\share: ParentOf stops at the share
+        const size_t a = p.find(L'\\', 2);
+        if (a == std::wstring::npos) return p;
+        if (p.find(L'\\', a + 1) == std::wstring::npos) return p.substr(0, a);
+    }
+    return p.empty() ? p : ParentOf(p);
+}
+
+// Is this item the folder we are in, or on the way to it?
+bool OnTheWay(const std::wstring& item, const std::wstring& here) {
+    std::wstring k = Key(item);
+    if (k == here) return true;
+    if (k.back() != L'\\') k += L'\\';
+    return here.rfind(k, 0) == 0;
+}
+
+void CrumbMenuShow(const Listing& l, const std::wstring& dir, const RECT& anchor) {
+    const std::wstring here = Key(T().path);
+    const bool drives = dir.empty();
+    struct Sub {
+        const wchar_t* name;
+        std::wstring path;
+    };
+    std::vector<Sub> subs;
+    for (const Entry& e : l.entries) {
+        if (!e.isDir() && !drives) continue;
+        std::wstring path = Join(dir, l.name(e));
+        const bool hidden = !drives && (e.attrs & (FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM));
+        if (hidden && !g_cfg.showHidden && !OnTheWay(path, here)) continue;
+        subs.push_back({l.name(e), std::move(path)});
+    }
+    if (!drives) std::sort(subs.begin(), subs.end(), [](const Sub& a, const Sub& b) { return StrCmpLogicalW(a.name, b.name) < 0; });
+    auto paths = std::make_shared<std::vector<std::wstring>>();
+    paths->reserve(subs.size());
+    std::vector<MenuItem> items;
+    items.reserve(subs.size());
+    int mark = -1;
+    for (Sub& s : subs) {
+        MenuItem m;
+        m.text = drives ? DriveLabel(s.name[0]) : s.name;
+        m.icon = drives ? -1 : g_iconFolder;
+        m.iconPath = s.path;
+        if (mark < 0 && OnTheWay(s.path, here)) {
+            mark = static_cast<int>(items.size());
+            m.bold = true;
+        }
+        paths->push_back(std::move(s.path));
+        m.id = static_cast<UINT>(paths->size());
+        items.push_back(std::move(m));
+    }
+    if (items.empty()) {
+        MenuItem m;
+        m.text = l.error ? L"Couldn't open: " + ErrorText(l.error) : L"No folders here";
+        m.enabled = false;
+        items.push_back(std::move(m));
+    }
+    PopupOpen(std::move(items), anchor, [paths](UINT id) { Navigate(T(), (*paths)[id - 1], true); }, nullptr,
+              20 * kMenuRow + 2 * kMenuPad, mark);
+    g_popup.onMiddle = [paths](UINT id) { NewTab((*paths)[id - 1]); };
+    g_crumbMenuOpen = true;
+    g_crumbMenuDir = dir;
+    Invalidate();
+}
+
+// r: the segment or chevron it hangs from, in the main window.
+void CrumbMenu(const std::wstring& dir, const D2D1_RECT_F& r) {
+    RECT anchor = ScreenRect(r);
+    anchor.bottom += MulDiv(4, g_dpi, 96);
+    g_crumbWait.popup = nullptr;
+    auto it = g_cache.find(Key(dir));
+    if (it != g_cache.end()) {
+        CrumbMenuShow(*it->second, dir, anchor);
+        Enqueue(dir, JobKind::Revalidate);
+        return;
+    }
+    auto j = Enqueue(dir, JobKind::Load);
+    if (WaitForSingleObject(j->done, 30) == WAIT_OBJECT_0 && j->result && !j->taken.exchange(true)) {
+        if (j->result->error == 0) g_cache[Key(dir)] = j->result;
+        CrumbMenuShow(*j->result, dir, anchor);
+        return;
+    }
+    // the network or a sleeping disk: the menu opens now and fills in when the list arrives
+    MenuItem m;
+    m.text = L"Loading…";
+    m.enabled = false;
+    PopupOpen({m}, anchor, nullptr);
+    g_crumbMenuOpen = true;
+    g_crumbMenuDir = dir;
+    g_crumbWait = {dir, anchor, g_popup.levels[0]->hwnd};
+    Invalidate();
+}
+
+// A listing arrived: is it the one the open menu is waiting for?
+void CrumbMenuListed(const Listing& l) {
+    if (!g_crumbWait.popup || Key(l.path) != Key(g_crumbWait.dir)) return;
+    const CrumbWait w = g_crumbWait;
+    g_crumbWait.popup = nullptr;
+    if (g_popup.open() && g_popup.levels[0]->hwnd == w.popup) CrumbMenuShow(l, w.dir, w.anchor);
 }
 
 // ================================================================ context menu editor
