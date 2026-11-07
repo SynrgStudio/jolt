@@ -80,7 +80,7 @@ void PaletteFilter() {
             }
             if (!m1 && !m2) continue;
         }
-        g_pal.hits.push_back({static_cast<int>(i), real + it.bonus});
+        g_pal.hits.push_back({static_cast<int>(i), real + it.bonus + (g_pal.mode == 1 ? NameRank(it.title.c_str(), it.title.size(), pat) : 0)});
     }
     if (!pat.empty())
         std::stable_sort(g_pal.hits.begin(), g_pal.hits.end(), [](auto& a, auto& b) { return a.second > b.second; });
@@ -116,6 +116,21 @@ void PaletteClose() {
     g_pal.open = false;
     g_pal.all.clear();
     g_pal.hits.clear();
+    ++g_ixGen;  // what is still being searched or checked is no longer needed
+    g_ixAsked.clear();
+    Invalidate();
+}
+
+// The results changed under the list: it stays where it was.
+void PaletteRefresh() {
+    if (!g_pal.open || g_pal.mode != 1) return;
+    const int first = g_pal.first;
+    const std::wstring keep = g_pal.sel > 0 && g_pal.sel < static_cast<int>(g_pal.hits.size()) ? g_pal.all[g_pal.hits[g_pal.sel].first].path : L"\x01";
+    PaletteFilter();
+    for (int i = 0; i < static_cast<int>(g_pal.hits.size()); ++i)
+        if (g_pal.all[g_pal.hits[i].first].path == keep) g_pal.sel = i;
+    g_pal.first = first;
+    PaletteEnsureVisible();
     Invalidate();
 }
 
@@ -349,8 +364,9 @@ void GotoBuild() {
         }
     // the whole drive (global index): arrives a moment later and joins the list
     IdxRequest(text);
-    if (text.size() >= 2 && g_ixRes.query == text)
-        for (auto& [p, dir] : g_ixRes.hits) add(PlaceTitle(p), p, false, 0);
+    // while the new search runs, the last one stays, filtered: what matches the longer text is in it, and nothing blinks
+    if (text.size() >= 2 && !g_ixRes.query.empty() && text.rfind(g_ixRes.query, 0) == 0)
+        for (const std::wstring& p : g_ixRes.hits) add(PlaceTitle(p), p, false, 0);
 }
 
 void PaletteRun(int hit) {
@@ -531,6 +547,10 @@ void DrawPalette(float W, float H) {
         // drive index status
         std::wstring st = g_ixBuilding && g_ixCount == 0 ? L"indexing the drives…"
                           : Thousands(static_cast<int>(std::min<uint64_t>(g_ixCount, INT_MAX))) + (g_ixBuilding ? L" in the index · updating" : L" in the index");
+        if (g_ixRes.query == Trim(g_pal.text) && g_ixRes.total > 0) {  // how much of it is in the list
+            const int found = static_cast<int>(std::min<uint64_t>(g_ixRes.total, INT_MAX)), listed = static_cast<int>(g_ixRes.hits.size());
+            st = listed < found ? Thousands(listed) + L" of " + Thousands(found) : Thousands(found) + (found == 1 ? L" result" : L" results");
+        }
         Color(cFaint);
         Text(st, g_fmtRight.Get(), px + 38 + tw + 20, py, px + pw - 14, py + kPalInputH);
     }
@@ -584,6 +604,7 @@ void DrawPalette(float W, float H) {
         }
         y += kPalRow;
     }
+    if (g_pal.mode == 1 && g_pal.first + kPalMaxRows + 40 >= total) IdxMore();
     if (total > kPalMaxRows) {
         // thin scrollbar
         const float top = py + kPalInputH + 4, viewH = kPalMaxRows * kPalRow;

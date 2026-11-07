@@ -657,6 +657,11 @@ void TestRunStep() {
             TestKey(s.arg);
         } else if (s.cmd == L"type") {
             for (wchar_t c : s.arg) SendMessageW(TestKeyTarget(), WM_CHAR, c, 1);
+        } else if (s.cmd == L"palette") {  // the Ctrl+P or Ctrl+K list: how many, where, and its first rows
+            std::wstring out = L"palette: " + std::to_wstring(g_pal.hits.size()) + L" rows, sel " + std::to_wstring(g_pal.sel) + L", first " + std::to_wstring(g_pal.first) + L", index " +
+                               std::to_wstring(g_ixRes.hits.size()) + L" of " + std::to_wstring(g_ixRes.total) + L":";
+            for (size_t i = 0; i < g_pal.hits.size() && i < 8; ++i) out += L" | " + g_pal.all[g_pal.hits[i].first].title;
+            TestLog(out);
         } else if (s.cmd == L"admin_window") {  // works with the real one on this desktop ("front": as if it had the focus)
             g_testAdminLink = true;
             g_testAdminFront = s.arg == L"front";
