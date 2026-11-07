@@ -588,6 +588,11 @@ void TestRunStep() {
             const size_t bar2 = s.arg.find(L'|', bar + 1);
             const std::wstring sub = Trim(s.arg.substr(0, bar)), name = Trim(s.arg.substr(bar + 1, bar2 - bar - 1)), val = Trim(s.arg.substr(bar2 + 1));
             RegWrite(sub, name.empty() ? nullptr : name.c_str(), val);
+        } else if (s.cmd == L"grep") {  // the content search: term, files still to read, files read, matches
+            int matches = 0;
+            for (const auto& [k, h] : g_grepHits) matches += h.match;
+            TestLog(L"grep: \"" + g_grepTerm + L"\" pending " + std::to_wstring(g_grepPending.load()) + L" read " + std::to_wstring(g_grepHits.size()) +
+                    L" matches " + std::to_wstring(matches) + L" gen " + std::to_wstring(g_grepGen.load()));
         } else if (s.cmd == L"rows") {  // what the list shows, in order
             std::wstring names;
             for (int i = 0; i < RowCount(T()) && i < 40; ++i) names += L" " + (IsHeader(T(), i) ? L"[" + RowName(T(), i) + L"]" : RowName(T(), i));

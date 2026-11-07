@@ -160,8 +160,9 @@
 <tr><td><code>newer:7d</code> &nbsp; <code>older:2w</code> &nbsp; <code>modified:today</code></td><td>date: d h w m y, or <code>today</code> (since midnight)</td></tr>
 <tr><td><code>!tmp</code> &nbsp; <code>!.bak</code> &nbsp; <code>!*.log</code></td><td>exclude by name, extension or pattern</td></tr>
 <tr><td><code>report*.pdf</code> &nbsp; <code>?.txt</code></td><td>wildcard pattern on the name</td></tr>
+<tr><td><code>content:word</code> &nbsp; <code>content:"two words"</code></td><td><strong>search inside the files</strong>: keeps the text files whose content has it, and shows the line around the match next to the name. Files are read in the background (UTF-8, UTF-16 or the system code page; binaries and files over 32 MB are skipped). With <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>F</kbd> it covers the subfolders too</td></tr>
 </table>
-<p class="ex">Examples: <code>invoice .pdf newer:30d</code> — the invoices of the last month. &nbsp; <code>&gt;500mb !.iso</code> — what is taking space, except disc images. &nbsp; <code>type:folder old</code> — folders with "old" in the name.</p>
+<p class="ex">Examples: <code>content:TODO .cpp</code> — source files with a TODO. &nbsp; <code>invoice .pdf newer:30d</code> — the invoices of the last month. &nbsp; <code>&gt;500mb !.iso</code> — what is taking space, except disc images. &nbsp; <code>type:folder old</code> — folders with "old" in the name.</p>
 <p>Only the words light up in the names. The status bar shows how many match.</p>
 
 <h2 id="preview">Preview</h2>
