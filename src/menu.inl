@@ -1213,7 +1213,8 @@ void OpenShellMenu(POINT screenPt, int row) {
 
 void OpenMenuEditor();
 
-enum AppCmd : UINT { CmdMenuEditor = 1, CmdConfigFolder, CmdInstall, CmdAbout, CmdQuit };
+enum AppCmd : UINT { CmdMenuEditor = 1, CmdConfigFolder, CmdInstall, CmdAbout, CmdQuit, CmdSettings };
+void SettingsOpen(int section = -1);  // settings.inl
 void InstPanelOpen();
 void BgQuit();
 
@@ -1231,6 +1232,7 @@ void OpenAppMenu(const RECT& anchorScreen) {
         m.sep = true;
         items.push_back(m);
     };
+    add(L"Settings…", ShortcutFor(Cmd::Settings).c_str(), CmdSettings);
     add(L"Context menu…", L"", CmdMenuEditor);
     add(L"Config folder", L"", CmdConfigFolder);
     if (!g_adminWindow) add(L"Install…", L"", CmdInstall);
@@ -1240,6 +1242,7 @@ void OpenAppMenu(const RECT& anchorScreen) {
     add(L"Quit", L"", CmdQuit);
     PopupOpen(std::move(items), anchorScreen, [](UINT id) {
         switch (id) {
+            case CmdSettings: SettingsOpen(); break;
             case CmdMenuEditor: OpenMenuEditor(); break;
             case CmdConfigFolder: {
                 std::wstring f = FavFile();

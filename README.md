@@ -178,7 +178,7 @@ works too). Options in `config.txt`: `run_in_background`, `global_hotkey`, `tray
 | drag the left edge of Modified or Size | change the column width (double click: fit the content). Saved in `config.txt` |
 | Ctrl + / Ctrl - / Ctrl+0 | enlarge, shrink or return the whole interface to normal size (saved as `scale`) |
 | right click / Shift+F10 / Menu key | Windows context menu (file, folder or background); with Shift, the extended one |
-| ☰ (top left) | app menu: context menu editor, configuration folder, quit |
+| ☰ (top left) | app menu: settings, context menu editor, configuration folder, quit |
 | Ctrl+H | show / hide hidden files (saved in `config.txt`) |
 | Ctrl+K → "toggle…" | show or hide folders, files or extensions (no default shortcut: assign one with a click in the palette) |
 | Ctrl+K → "group…", "collapse…", "expand…" | group this folder by day or by type, remove the groups, collapse or expand them all |
@@ -206,6 +206,12 @@ It can be edited by hand; it is read at startup.
 ---
 
 ## Configuration
+
+**Ctrl+,** (or ☰ → Settings…) opens the settings: a panel over the window with every option, the interface
+size and colors, the shortcuts (click one and press the new key; typing searches them), the file colors, your own
+commands, the tag colors and the favorites' names. Every change is written to the files below as you make it,
+keeping their comments, and applies at once; the files stay the source of truth, so editing them by hand keeps
+working.
 
 `%APPDATA%\Jolt\config.txt` is generated the first time with all values and comments, and **reloads itself on
 save** (so do `favorites.txt` and `menu.txt`). Sections:

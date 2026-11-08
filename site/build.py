@@ -10,10 +10,25 @@ out = os.path.join(root, '_site')
 site = os.path.join(root, 'site')
 
 
+def split_keys(spec):
+    """'Ctrl+N, F2' -> ['Ctrl+N', 'F2']. A comma right after a modifier is the comma key, as in Jolt's SplitKeys."""
+    out, cur = [], ''
+    for c in spec:
+        if c == ',' and not cur.strip().lower().endswith(('ctrl+', 'control+', 'shift+', 'alt+')):
+            if cur.strip():
+                out.append(cur.strip())
+            cur = ''
+        else:
+            cur += c
+    if cur.strip():
+        out.append(cur.strip())
+    return out
+
+
 def keys_html(spec):
     """'Ctrl+Shift+N, F2' -> <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>N</kbd> / <kbd>F2</kbd>"""
     parts = []
-    for combo in [c.strip() for c in spec.split(',') if c.strip()]:
+    for combo in split_keys(spec):
         # "Ctrl++" and "Ctrl+-": the last char is the key itself
         if combo.endswith('++') or combo.endswith('+-'):
             mods, key = combo[:-2], combo[-1]

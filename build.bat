@@ -27,7 +27,7 @@ call "%VSDIR%\VC\Auxiliary\Build\vcvars64.bat" >nul || exit /b 1
 
 set MODE=O2
 if "%1"=="fast" set MODE=Od
-set FLAGS=/nologo /std:c++20 /%MODE% /W4 /EHsc /utf-8 /permissive- /MT /Zi /DUNICODE /D_UNICODE /DNOMINMAX /Fdbuild\
+set FLAGS=/nologo /std:c++20 /%MODE% /W4 /EHsc /utf-8 /permissive- /MT /Zi /bigobj /DUNICODE /D_UNICODE /DNOMINMAX /Fdbuild\
 set LINKF=/link /DEBUG /OPT:REF /OPT:ICF /PDBALTPATH:%%_PDB%%
 
 rem --- system headers (~580k lines): processed only once per mode

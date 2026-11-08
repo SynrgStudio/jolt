@@ -3354,6 +3354,7 @@ void DrawViewEditor(float W, float H);  // viewedit.inl
 void DrawInstallPanel(float W, float H);  // install.inl
 void DrawRenamePanel(float W, float H);   // rename.inl
 void DrawMenuEditor(float W, float H);    // menu.inl
+void DrawSettings(float W, float H);      // settings.inl
 
 // Milliseconds since the process started (includes loading the executable).
 double MsSinceProcessStart() {
@@ -3400,6 +3401,7 @@ void Render() {
     DrawInstallPanel(W, H);
     DrawRenamePanel(W, H);
     DrawMenuEditor(W, H);
+    DrawSettings(W, H);
     if (g_rt->EndDraw() == D2DERR_RECREATE_TARGET) ReleaseTarget();
     if (g_firstFrameMs == 0) g_firstFrameMs = MsSinceProcessStart();
 
@@ -3750,6 +3752,7 @@ void ViewEditorOpen(int pane);
 #include "palette.inl"
 #include "select.inl"
 #include "viewedit.inl"
+#include "settings.inl"
 #include "ops.inl"
 #include "search.inl"
 #include "dups.inl"
@@ -4092,6 +4095,7 @@ void RunCommand(Cmd cmd) {
             break;
         }
         case Cmd::Palette: PaletteOpen(0); break;
+        case Cmd::Settings: SettingsOpen(); break;
         case Cmd::GoTo: PaletteOpen(1); break;
         case Cmd::SearchSubfolders:
             if (t.recursive) StopRecursive(t, true);
@@ -4535,6 +4539,35 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         if (msg == WM_RBUTTONDOWN || msg == WM_RBUTTONUP || msg == WM_MBUTTONDOWN) return 0;
         if (msg == WM_SETCURSOR && LOWORD(lp) == HTCLIENT) {
             SetCursor(LoadCursorW(nullptr, g_ed.dragging ? IDC_SIZENS : IDC_ARROW));
+            return TRUE;
+        }
+    }
+    // settings: a panel over everything, with the mouse and the keyboard (its text box has its own)
+    if (g_set.open) {
+        if (msg == WM_KEYDOWN || (msg == WM_SYSKEYDOWN && wp != VK_F4)) {
+            SettingsKey(wp);
+            return 0;
+        }
+        if (msg == WM_CHAR || msg == WM_SYSCHAR) {
+            if (wp >= 32) SettingsChar(static_cast<wchar_t>(wp));
+            return 0;
+        }
+        if (msg == WM_MOUSEMOVE) {
+            SettingsMouseMove(DipX(lp), DipY(lp));
+            return 0;
+        }
+        if (msg == WM_LBUTTONDOWN || msg == WM_LBUTTONDBLCLK) {
+            SettingsClick(DipX(lp), DipY(lp));
+            return 0;
+        }
+        if (msg == WM_MOUSEWHEEL) {
+            SettingsWheel(GET_WHEEL_DELTA_WPARAM(wp));
+            return 0;
+        }
+        if (msg == WM_LBUTTONUP || msg == WM_RBUTTONDOWN || msg == WM_RBUTTONUP || msg == WM_MBUTTONDOWN) return 0;
+        if (msg == WM_SETCURSOR && LOWORD(lp) == HTCLIENT) {
+            const bool field = g_set.hovering && g_set.hoverHit.k == SetK::Field;
+            SetCursor(LoadCursorW(nullptr, field ? IDC_IBEAM : g_set.hovering ? IDC_HAND : IDC_ARROW));
             return TRUE;
         }
     }
