@@ -100,6 +100,7 @@ HWND TestKeyTarget() {
     if (g_editing) return g_edit;
     if (g_ved.editStep >= 0 && g_ved.edit) return g_ved.edit;
     if (!g_set.editId.empty() && g_set.edit) return g_set.edit;
+    if (g_at.editing >= 0 && g_at.edit) return g_at.edit;
     return g_hwnd;
 }
 
@@ -467,6 +468,7 @@ void TestActivate(bool on) {
         if (g_editing) SendMessageW(g_edit, WM_KILLFOCUS, 0, 0);
         if (g_ved.editStep >= 0 && g_ved.edit) SendMessageW(g_ved.edit, WM_KILLFOCUS, 0, 0);
         if (!g_set.editId.empty() && g_set.edit) SendMessageW(g_set.edit, WM_KILLFOCUS, 0, 0);
+        if (g_at.editing >= 0 && g_at.edit) SendMessageW(g_at.edit, WM_KILLFOCUS, 0, 0);
     }
     g_testActive = on;
     SendMessageW(g_hwnd, WM_ACTIVATE, on ? WA_ACTIVE : WA_INACTIVE, 0);

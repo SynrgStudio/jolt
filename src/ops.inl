@@ -474,7 +474,7 @@ void EmptyRecycleBin();
 bool BinRefuses(Cmd cmd) {
     switch (cmd) {
         case Cmd::Rename: case Cmd::RenameMany: case Cmd::NewFolder: case Cmd::NewFile: case Cmd::Copy: case Cmd::Cut: case Cmd::Paste:
-        case Cmd::CopyToOther: case Cmd::MoveToOther: case Cmd::CopyTo: case Cmd::MoveTo: case Cmd::CopyPath: case Cmd::CopyName: case Cmd::CopyPathUnix: case Cmd::Duplicate:
+        case Cmd::CopyToOther: case Cmd::MoveToOther: case Cmd::CopyTo: case Cmd::MoveTo: case Cmd::Attributes: case Cmd::CopyPath: case Cmd::CopyName: case Cmd::CopyPathUnix: case Cmd::Duplicate:
         case Cmd::GroupInFolder: case Cmd::Properties: case Cmd::Terminal: case Cmd::RealLocation: case Cmd::OpenAsAdmin: case Cmd::Tag:
         case Cmd::SearchSubfolders:
             return true;
