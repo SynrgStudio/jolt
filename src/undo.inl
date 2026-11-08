@@ -225,6 +225,11 @@ bool FileOp(FileOpKind kind, const std::vector<std::wstring>& files, const std::
         ok = SUCCEEDED(op->PerformOperations());
         r->Detach(op.Get());
         if (own) own->Commit();
+        // the folders it touched are read again: whatever shows them catches up, subfolder search results too
+        std::unordered_set<std::wstring> again;
+        for (const std::wstring& f : files)
+            if (const std::wstring dir = ParentOf(f); !dir.empty() && again.insert(Key(dir)).second) Enqueue(dir, JobKind::Revalidate);
+        if (!dest.empty() && again.insert(Key(dest)).second) Enqueue(dest, JobKind::Revalidate);
     }
     if (own) own->Release();
     return ok;

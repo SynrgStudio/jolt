@@ -8,7 +8,8 @@ void DeleteSelection() {
     std::vector<std::wstring> all = SelectedFullPaths(t);
     std::vector<std::wstring> names = SelectedNames(t);
     const bool permanent = KeyDown(VK_SHIFT);
-    if (all.empty() || (permanent && names.size() == all.size())) {
+    // in search results Jolt deletes it too (it also asks), so the results know what went
+    if (all.empty() || (permanent && names.size() == all.size() && !t.recursive)) {
         ShellVerb(names, "delete");
         return;
     }
@@ -20,7 +21,6 @@ void DeleteSelection() {
         if (ss.fNoConfirmRecycle) flags |= FOF_NOCONFIRMATION;
     }
     FileOp(FileOpKind::Delete, all, L"", flags);
-    for (const auto& f : all) Enqueue(ParentOf(f), JobKind::Revalidate);
 }
 
 bool SetClipboardText(const std::wstring& s) {
@@ -201,6 +201,12 @@ void Properties() {
     std::vector<std::wstring> names = SelectedNames(t);
     if (names.empty()) {
         if (!t.path.empty()) SHObjectProperties(g_hwnd, SHOP_FILEPATH, t.path.c_str(), nullptr);
+        return;
+    }
+    // items from several folders (search results): the menu verb can't open them together, the multi-file
+    // properties sheet can, from the same data object a drag uses
+    if (SelSpansFolders(t)) {
+        if (ComPtr<IDataObject> d = SelectionDataObject()) SHMultiFileProperties(d.Get(), 0);
         return;
     }
     ShellVerb(names, "properties");
