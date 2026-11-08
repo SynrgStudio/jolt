@@ -2,7 +2,7 @@
 
 Every planned feature, one line per GitHub issue. A line is checked and struck through when its PR is merged.
 
-**32 of 88 done.**
+**33 of 88 done.**
 
 ## Navigation
 
@@ -33,7 +33,7 @@ Every planned feature, one line per GitHub issue. A line is checked and struck t
 
 ## Editing
 
-9 of 10 done.
+10 of 10 done.
 
 - [x] ~~[#11](https://github.com/SynrgStudio/jolt/issues/11) Rename several files at once with a preview~~
 - [x] ~~[#12](https://github.com/SynrgStudio/jolt/issues/12) Select by pattern, by extension of the highlighted item, and invert selection~~
@@ -44,7 +44,7 @@ Every planned feature, one line per GitHub issue. A line is checked and struck t
 - [x] ~~[#17](https://github.com/SynrgStudio/jolt/issues/17) Paste an image or text from the clipboard as a file~~
 - [x] ~~[#18](https://github.com/SynrgStudio/jolt/issues/18) Move to / Copy to with the Ctrl+P picker~~
 - [x] ~~[#19](https://github.com/SynrgStudio/jolt/issues/19) Change attributes and dates~~
-- [ ] [#20](https://github.com/SynrgStudio/jolt/issues/20) Unblock downloaded files and show which process has a file open
+- [x] ~~[#20](https://github.com/SynrgStudio/jolt/issues/20) Unblock downloaded files and show which process has a file open~~
 
 ## View
 

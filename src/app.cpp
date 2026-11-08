@@ -33,6 +33,7 @@
 #include <cwchar>
 #include <deque>
 #include <fstream>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -3460,6 +3461,7 @@ void DrawRenamePanel(float W, float H);   // rename.inl
 void DrawMenuEditor(float W, float H);    // menu.inl
 void DrawSettings(float W, float H);      // settings.inl
 void DrawAttrs(float W, float H);         // attrs.inl
+void DrawInUse(float W, float H);         // inuse.inl
 
 // Milliseconds since the process started (includes loading the executable).
 double MsSinceProcessStart() {
@@ -3509,6 +3511,7 @@ void Render() {
     DrawMenuEditor(W, H);
     DrawSettings(W, H);
     DrawAttrs(W, H);
+    DrawInUse(W, H);
     if (g_rt->EndDraw() == D2DERR_RECREATE_TARGET) ReleaseTarget();
     if (g_firstFrameMs == 0) g_firstFrameMs = MsSinceProcessStart();
 
@@ -3729,6 +3732,25 @@ void CancelRename() {
     Invalidate();
 }
 
+void InUseAfterFailure(const std::wstring& what, const std::vector<std::wstring>& files, const std::wstring& reason, std::function<void()> retry);  // inuse.inl
+
+// The rename itself, and what follows it. If the file is open somewhere, the In use panel offers to close that
+// and does the rename again.
+void RenameApply(const std::wstring& dir, const std::wstring& oldName, const std::wstring& newName, bool follow) {
+    const std::wstring from = Join(dir, oldName.c_str()), to = Join(dir, newName.c_str());
+    if (!MoveFileExW(ToExtendedPath(from).c_str(), ToExtendedPath(to).c_str(), 0)) {
+        const DWORD e = GetLastError();
+        InUseAfterFailure(L"Couldn't rename " + oldName, {from}, ErrorText(e), [=] { RenameApply(dir, oldName, newName, follow); });
+        return;
+    }
+    Tab& t = T();
+    UndoRecordRename(from, to);
+    if (follow) t.pendingSelect = Key(dir) == Key(t.path) ? newName : to;
+    TreeFollow(t, from, to);
+    TagsFollow(from, to);
+    Enqueue(dir, JobKind::Revalidate);
+}
+
 // follow: the cursor follows the new name when the list reloads.
 void CommitRename(bool follow = true) {
     if (!g_renaming) return;
@@ -3747,7 +3769,6 @@ void CommitRename(bool follow = true) {
         return;
     }
     std::wstring oldName = g_renameOld, dir = g_renameDir;
-    Tab& t = T();
     CancelRename();
     if (newName.empty() || newName == oldName) return;
     if (newName.find_first_of(L"\\/:*?\"<>|") != std::wstring::npos) {
@@ -3757,19 +3778,7 @@ void CommitRename(bool follow = true) {
         return;
     }
     if (TestRefuses(dir)) return;
-    std::wstring from = ToExtendedPath(Join(dir, oldName.c_str()));
-    std::wstring to = ToExtendedPath(Join(dir, newName.c_str()));
-    if (!MoveFileExW(from.c_str(), to.c_str(), 0)) {
-        S.message = L"Couldn't rename: " + ErrorText(GetLastError());
-        MessageBeep(MB_ICONWARNING);
-        Invalidate();
-        return;
-    }
-    UndoRecordRename(Join(dir, oldName.c_str()), Join(dir, newName.c_str()));
-    if (follow) t.pendingSelect = Key(dir) == Key(t.path) ? newName : Join(dir, newName.c_str());
-    TreeFollow(t, Join(dir, oldName.c_str()), Join(dir, newName.c_str()));
-    TagsFollow(Join(dir, oldName.c_str()), Join(dir, newName.c_str()));
-    Enqueue(dir, JobKind::Revalidate);
+    RenameApply(dir, oldName, newName, follow);
 }
 
 // Tab / Shift+Tab while renaming: saves and moves on to renaming the next / previous item.
@@ -3862,6 +3871,7 @@ void ViewEditorOpen(int pane);
 #include "viewedit.inl"
 #include "settings.inl"
 #include "attrs.inl"
+#include "inuse.inl"
 #include "ops.inl"
 #include "search.inl"
 #include "dups.inl"
@@ -4268,6 +4278,8 @@ void RunCommand(Cmd cmd) {
         case Cmd::Redo: UndoStep(false); break;
         case Cmd::Properties: Properties(); break;
         case Cmd::Attributes: AttrsOpen(); break;
+        case Cmd::InUse: InUseOpen(); break;
+        case Cmd::Unblock: Unblock(); break;
         case Cmd::FolderSizes: ComputeFolderSizes(); break;
         case Cmd::ShowFolders:
             g_hideDirs = !g_hideDirs;
@@ -4718,6 +4730,27 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return TRUE;
         }
     }
+    // in use: a panel over everything
+    if (g_iu.open) {
+        if (msg == WM_KEYDOWN || (msg == WM_SYSKEYDOWN && wp != VK_F4)) {
+            InUseKey(wp);
+            return 0;
+        }
+        if (msg == WM_CHAR || msg == WM_SYSCHAR) return 0;
+        if (msg == WM_MOUSEMOVE) {
+            InUseMouseMove(DipX(lp), DipY(lp));
+            return 0;
+        }
+        if (msg == WM_LBUTTONDOWN || msg == WM_LBUTTONDBLCLK) {
+            InUseClick(DipX(lp), DipY(lp));
+            return 0;
+        }
+        if (msg == WM_LBUTTONUP || msg == WM_RBUTTONDOWN || msg == WM_RBUTTONUP || msg == WM_MBUTTONDOWN || msg == WM_MOUSEWHEEL) return 0;
+        if (msg == WM_SETCURSOR && LOWORD(lp) == HTCLIENT) {
+            SetCursor(LoadCursorW(nullptr, g_iu.hovering ? IDC_HAND : IDC_ARROW));
+            return TRUE;
+        }
+    }
     // attributes and dates: a panel over everything
     if (g_at.open) {
         if (msg == WM_KEYDOWN || (msg == WM_SYSKEYDOWN && wp != VK_F4)) {
@@ -5043,6 +5076,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (wp == kTimerHeat) HeatCommit();
             if (wp == kTimerDisk) DiskTick();
             if (wp == kTimerTabSlide) Invalidate();
+            if (wp == kTimerInUse) InUseTick();
             if (wp == kTimerSession) SaveSession();
             if (wp == kTimerConfig) ReloadConfig();
             return 0;
