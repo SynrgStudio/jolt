@@ -11,7 +11,7 @@ enum class Cmd {
     SortByType, ZoomIn, ZoomOut, ZoomReset, RowsTaller, RowsShorter, EmptyRecycleBin,
     Undo, Redo, OpenAsAdmin, PinTab, Restore,
     Install, Quit, RenameMany, FolderSiblings, ViewList, ViewGrid, ViewBigger, ViewSmaller, Tag, PreviewWrap,
-    FindDuplicates, SelectExtraCopies, SelectPattern, SelectSameExtension, InvertSelection, Settings, Checkboxes, NewFromTemplate,
+    FindDuplicates, SelectExtraCopies, SelectPattern, SelectSameExtension, InvertSelection, Settings, Checkboxes, NewFromTemplate, CopyTo, MoveTo,
     CustomFirst = 1000  // + index into g_cfg.custom: the user's own commands
 };
 inline bool IsCustom(Cmd c) { return static_cast<int>(c) >= static_cast<int>(Cmd::CustomFirst); }
@@ -103,6 +103,8 @@ const CmdDef kCommands[] = {
     {L"other_pane", Cmd::OtherPane, L"Tab", L"switch to the other pane"},
     {L"copy_to_other", Cmd::CopyToOther, L"F5", L"copy the selection to the other pane"},
     {L"move_to_other", Cmd::MoveToOther, L"F6", L"move the selection to the other pane"},
+    {L"copy_to", Cmd::CopyTo, L"Shift+F5", L"copy the selection to a folder picked like in Go to (recents, favorites, drives, a path)"},
+    {L"move_to", Cmd::MoveTo, L"Shift+F6", L"move the selection to a folder picked like in Go to"},
     {L"copy_path", Cmd::CopyPath, L"Ctrl+Shift+C", L"copy the path of the selection (or of the folder)"},
     {L"copy_name", Cmd::CopyName, L"Ctrl+Alt+C", L"copy the name of the selection (or of the folder)"},
     {L"copy_path_unix", Cmd::CopyPathUnix, L"", L"copy the path with forward slashes (C:/Users/...)"},
