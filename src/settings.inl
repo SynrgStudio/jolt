@@ -234,15 +234,9 @@ std::vector<SetRow> SettingsRows(int section) {
                    [=](bool b) { SetGeneral(L"open_drives", yesNo(b)); });
             head(L"Columns");
             {
-                // one turned on goes where its kind is in the usual order, among the others, whatever their order
-                auto has = [](int k) { return std::find(g_cfg.cols.begin(), g_cfg.cols.end(), k) != g_cfg.cols.end(); };
+                auto has = [](int k) { return ColShown(k); };
                 auto set = [](int k, bool on) {
-                    std::vector<int> v = g_cfg.cols;
-                    v.erase(std::remove(v.begin(), v.end(), k), v.end());
-                    if (on) v.insert(std::find_if(v.begin(), v.end(), [k](int o) { return o > k; }), k);
-                    std::wstring s;
-                    for (int o : v) s += (s.empty() ? L"" : L", ") + std::wstring(kColDefs[o].key);
-                    ConfigSetValue(L"columns", L"show", s);
+                    const std::wstring s = ColShow(k, on);
                     SettingsSaved(L"Saved: columns = " + (s.empty() ? std::wstring(L"name only") : s));
                 };
                 const wchar_t* help[ColKinds] = {L"", L"Width × height of images and videos.", L"How long songs and videos last.",
