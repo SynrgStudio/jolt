@@ -848,9 +848,8 @@ bool GlobMatch(const wchar_t* name, size_t n, const std::wstring& pat) {
     return p == pat.size();
 }
 
-// Does the entry pass the typed filter? score and pos come from the fuzzy words.
-bool FilterPass(const FilterSpec& s, const Entry& e, const wchar_t* name, size_t n, int& score, std::vector<int>* pos,
-                const NearPattern& close, int& percent) {
+// Every term of the filter but the plain words (and content:, tag:, which need more than the entry).
+bool FilterTermsPass(const FilterSpec& s, const Entry& e, const wchar_t* name, size_t n) {
     if (s.kind == 1 && !e.isDir()) return false;
     if (s.kind == 2 && e.isDir()) return false;
     if (s.sized && (e.isDir() || e.size < s.minSize || e.size > s.maxSize)) return false;
@@ -870,6 +869,13 @@ bool FilterPass(const FilterSpec& s, const Entry& e, const wchar_t* name, size_t
         if (!GlobMatch(name, n, g)) return false;
     for (const std::wstring& g : s.notGlobs)
         if (GlobMatch(name, n, g)) return false;
+    return true;
+}
+
+// Does the entry pass the typed filter? score and pos come from the fuzzy words.
+bool FilterPass(const FilterSpec& s, const Entry& e, const wchar_t* name, size_t n, int& score, std::vector<int>* pos,
+                const NearPattern& close, int& percent) {
+    if (!FilterTermsPass(s, e, name, n)) return false;
     const bool real = FuzzyMatch(name, n, s.fuzzy, score, pos);
     if (real && score > kNearFloor / 2) return true;
     percent = NearMatch(name, n, close);
@@ -3738,6 +3744,7 @@ void SetFoldersFirst(int mode);
 void ViewEditorOpen(int pane);
 #include "indexer.inl"
 #include "palette.inl"
+#include "select.inl"
 #include "viewedit.inl"
 #include "ops.inl"
 #include "search.inl"
@@ -4094,6 +4101,15 @@ void RunCommand(Cmd cmd) {
         }
         case Cmd::SelectExtraCopies:
             SelectExtraCopies(t);
+            Invalidate();
+            break;
+        case Cmd::SelectPattern: SelPatternOpen(); break;
+        case Cmd::SelectSameExtension:
+            SelectSameExtension(t);
+            Invalidate();
+            break;
+        case Cmd::InvertSelection:
+            InvertSelection(t);
             Invalidate();
             break;
         case Cmd::Expand: SetExpanded(t, t.sel, !IsExpanded(t, t.sel)); break;

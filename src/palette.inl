@@ -12,7 +12,7 @@ struct PalItem {
 
 struct Palette {
     bool open = false;
-    int mode = 0;        // 0 = commands (Ctrl+K), 1 = Go to (Ctrl+P), 2 = tags for the selection
+    int mode = 0;        // 0 = commands (Ctrl+K), 1 = Go to (Ctrl+P), 2 = tags for the selection, 3 = select by pattern
     std::wstring text;
     std::wstring match;  // what's being searched for (in Go to with a typed path: whatever follows the last slash)
     std::vector<PalItem> all;
@@ -55,12 +55,16 @@ std::wstring ShortcutFor(Cmd cmd) {
 
 void GotoBuild();
 void TagBuild();
+void SelPatternBuild();  // select.inl
+void SelPatternPreview();
+void SelPatternCancel();
 
 void PaletteFilter() {
     g_pal.hits.clear();
     g_pal.match = g_pal.text;
     if (g_pal.mode == 1) GotoBuild();
     if (g_pal.mode == 2) TagBuild();
+    if (g_pal.mode == 3) SelPatternBuild();
     std::wstring pat = Lower(g_pal.match);
     const NearPattern close(pat, g_cfg.typoMin);
     for (size_t i = 0; i < g_pal.all.size(); ++i) {
@@ -86,6 +90,7 @@ void PaletteFilter() {
         std::stable_sort(g_pal.hits.begin(), g_pal.hits.end(), [](auto& a, auto& b) { return a.second > b.second; });
     g_pal.sel = 0;
     g_pal.first = 0;
+    if (g_pal.mode == 3) SelPatternPreview();
 }
 
 // How close a row is to what was typed, or 0 if it's a real match.
@@ -113,6 +118,7 @@ void PaletteWheel(int delta) {
 }
 
 void PaletteClose() {
+    if (g_pal.open && g_pal.mode == 3) SelPatternCancel();
     g_pal.open = false;
     g_pal.all.clear();
     g_pal.hits.clear();
@@ -203,6 +209,7 @@ void PaletteBuild() {
 void PaletteOpen(int mode = 0) {
     PopupClose();
     CancelRename();
+    if (g_pal.open && g_pal.mode == 3) SelPatternCancel();
     g_pal.open = true;
     g_pal.mode = mode;
     g_pal.capture = -1;
@@ -375,8 +382,9 @@ void GotoBuild() {
 void PaletteRun(int hit) {
     if (hit < 0 || hit >= static_cast<int>(g_pal.hits.size())) return;
     auto run = g_pal.all[g_pal.hits[hit].first].run;
+    if (g_pal.mode == 3 && run) run();  // the selection is applied first: closing would put the old one back
     PaletteClose();
-    if (run) run();
+    if (g_pal.mode != 3 && run) run();
 }
 
 // Command name (config) for a Cmd.
@@ -479,6 +487,7 @@ void PaletteKey(WPARAM vk) {
         default: return;
     }
     PaletteEnsureVisible();
+    if (g_pal.mode == 3) SelPatternPreview();
     Invalidate();
 }
 
@@ -539,7 +548,7 @@ void DrawPalette(float W, float H) {
     float tw = MeasureW(shown, g_fmtName.Get());
     if (shown.empty()) {
         Color(cFaint);
-        Text(g_pal.mode == 1 ? L"Go to…  recents, favorites, places, drives or a path" : g_pal.mode == 2 ? L"Tag…  pick one, or type a new name" : L"Type a command…",
+        Text(g_pal.mode == 1 ? L"Go to…  recents, favorites, places, drives or a path" : g_pal.mode == 2 ? L"Tag…  pick one, or type a new name" : g_pal.mode == 3 ? L"Select…  type a pattern" : L"Type a command…",
              g_fmtName.Get(), px + 38, py, px + pw - 12, py + kPalInputH);
     } else {
         Color(cText);
