@@ -173,7 +173,8 @@ void DupApply(WPARAM wp, LPARAM lp) {
     }
 }
 
-// The rows: each set that still has two copies or more (deleting or moving one updates it), under its title.
+// The rows: each set under its title, with the copies it still has (deleting or moving one updates it). A set left
+// with one copy stays, saying so: the list going empty after Del would look like everything was deleted.
 // With a filter, the sets where some copy matches, with all their copies.
 void BuildDupRows(Tab& t) {
     if (!t.dupDone || !t.dupHead) return;
@@ -202,7 +203,7 @@ void BuildDupRows(Tab& t) {
                 match = FilterPass(spec, e, l->name(e), e.nameLen, sc, nullptr, close, pc) && !pc;
             }
         }
-        if (members.size() < 2 || !match) continue;
+        if (members.empty() || !match) continue;
         s.shown = static_cast<int>(members.size());
         t.rows.push_back({t.dupHead.get(), -1 - static_cast<int>(si), 0});
         if (!GroupFolded(t, t.dupHead.get(), si)) t.rows.insert(t.rows.end(), members.begin(), members.end());
@@ -246,17 +247,22 @@ void SelectExtraCopies(Tab& t) {
 std::wstring DupStatus(const Tab& t) {
     if (!t.recDone) return L"Looking for duplicates   ·   " + Thousands(t.recDirs) + L" folders read…";
     if (!t.dupDone) return L"Comparing files   ·   " + Thousands(g_dupDoneFiles.load()) + L" of " + Thousands(g_dupTotalFiles.load()) + L"…";
-    int sets = 0, extra = 0;
+    int sets = 0, extra = 0, single = 0;
     uint64_t bytes = 0;
     for (const DupSet& s : t.dupSets) {
+        if (s.shown == 1) ++single;
         if (s.shown < 2) continue;
         ++sets;
         extra += s.shown - 1;
         bytes += s.size * static_cast<uint64_t>(s.shown - 1);
     }
-    if (!sets) return t.filter.empty() ? L"No duplicates   ·   Esc goes back" : L"No duplicates match   ·   Esc clears";
+    const std::wstring left1 = single ? L"   ·   " + Thousands(single) + (single == 1 ? L" set down to one copy" : L" sets down to one copy") : L"";
+    if (!sets) {
+        if (single) return L"No extra copies left" + left1 + L"   ·   Esc goes back";
+        return t.filter.empty() ? L"No duplicates   ·   Esc goes back" : L"No duplicates match   ·   Esc clears";
+    }
     wchar_t sz[64];
     FormatSize(bytes, sz, 64);
     return Thousands(sets) + (sets == 1 ? L" set" : L" sets") + L"  ·  " + Thousands(extra) + (extra == 1 ? L" extra copy" : L" extra copies") + L"  ·  " + sz +
-           L" could be freed   ·   " + ShortcutFor(Cmd::SelectExtraCopies) + L" selects them   ·   Esc goes back";
+           L" could be freed" + left1 + L"   ·   " + ShortcutFor(Cmd::SelectExtraCopies) + L" selects them   ·   Esc goes back";
 }

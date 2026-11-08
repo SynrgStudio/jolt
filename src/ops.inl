@@ -20,7 +20,13 @@ void DeleteSelection() {
         SHGetSetSettings(&ss, SSF_NOCONFIRMRECYCLE, FALSE);
         if (ss.fNoConfirmRecycle) flags |= FOF_NOCONFIRMATION;
     }
-    FileOp(FileOpKind::Delete, all, L"", flags);
+    const bool ok = FileOp(FileOpKind::Delete, all, L"", flags);
+    if (ok && t.dups) {  // duplicates: say what went, so the copies that stay don't look gone too
+        const int n = static_cast<int>(all.size());
+        S.message = Thousands(n) + (n == 1 ? L" copy " : L" copies ") + (permanent ? L"deleted for good" : L"sent to the Recycle Bin") +
+                    L"; the ones still listed stay";
+        Invalidate();
+    }
 }
 
 bool SetClipboardText(const std::wstring& s) {

@@ -3077,7 +3077,10 @@ void DrawList(int pane, float H) {
                 const auto& gr = row.l->groups[static_cast<size_t>(-1 - row.e)];
                 size_t end = static_cast<size_t>(-row.e) < row.l->groups.size() ? row.l->groups[-row.e].first : row.l->entries.size();
                 std::wstring cnt = Thousands(static_cast<int>(end - gr.first));
-                if (t.dups && static_cast<size_t>(-1 - row.e) < t.dupSets.size()) cnt = Thousands(t.dupSets[-1 - row.e].shown) + L" copies";
+                if (t.dups && static_cast<size_t>(-1 - row.e) < t.dupSets.size()) {
+                    const int copies = t.dupSets[-1 - row.e].shown;
+                    cnt = copies == 1 ? L"only copy left" : Thousands(copies) + L" copies";
+                }
                 float tw = MeasureW(gr.second, g_fmtSection.Get());
                 const bool gfold = GroupFolded(t, row.l, static_cast<size_t>(-1 - row.e));
                 const bool ghov = hoverHeader == i && pane == g_hoverPane;
