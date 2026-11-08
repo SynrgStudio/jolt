@@ -12,7 +12,10 @@ struct PalItem {
 
 struct Palette {
     bool open = false;
-    int mode = 0;        // 0 = commands (Ctrl+K), 1 = Go to (Ctrl+P), 2 = tags for the selection, 3 = select by pattern
+    int mode = 0;        // 0 = commands (Ctrl+K), 1 = Go to (Ctrl+P), 2 = tags for the selection, 3 = select by pattern,
+                         // 4 = a destination for the selection (copy_to, move_to): the Go to list, and the files go there
+    bool transferMove = false;               // mode 4: move, or copy
+    std::vector<std::wstring> transferFiles;  // mode 4: what goes
     std::wstring text;
     std::wstring match;  // what's being searched for (in Go to with a typed path: whatever follows the last slash)
     std::vector<PalItem> all;
@@ -55,6 +58,7 @@ std::wstring ShortcutFor(Cmd cmd) {
 
 void GotoBuild();
 void TagBuild();
+bool GotoLike() { return g_pal.mode == 1 || g_pal.mode == 4; }  // the Go to list, for going or as a destination
 void SelPatternBuild();  // select.inl
 void SelPatternPreview();
 void SelPatternCancel();
@@ -62,7 +66,7 @@ void SelPatternCancel();
 void PaletteFilter() {
     g_pal.hits.clear();
     g_pal.match = g_pal.text;
-    if (g_pal.mode == 1) GotoBuild();
+    if (GotoLike()) GotoBuild();
     if (g_pal.mode == 2) TagBuild();
     if (g_pal.mode == 3) SelPatternBuild();
     std::wstring pat = Lower(g_pal.match);
@@ -84,7 +88,7 @@ void PaletteFilter() {
             }
             if (!m1 && !m2) continue;
         }
-        g_pal.hits.push_back({static_cast<int>(i), real + it.bonus + (g_pal.mode == 1 ? NameRank(it.title.c_str(), it.title.size(), pat) : 0)});
+        g_pal.hits.push_back({static_cast<int>(i), real + it.bonus + (GotoLike() ? NameRank(it.title.c_str(), it.title.size(), pat) : 0)});
     }
     if (!pat.empty())
         std::stable_sort(g_pal.hits.begin(), g_pal.hits.end(), [](auto& a, auto& b) { return a.second > b.second; });
@@ -129,7 +133,7 @@ void PaletteClose() {
 
 // The results changed under the list: it stays where it was.
 void PaletteRefresh() {
-    if (!g_pal.open || g_pal.mode != 1) return;
+    if (!g_pal.open || !GotoLike()) return;
     const int first = g_pal.first;
     const std::wstring keep = g_pal.sel > 0 && g_pal.sel < static_cast<int>(g_pal.hits.size()) ? g_pal.all[g_pal.hits[g_pal.sel].first].path : L"\x01";
     PaletteFilter();
@@ -282,6 +286,62 @@ void GotoOpen(const std::wstring& p, bool newTab) {
         Navigate(T(), dir, true);
 }
 
+std::wstring PlaceTitle(const std::wstring& p);
+
+// copy_to / move_to: the selection goes to the folder picked in the palette (a file picked: its folder).
+void TransferTo(std::wstring dest, bool move, const std::vector<std::wstring>& files) {
+    if (dest.empty() || IsVirtual(dest)) {
+        S.message = L"Pick a folder on a drive";
+        Invalidate();
+        return;
+    }
+    const DWORD a = GetFileAttributesW(ToExtendedPath(dest).c_str());
+    if (a == INVALID_FILE_ATTRIBUTES) {
+        S.message = L"No longer exists: " + dest;
+        Invalidate();
+        return;
+    }
+    if (!(a & FILE_ATTRIBUTE_DIRECTORY)) dest = ParentOf(dest);
+    if (files.empty()) return;
+    bool same = true;
+    for (const std::wstring& f : files) {
+        same &= Key(ParentOf(f)) == Key(dest);
+        if (const std::wstring kd = Key(dest), kf = Key(f); kd == kf || kd.rfind(kf + L"\\", 0) == 0) {  // a folder into itself
+            S.message = std::wstring(L"Can't ") + (move ? L"move" : L"copy") + L" a folder into itself";
+            Invalidate();
+            return;
+        }
+    }
+    if (same) {
+        S.message = L"Already in that folder";
+        Invalidate();
+        return;
+    }
+    if (FileOp(move ? FileOpKind::Move : FileOpKind::Copy, files, dest)) {
+        const std::wstring n = files.size() == 1 ? LeafOf(files[0]) : Thousands(static_cast<int>(files.size())) + L" items";
+        S.message = (move ? L"Moved " : L"Copied ") + n + L" to " + PlaceTitle(dest) + L"   ·   " + ShortcutFor(Cmd::Undo) + L" undoes";
+        AddRecent(dest);  // a destination picked once is near the top next time
+    }
+    Enqueue(dest, JobKind::Revalidate);
+    Enqueue(T().path, JobKind::Revalidate);
+    if (T().recursive) RecCheckSoon();
+    Invalidate();
+}
+
+// Shift+F5 / Shift+F6: the palette as a destination picker.
+void TransferPick(bool move) {
+    const std::vector<std::wstring> files = SelectedFullPaths(T());
+    if (files.empty()) {
+        S.message = L"Select what to " + std::wstring(move ? L"move" : L"copy") + L" first";
+        Invalidate();
+        return;
+    }
+    PaletteOpen(4);
+    g_pal.transferMove = move;
+    g_pal.transferFiles = files;
+    PaletteFilter();  // the rows take the files with them
+}
+
 std::wstring PlaceTitle(const std::wstring& p) {
     if (p.empty()) return L"This PC";
     if (IsVirtual(p)) return VirtualTitle(p);
@@ -300,7 +360,13 @@ void GotoBuild() {
         it.path = path;
         it.pinned = pinned;
         it.bonus = bonus;
-        it.run = [path] { GotoOpen(path, false); };
+        if (g_pal.mode == 4) {
+            const bool move = g_pal.transferMove;
+            const std::vector<std::wstring> files = g_pal.transferFiles;
+            it.run = [path, move, files] { TransferTo(path, move, files); };
+        } else {
+            it.run = [path] { GotoOpen(path, false); };
+        }
         g_pal.all.push_back(std::move(it));
     };
     std::wstring text = Trim(g_pal.text);
@@ -485,7 +551,7 @@ void PaletteKey(WPARAM vk) {
     switch (vk) {
         case VK_ESCAPE: PaletteClose(); return;
         case VK_RETURN:
-            if (g_pal.mode == 1 && KeyDown(VK_CONTROL) && g_pal.sel < n) {
+            if (g_pal.mode == 1 && KeyDown(VK_CONTROL) && g_pal.sel < n) {  // (mode 4 has no new-tab variant)
                 std::wstring p = g_pal.all[g_pal.hits[g_pal.sel].first].path;
                 PaletteClose();
                 GotoOpen(p, true);  // Ctrl+Enter: in a new tab
@@ -569,14 +635,16 @@ void DrawPalette(float W, float H) {
     float tw = MeasureW(shown, g_fmtName.Get());
     if (shown.empty()) {
         Color(cFaint);
-        Text(g_pal.mode == 1 ? L"Go to…  recents, favorites, places, drives or a path" : g_pal.mode == 2 ? L"Tag…  pick one, or type a new name" : g_pal.mode == 3 ? L"Select…  type a pattern" : L"Type a command…",
+        const std::wstring what = g_pal.transferFiles.size() == 1 ? LeafOf(g_pal.transferFiles[0]) : Thousands(static_cast<int>(g_pal.transferFiles.size())) + L" items";
+        const std::wstring dest = std::wstring(g_pal.transferMove ? L"Move " : L"Copy ") + what + L" to…  recents, favorites, drives or a path";
+        Text(g_pal.mode == 4 ? dest : g_pal.mode == 1 ? L"Go to…  recents, favorites, places, drives or a path" : g_pal.mode == 2 ? L"Tag…  pick one, or type a new name" : g_pal.mode == 3 ? L"Select…  type a pattern" : L"Type a command…",
              g_fmtName.Get(), px + 38, py, px + pw - 12, py + kPalInputH);
     } else {
         Color(cText);
         Text(shown, g_fmtName.Get(), px + 38, py, px + pw - 12, py + kPalInputH);
     }
     Fill(D2D1::RectF(px + 38 + tw + 1, py + 12, px + 38 + tw + 2, py + kPalInputH - 12), cText);  // caret
-    if (g_pal.mode == 1 && (g_ixCount > 0 || g_ixBuilding)) {
+    if (GotoLike() && (g_ixCount > 0 || g_ixBuilding)) {
         // drive index status
         std::wstring st = g_ixBuilding && g_ixCount == 0 ? L"indexing the drives…"
                           : Thousands(static_cast<int>(std::min<uint64_t>(g_ixCount, INT_MAX))) + (g_ixBuilding ? L" in the index · updating" : L" in the index");
@@ -624,7 +692,7 @@ void DrawPalette(float W, float H) {
         }
         float dw = it.detail.empty() ? 0 : std::min(MeasureW(it.detail, g_fmtRight.Get()), (right - r.left) * 0.55f);
         float tx = r.left + 10;
-        if (g_pal.mode == 1) {
+        if (GotoLike()) {
             DrawIcon(it.path, nullptr, nullptr, 0, IsDriveRoot(it.path), tx, y + (kPalRow - kIcon) / 2, 1.f);
             tx += 26;
         }
@@ -637,7 +705,7 @@ void DrawPalette(float W, float H) {
         }
         y += kPalRow;
     }
-    if (g_pal.mode == 1 && g_pal.first + kPalMaxRows + 40 >= total) IdxMore();
+    if (GotoLike() && g_pal.first + kPalMaxRows + 40 >= total) IdxMore();
     if (total > kPalMaxRows) {
         // thin scrollbar
         const float top = py + kPalInputH + 4, viewH = kPalMaxRows * kPalRow;

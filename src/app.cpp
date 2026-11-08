@@ -4252,6 +4252,8 @@ void RunCommand(Cmd cmd) {
         case Cmd::OtherPane: ActivatePane(1 - g_act); break;
         case Cmd::CopyToOther: TransferToOther(false); break;
         case Cmd::MoveToOther: TransferToOther(true); break;
+        case Cmd::CopyTo: TransferPick(false); break;
+        case Cmd::MoveTo: TransferPick(true); break;
         case Cmd::CopyPath: CopyPathText(CopyWhat::Path); break;
         case Cmd::CopyName: CopyPathText(CopyWhat::Name); break;
         case Cmd::CopyPathUnix: CopyPathText(CopyWhat::Unix); break;
