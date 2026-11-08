@@ -618,7 +618,7 @@ void TextHighlighted(const std::wstring& s, const std::wstring& patLower, IDWrit
 void DrawPalette(float W, float H) {
     if (!g_pal.open) return;
     (void)H;
-    const float pw = std::min(kPalW, W - 40), px = (W - pw) / 2, py = kTabH + kToolH + 14;
+    const float pw = std::min(kPalW, W - 40), px = (W - pw) / 2, py = kTabH + ToolH() + 14;
     const int total = static_cast<int>(g_pal.hits.size());
     const int rows = std::min(kPalMaxRows, total - g_pal.first);
     const float ph = kPalInputH + rows * kPalRow + (rows ? 8 : 0);

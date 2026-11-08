@@ -630,7 +630,18 @@ D2D1_RECT_F g_crumbLast[2]{};  // each pane's last segment: the keyboard opens t
 std::vector<std::wstring> g_sidePaths;
 Hit g_hover{{}, HitKind::None, -1};
 bool g_sideVisible = true;
-float SideW() { return g_sideVisible ? kSideW : 0.f; }
+// Zen mode (F11): only the tabs, the list and the status line. The sidebar slides out to the left and the navigation
+// bar up; Ctrl+L brings the navigation bar back while the path is being typed. Kept in the session.
+bool g_zen = false;
+double g_zenAt = -1e9;  // when it last changed, for the slide
+constexpr double kZenMs = 170;
+bool ZenMoving() { return NowMs() - g_zenAt < kZenMs; }
+float ZenT() {  // 0: the bars are there, 1: zen. Slows down at the end.
+    const double p = std::clamp((NowMs() - g_zenAt) / kZenMs, 0.0, 1.0), e = 1 - (1 - p) * (1 - p) * (1 - p);
+    return static_cast<float>(g_zen ? e : 1 - e);
+}
+float SideW() { return g_sideVisible ? std::round(kSideW * (1 - ZenT())) : 0.f; }
+float ToolH() { return g_editing ? kToolH : std::round(kToolH * (1 - ZenT())); }
 // Title bar buttons (non-client area): hover and pressed are tracked by HT* code.
 D2D1_RECT_F g_capRects[3];
 int g_capHover = 0, g_capPressed = 0;
@@ -1000,7 +1011,7 @@ D2D1_SIZE_F ClientDip() {
     GetClientRect(g_hwnd, &rc);
     return {rc.right * 96.f / g_dpi, rc.bottom * 96.f / g_dpi};
 }
-float ListTop() { return kTabH + kToolH + kHeadH; }
+float ListTop() { return kTabH + ToolH() + kHeadH; }
 float ListBottom() { return ClientDip().height - kStatus; }
 float ListHeight() { return std::max(0.f, ListBottom() - ListTop()); }
 
@@ -1026,7 +1037,7 @@ PaneX PaneGeo(int p) {
 // Pane under a point (path bar, list or status), or -1.
 int PaneAt(float x, float y) {
     if (y < kTabH) return -1;
-    const bool band = y < kTabH + kToolH || y >= ListBottom();
+    const bool band = y < kTabH + ToolH() || y >= ListBottom();
     for (int p = 0; p < PaneCount(); ++p) {
         PaneX g = PaneGeo(p);
         if (band ? (x >= g.TL && x < g.TR) : (x >= g.L && x < g.R)) return p;
@@ -2596,7 +2607,7 @@ void DrawTabs(float W) {
     D2D1_RECT_F tg = D2D1::RectF(kTitleLeft - 36, 7, kTitleLeft - 8, kTabH - 7);
     if (IsHover(HitKind::SideToggle, 0)) Round(tg, 5, 0xFFFFFF, 0.08f);
     Color(active ? cDim : cFaint);
-    Glyph(g_sideVisible ? gPaneClose : gPaneOpen, g_fmtIcon.Get(), tg.left, tg.top, tg.right, tg.bottom);
+    Glyph(g_sideVisible && !g_zen ? gPaneClose : gPaneOpen, g_fmtIcon.Get(), tg.left, tg.top, tg.right, tg.bottom);
     g_hits.push_back({tg, HitKind::SideToggle, 0});
 
     // general app menu
@@ -2790,7 +2801,7 @@ void DiskTick() {
 
 void DrawSidebar(float H) {
     if (!g_sideVisible) return;
-    const float y0 = kTabH + kToolH;
+    const float y0 = kTabH + ToolH();
     Fill(D2D1::RectF(0, y0, kSideW, H - kStatus), cSide);
     Fill(D2D1::RectF(kSideW - 1, y0, kSideW, H - kStatus), cBorder);
     g_sidePaths.clear();
@@ -3010,7 +3021,7 @@ void DrawCheckbox(const std::wstring& key, const D2D1_RECT_F& r, bool on, wchar_
 }
 
 void DrawHeader(int pane) {
-    const float y0 = kTabH + kToolH, y1 = y0 + kHeadH;
+    const float y0 = kTabH + ToolH(), y1 = y0 + kHeadH;
     Columns c = Cols(pane);
     Fill(D2D1::RectF(c.L, y0, c.R, y1), cBg);
     HLine(c.L, c.R, y1 - 1);
@@ -3551,6 +3562,7 @@ double g_firstFrameMs = 0;
 std::vector<std::pair<const wchar_t*, double>> g_bootMarks;
 void BootMark(const wchar_t* what) { g_bootMarks.push_back({what, MsSinceProcessStart()}); }
 
+void LayoutEdit();  // below
 void Render() {
     if (!EnsureTarget()) return;
     EnsureImageList();
@@ -3566,8 +3578,32 @@ void Render() {
     g_rt->BeginDraw();
     g_rt->Clear(D2D1::ColorF(cBg));
     DrawTabs(W);
-    for (int p = 0; p < PaneCount(); ++p) DrawToolbar(p);
-    DrawSidebar(H);
+    const bool zenMoving = ZenMoving();
+    if (const float th = ToolH(); th > 0) {
+        const size_t hits = g_hits.size();
+        g_rt->PushAxisAlignedClip(D2D1::RectF(0, kTabH, W, kTabH + th), D2D1_ANTIALIAS_MODE_ALIASED);
+        g_rt->SetTransform(D2D1::Matrix3x2F::Translation(0, th - kToolH));
+        for (int p = 0; p < PaneCount(); ++p) DrawToolbar(p);
+        g_rt->SetTransform(D2D1::Matrix3x2F::Identity());
+        g_rt->PopAxisAlignedClip();
+        if (th < kToolH) g_hits.resize(hits);
+    }
+    if (const float sw = SideW(); sw > 0) {
+        const size_t hits = g_hits.size();
+        g_rt->PushAxisAlignedClip(D2D1::RectF(0, kTabH, sw, H), D2D1_ANTIALIAS_MODE_ALIASED);
+        g_rt->SetTransform(D2D1::Matrix3x2F::Translation(sw - kSideW, 0));
+        DrawSidebar(H);
+        g_rt->SetTransform(D2D1::Matrix3x2F::Identity());
+        g_rt->PopAxisAlignedClip();
+        if (sw < kSideW) g_hits.resize(hits);
+    }
+    static bool zenWasMoving = false;
+    if (zenMoving) SetTimer(g_hwnd, kTimerTabSlide, 15, nullptr);
+    else if (zenWasMoving) {  // settled: the edit boxes go to their final places
+        LayoutEdit();
+        LayoutRename();
+    }
+    zenWasMoving = zenMoving;
     for (int p = 0; p < PaneCount(); ++p) {
         DrawHeader(p);
         DrawList(p, H);
@@ -3577,7 +3613,7 @@ void Render() {
         // divider between panes: drag to change the width (double click: half and half)
         const float x = PaneGeo(1).L;
         Fill(D2D1::RectF(x, kTabH, x + 1, H), cBorder);
-        g_hits.push_back({D2D1::RectF(x - 3, kTabH + kToolH, x + 4, H - kStatus), HitKind::Divider, 0});
+        g_hits.push_back({D2D1::RectF(x - 3, kTabH + ToolH(), x + 4, H - kStatus), HitKind::Divider, 0});
     }
     DrawPreview(W, H);
     DrawViewEditor(W, H);
@@ -3621,7 +3657,7 @@ void LayoutEdit() {
     SelectObject(dc, old);
     ReleaseDC(g_hwnd, dc);
     int h = tm.tmHeight + 2;
-    int y = MulDiv(static_cast<int>(std::lround((kTabH + kToolH / 2) * 100)), g_dpi, 9600) - h / 2 + px(1);  // +1: DirectWrite leaves the line spacing on top
+    int y = MulDiv(static_cast<int>(std::lround((kTabH + ToolH() / 2) * 100)), g_dpi, 9600) - h / 2 + px(1);  // +1: DirectWrite leaves the line spacing on top
     MoveWindow(g_edit, left, y, std::max(10, right - left), h, TRUE);
 }
 
@@ -3640,8 +3676,9 @@ void UpdateEditFont() {
 
 void ShowPathEdit() {
     SetWindowTextW(g_edit, IsVirtual(T().path) ? VirtualTitle(T().path).c_str() : T().path.c_str());
+    g_editing = true;  // first: in zen mode it brings the navigation bar back
     LayoutEdit();
-    g_editing = true;
+    LayoutRename();
     ShowWindow(g_edit, SW_SHOW);
     SetFocus(g_edit);
     SendMessageW(g_edit, EM_SETSEL, 0, -1);
@@ -3653,6 +3690,10 @@ void HidePathEdit() {
     g_editing = false;
     ShowWindow(g_edit, SW_HIDE);
     SetFocus(g_hwnd);
+    if (g_zen) {
+        LayoutRename();
+        for (auto& tp : g_tabs) ClampScroll(*tp);
+    }
     Invalidate();
 }
 
@@ -3982,6 +4023,7 @@ void SaveSession() {
     out << "window=" << r.left << ',' << r.top << ',' << r.right << ',' << r.bottom << ','
         << (IsZoomed(g_hwnd) || g_showMaxOnce ? 1 : 0) << '\n';
     out << "sidebar=" << (g_sideVisible ? 1 : 0) << '\n';
+    out << "zen=" << (g_zen ? 1 : 0) << '\n';
     out << "preview=" << (g_preview ? 1 : 0) << '\n';
     out << "show=" << (g_hideDirs ? 1 : 0) << ',' << (g_hideFiles ? 1 : 0) << ',' << (g_hideExt ? 1 : 0) << '\n';
     out << "sort=" << g_sortBy.load() << ',' << (g_sortAsc.load() ? 1 : 0) << '\n';
@@ -4007,7 +4049,7 @@ struct Session {
     bool hasWindow = false;
     RECT rc{};
     bool maximized = false;
-    bool sidebar = true, preview = false, split = false;
+    bool sidebar = true, preview = false, split = false, zen = false;
     float ratio = 0.5f;
     int sortBy = 0;
     bool sortAsc = true;
@@ -4029,6 +4071,7 @@ Session LoadSession() {
         else if (k == "active") s.active = atoi(v.c_str());
         else if (k == "visible") sscanf_s(v.c_str(), "%d,%d", &s.visible[0], &s.visible[1]);
         else if (k == "sidebar") s.sidebar = v != "0";
+        else if (k == "zen") s.zen = v != "0";
         else if (k == "preview") s.preview = v != "0";
         else if (k == "show") {
             int a = 0, b = 0, c = 0;
@@ -4174,7 +4217,24 @@ void FoldAllGroups(Tab& t, bool folded) {
     Invalidate();
 }
 
+void ToggleZen() {
+    const double now = NowMs();
+    g_zenAt = ZenMoving() ? now - (kZenMs - (now - g_zenAt)) : now;  // turned back halfway: from where it is
+    g_zen = !g_zen;
+    for (auto& tp : g_tabs) ClampScroll(*tp);
+    S.message = g_zen ? L"Zen mode: " + ShortcutFor(Cmd::Zen) + L" brings the bars back" : L"";
+    LayoutEdit();
+    LayoutRename();
+    Invalidate();
+    TouchSession();
+}
+
 void ToggleSidebar() {
+    if (g_zen) {  // the sidebar comes back with everything else
+        if (!g_sideVisible) g_sideVisible = true;
+        ToggleZen();
+        return;
+    }
     g_sideVisible = !g_sideVisible;
     for (auto& tp : g_tabs) ClampScroll(*tp);
     LayoutEdit();
@@ -4277,6 +4337,7 @@ void RunCommand(Cmd cmd) {
         case Cmd::PreviousTab: CycleTab(-1); break;
         case Cmd::Path: ShowPathEdit(); break;
         case Cmd::Sidebar: ToggleSidebar(); break;
+        case Cmd::Zen: ToggleZen(); break;
         case Cmd::Reload: RevalidateVisible(); break;
         case Cmd::Timings:
             S.show = !S.show;
@@ -4662,7 +4723,7 @@ void OpenColumnMenu(POINT screenPt) {
 
 // Is the point on a pane's column titles? (with the view button and the checkbox at their left)
 bool OnColumnTitles(float x, float y) {
-    const float y0 = kTabH + kToolH;
+    const float y0 = kTabH + ToolH();
     const int pane = PaneAt(x, y);
     if (pane < 0 || y < y0 || y >= y0 + kHeadH) return false;
     const PaneX g = PaneGeo(pane);
@@ -5560,7 +5621,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 }
                 return 0;
             }
-            if (g_preview && x >= ClientDip().width - PreviewW() && y >= kTabH + kToolH) {
+            if (g_preview && x >= ClientDip().width - PreviewW() && y >= kTabH + ToolH()) {
                 PreviewWheel(delta / 120);
                 return 0;
             }
@@ -5943,6 +6004,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdLine, int show) {
     SyncGlobalSort();
     RefreshConfigSig();
     g_sideVisible = ses.sidebar;
+    g_zen = ses.zen;
     g_preview = ses.preview;
     g_splitRatio = ses.ratio;
     if (g_adminWindow && BgAdminPlace(show)) {

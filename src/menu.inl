@@ -1347,7 +1347,8 @@ void OpenShellMenu(POINT screenPt, int row) {
 
 void OpenMenuEditor();
 
-enum AppCmd : UINT { CmdMenuEditor = 1, CmdConfigFolder, CmdInstall, CmdAbout, CmdQuit, CmdSettings };
+enum AppCmd : UINT { CmdMenuEditor = 1, CmdConfigFolder, CmdInstall, CmdAbout, CmdQuit, CmdSettings, CmdZen };
+void ToggleZen();  // app.cpp
 void SettingsOpen(int section = -1);  // settings.inl
 void InstPanelOpen();
 void BgQuit();
@@ -1371,12 +1372,15 @@ void OpenAppMenu(const RECT& anchorScreen) {
     add(L"Config folder", L"", CmdConfigFolder);
     if (!g_adminWindow) add(L"Install…", L"", CmdInstall);
     sep();
+    add(g_zen ? L"Leave zen mode" : L"Zen mode", ShortcutFor(Cmd::Zen).c_str(), CmdZen);
+    sep();
     add(L"About Jolt", L"", CmdAbout);
     sep();
     add(L"Quit", L"", CmdQuit);
     PopupOpen(std::move(items), anchorScreen, [](UINT id) {
         switch (id) {
             case CmdSettings: SettingsOpen(); break;
+            case CmdZen: ToggleZen(); break;
             case CmdMenuEditor: OpenMenuEditor(); break;
             case CmdConfigFolder: {
                 std::wstring f = FavFile();

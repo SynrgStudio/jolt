@@ -329,7 +329,7 @@ void PvInfoLine(const wchar_t* label, const std::wstring& value, float x0, float
 
 void DrawPreview(float W, float H) {
     if (!g_preview) return;
-    const float pw = PreviewW(), x0 = W - pw, y0 = kTabH + kToolH, y1 = H - kStatus;
+    const float pw = PreviewW(), x0 = W - pw, y0 = kTabH + ToolH(), y1 = H - kStatus;
     Fill(D2D1::RectF(x0, y0, W, y1), cSide);
     // left edge: drag to change the width (double click: back to the default)
     Fill(D2D1::RectF(x0, y0, x0 + 1, y1), g_pvDrag || IsHover(HitKind::PreviewEdge, 0) ? cDim : cBorder);

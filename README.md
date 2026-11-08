@@ -177,6 +177,7 @@ works too). Options in `config.txt`: `run_in_background`, `global_hotkey`, `tray
 | Ctrl+Alt+T / Ctrl+Alt+E | open the terminal (Windows Terminal, or cmd) / File Explorer in this folder |
 | Ctrl+Alt+L | go to the real location of a shortcut (also symbolic links and junctions) |
 | Ctrl+B or the button to the left of the tabs | show / hide the sidebar |
+| F11 (or ☰ → Zen mode) | **zen mode**: only the tabs, the list and the status line; the sidebar and the navigation bar slide away. Ctrl+L brings the path bar back while you type; F11, Ctrl+B or the sidebar button bring everything back. Remembered between sessions |
 | drag from the tab bar | move the window (double click: maximize; right click: system menu) |
 | middle click on a tab | close it |
 | Ctrl+D | add or remove the current folder from Favorites |
