@@ -314,6 +314,28 @@ std::wstring Normalize(std::wstring p) {
     return p;
 }
 
+void TestLog(const std::wstring& s);  // testmode.inl
+
+// A test script only works on its own files: in test mode, changing anything outside the temp folder (or the
+// Recycle Bin, where the bin tests recycle their own) is refused, so a script that goes astray can't touch the
+// user's files.
+bool TestRefuses(const std::wstring& path) {
+    if (!g_test || path.empty()) return false;
+    static const std::wstring temp = [] {
+        wchar_t b[MAX_PATH + 1] = {};
+        GetTempPathW(MAX_PATH + 1, b);
+        wchar_t full[MAX_PATH + 1] = {};
+        GetLongPathNameW(b, full, MAX_PATH + 1);
+        std::wstring k = Key(Normalize(full[0] ? full : b));
+        return k.back() == L'\\' ? k : k + L"\\";
+    }();
+    std::wstring k = Key(Normalize(path));
+    if (k.rfind(L"\\\\?\\", 0) == 0) k = k.substr(4);
+    if (k.rfind(temp, 0) == 0 || k.find(L"\\$recycle.bin\\") != std::wstring::npos) return false;
+    TestLog(L"refused outside the test area: " + path);
+    return true;
+}
+
 bool IsLocalFixed(const std::wstring& p) {
     if (p.size() < 3 || p[1] != L':') return false;
     wchar_t root[4] = {p[0], L':', L'\\', 0};
@@ -3553,6 +3575,7 @@ void CommitRename(bool follow = true) {
         Invalidate();
         return;
     }
+    if (TestRefuses(dir)) return;
     std::wstring from = ToExtendedPath(Join(dir, oldName.c_str()));
     std::wstring to = ToExtendedPath(Join(dir, newName.c_str()));
     if (!MoveFileExW(from.c_str(), to.c_str(), 0)) {
@@ -3611,7 +3634,7 @@ std::wstring FreeName(const std::wstring& dir, const std::wstring& base, const s
 // New folder or file with a unique name, and immediate rename.
 void NewItem(bool folder) {
     Tab& t = T();
-    if (t.path.empty() || !t.list || t.list->error) return;
+    if (t.path.empty() || !t.list || t.list->error || TestRefuses(t.path)) return;
     std::wstring name = folder ? FreeName(t.path, L"New folder", L"") : FreeName(t.path, L"New file", L".txt");
     std::wstring full = ToExtendedPath(Join(t.path, name.c_str()));
     bool ok;

@@ -327,6 +327,8 @@ void RenameManyApply() {
     int failed = 0;
     std::vector<std::wstring> current;  // where each item is right now
     for (const RnItem& it : items) current.push_back(Join(it.dir, it.oldName.c_str()));
+    for (const std::wstring& c : current)
+        if (TestRefuses(c)) return;
     if (viaTemp) {
         for (size_t i = 0; i < items.size(); ++i) {
             const std::wstring tmp = Join(items[i].dir, (items[i].oldName + L".jolt-renaming-" + std::to_wstring(i)).c_str());
