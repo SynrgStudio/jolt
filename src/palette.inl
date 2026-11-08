@@ -396,7 +396,9 @@ const wchar_t* CmdName(Cmd cmd) {
 }
 
 // Applies a captured key to the command: replaces its first shortcut, keeps the rest, and writes it to config.txt.
-void PaletteAssignKey(Cmd cmd, UINT mods, UINT vk, bool remove) {
+// Returns what to tell: the key, and the command it was taken from, if any.
+std::wstring AssignShortcut(Cmd cmd, UINT mods, UINT vk, bool remove) {
+    const Cmd had = remove ? Cmd::None : FindCommand(mods, vk);
     std::vector<KeyBind> mine;
     for (const KeyBind& k : g_cfg.keys)
         if (k.cmd == cmd) mine.push_back(k);
@@ -418,6 +420,19 @@ void PaletteAssignKey(Cmd cmd, UINT mods, UINT vk, bool remove) {
     g_cfg.keys.erase(std::remove_if(g_cfg.keys.begin(), g_cfg.keys.end(), [&](const KeyBind& k) { return k.cmd == cmd; }),
                      g_cfg.keys.end());
     for (const KeyBind& k : mine) g_cfg.keys.push_back(k);
+    if (remove) return L"Shortcut removed";
+    std::wstring msg = L"Shortcut saved: " + KeyText(mods, vk);
+    if (had != Cmd::None && had != cmd) {
+        std::wstring from = IsCustom(had) ? std::wstring(CmdName(had)) : L"";
+        for (const CmdDef& c : kCommands)
+            if (c.cmd == had) from = c.help;
+        msg += L", taken from \"" + from + L"\"";
+    }
+    return msg;
+}
+
+void PaletteAssignKey(Cmd cmd, UINT mods, UINT vk, bool remove) {
+    const std::wstring msg = AssignShortcut(cmd, mods, vk, remove);
     // rebuild the palette, keeping text, selection and scroll
     std::wstring text = g_pal.text;
     int sel = g_pal.sel, first = g_pal.first;
@@ -426,7 +441,7 @@ void PaletteAssignKey(Cmd cmd, UINT mods, UINT vk, bool remove) {
     PaletteFilter();
     g_pal.sel = std::min(sel, std::max(0, static_cast<int>(g_pal.hits.size()) - 1));
     g_pal.first = first;
-    S.message = remove ? L"Shortcut removed" : L"Shortcut saved: " + KeyText(mods, vk);
+    S.message = msg;
 }
 
 bool PaletteCaptureKey(WPARAM vk) {

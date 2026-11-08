@@ -2,7 +2,7 @@
 
 Every planned feature, one line per GitHub issue. A line is checked and struck through when its PR is merged.
 
-**27 of 87 done.**
+**28 of 88 done.**
 
 ## Navigation
 
@@ -129,7 +129,7 @@ Every planned feature, one line per GitHub issue. A line is checked and struck t
 
 ## Internals
 
-1 of 11 done.
+2 of 12 done.
 
 - [ ] [#67](https://github.com/SynrgStudio/jolt/issues/67) Incremental listing of huge folders
 - [x] ~~[#68](https://github.com/SynrgStudio/jolt/issues/68) Persistent thumbnail cache~~
@@ -142,6 +142,7 @@ Every planned feature, one line per GitHub issue. A line is checked and struck t
 - [ ] [#75](https://github.com/SynrgStudio/jolt/issues/75) Git indicator: branch and changed files
 - [ ] [#76](https://github.com/SynrgStudio/jolt/issues/76) Tooltip with item count and size when hovering a folder
 - [ ] [#77](https://github.com/SynrgStudio/jolt/issues/77) "What is new" in Downloads since the last visit
+- [x] ~~[#118](https://github.com/SynrgStudio/jolt/issues/118) Settings window: every config file, editable from the app~~
 
 ## Documentation
 

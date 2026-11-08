@@ -11,7 +11,7 @@ enum class Cmd {
     SortByType, ZoomIn, ZoomOut, ZoomReset, RowsTaller, RowsShorter, EmptyRecycleBin,
     Undo, Redo, OpenAsAdmin, PinTab, Restore,
     Install, Quit, RenameMany, FolderSiblings, ViewList, ViewGrid, ViewBigger, ViewSmaller, Tag, PreviewWrap,
-    FindDuplicates, SelectExtraCopies, SelectPattern, SelectSameExtension, InvertSelection,
+    FindDuplicates, SelectExtraCopies, SelectPattern, SelectSameExtension, InvertSelection, Settings,
     CustomFirst = 1000  // + index into g_cfg.custom: the user's own commands
 };
 inline bool IsCustom(Cmd c) { return static_cast<int>(c) >= static_cast<int>(Cmd::CustomFirst); }
@@ -87,6 +87,7 @@ const CmdDef kCommands[] = {
     {L"context_menu", Cmd::ContextMenu, L"Shift+F10, Menu", L"context menu"},
     {L"app_menu", Cmd::AppMenu, L"Alt+M", L"Jolt menu"},
     {L"palette", Cmd::Palette, L"Ctrl+K", L"command palette"},
+    {L"settings", Cmd::Settings, L"Ctrl+,", L"settings: options, appearance, shortcuts, colors, commands, tags and favorites"},
     {L"go_to", Cmd::GoTo, L"Ctrl+P", L"go to a recent, favorite or system folder, or a path"},
     {L"search_subfolders", Cmd::SearchSubfolders, L"Ctrl+Shift+F", L"search this folder and all its subfolders"},
     {L"find_duplicates", Cmd::FindDuplicates, L"Ctrl+Alt+F", L"find duplicate files in this folder and its subfolders"},
@@ -207,6 +208,28 @@ std::vector<std::wstring> SplitList(const std::wstring& s) {
     return out;
 }
 
+// A list of keys, "Ctrl+N, F2". A comma right after a modifier is the comma key: "Ctrl+, F2" is Ctrl+, and F2.
+std::vector<std::wstring> SplitKeys(const std::wstring& s) {
+    std::vector<std::wstring> out;
+    std::wstring cur;
+    for (wchar_t c : s) {
+        if (c == L',') {
+            const std::wstring t = Lower(Trim(cur));
+            const bool key = t.ends_with(L"ctrl+") || t.ends_with(L"control+") || t.ends_with(L"shift+") || t.ends_with(L"alt+");
+            if (key) {
+                cur += c;
+                continue;
+            }
+            if (!Trim(cur).empty()) out.push_back(Trim(cur));
+            cur.clear();
+        } else {
+            cur += c;
+        }
+    }
+    if (!Trim(cur).empty()) out.push_back(Trim(cur));
+    return out;
+}
+
 // "Ctrl+Shift+N", "F2", "Alt+Left", "Del"...
 bool ParseKey(const std::wstring& spec, UINT& mods, UINT& vk) {
     mods = 0;
@@ -242,7 +265,7 @@ bool ParseKey(const std::wstring& spec, UINT& mods, UINT& vk) {
 }
 
 void AddBindings(Cmd cmd, const std::wstring& list) {
-    for (const std::wstring& spec : SplitList(list)) {
+    for (const std::wstring& spec : SplitKeys(list)) {
         UINT mods, vk;
         if (ParseKey(spec, mods, vk)) g_cfg.keys.push_back({mods, vk, cmd});
     }
@@ -517,7 +540,7 @@ void ConfigWriteShortcut(const std::wstring& cmdName, const std::wstring& specs,
         // another command with the same key: take it away
         std::vector<std::wstring> keep;
         bool changed = false;
-        for (const std::wstring& spec : SplitList(val)) {
+        for (const std::wstring& spec : SplitKeys(val)) {
             UINT m, k;
             if (ParseKey(spec, m, k) && m == mods && k == vk) changed = true;
             else keep.push_back(spec);
@@ -541,7 +564,7 @@ void ConfigWriteShortcut(const std::wstring& cmdName, const std::wstring& specs,
         if (inFile) continue;
         std::vector<std::wstring> keep;
         bool changed = false;
-        for (const std::wstring& spec : SplitList(c.defaults)) {
+        for (const std::wstring& spec : SplitKeys(c.defaults)) {
             UINT m, k;
             if (ParseKey(spec, m, k) && m == mods && k == vk) changed = true;
             else keep.push_back(spec);
@@ -623,6 +646,64 @@ void ConfigSetValue(const std::wstring& sectionName, const std::wstring& key, co
         lines.insert(lines.begin() + header + 1, key + L" = " + value);
     }
     while (!lines.empty() && lines.back().empty()) lines.pop_back();
+    std::ofstream out(f, std::ios::binary);
+    out << "\xEF\xBB\xBF";
+    for (const std::wstring& l : lines) out << Utf8(l) << "\r\n";
+}
+
+// Replaces every "key = value" line of a section with entries, keeping its comments; adds the section if missing.
+void ConfigWriteSection(const std::wstring& sectionName, const std::vector<std::pair<std::wstring, std::wstring>>& entries) {
+    std::wstring f = ConfigFile();
+    if (f.empty()) return;
+    if (GetFileAttributesW(f.c_str()) == INVALID_FILE_ATTRIBUTES) WriteDefaultConfig();
+    std::ifstream in(f, std::ios::binary);
+    std::string raw((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    in.close();
+    if (raw.size() >= 3 && static_cast<unsigned char>(raw[0]) == 0xEF) raw.erase(0, 3);
+    std::wstring text = Wide(raw);
+    std::vector<std::wstring> lines;
+    for (size_t pos = 0;;) {
+        size_t nl = text.find(L'\n', pos);
+        std::wstring line = text.substr(pos, nl == std::wstring::npos ? std::wstring::npos : nl - pos);
+        if (!line.empty() && line.back() == L'\r') line.pop_back();
+        lines.push_back(line);
+        if (nl == std::wstring::npos) break;
+        pos = nl + 1;
+    }
+    while (!lines.empty() && lines.back().empty()) lines.pop_back();
+    auto header = [&](size_t i, std::wstring* name) {
+        std::wstring tb = Trim(lines[i].substr(0, lines[i].find(L'#')));
+        if (tb.empty() || tb.front() != L'[' || tb.back() != L']') return false;
+        if (name) *name = Lower(tb.substr(1, tb.size() - 2));
+        return true;
+    };
+    std::vector<std::wstring> body;
+    for (const auto& [k, v] : entries) body.push_back(k + L" = " + v);
+    int h = -1;
+    for (size_t i = 0; i < lines.size() && h < 0; ++i) {
+        std::wstring name;
+        if (header(i, &name) && name == sectionName) h = static_cast<int>(i);
+    }
+    if (h < 0) {
+        lines.push_back(L"");
+        lines.push_back(L"[" + sectionName + L"]");
+        lines.insert(lines.end(), body.begin(), body.end());
+    } else {
+        size_t e = h + 1;
+        while (e < lines.size() && !header(e, nullptr)) ++e;
+        std::vector<std::wstring> kept;  // the section's comments and blank lines, in their order
+        for (size_t i = h + 1; i < e; ++i)
+            if (Trim(lines[i].substr(0, lines[i].find(L'#'))).empty()) kept.push_back(lines[i]);
+        size_t blanks = 0;  // the blank lines that separate it from the next section stay at its end
+        while (!kept.empty() && Trim(kept.back()).empty()) {
+            kept.pop_back();
+            ++blanks;
+        }
+        kept.insert(kept.end(), body.begin(), body.end());
+        kept.insert(kept.end(), blanks, L"");
+        lines.erase(lines.begin() + h + 1, lines.begin() + e);
+        lines.insert(lines.begin() + h + 1, kept.begin(), kept.end());
+    }
     std::ofstream out(f, std::ios::binary);
     out << "\xEF\xBB\xBF";
     for (const std::wstring& l : lines) out << Utf8(l) << "\r\n";
