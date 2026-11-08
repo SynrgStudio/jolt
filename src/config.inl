@@ -39,6 +39,7 @@ struct Config {
     int typoMin = 75;         // searches also show names this close to what was typed, in percent; 0: only real matches
     bool background = true, tray = true, openDrives = false;
     int checkboxes = 0;  // selection checkboxes: 0 none, 1 on the row under the mouse and the selected ones, 2 always
+    int recentMark = 0;  // a mark on files changed lately: -1 none, 0 today, N the last N hours
     int hotCount = 10;  // folders in Recents (0: no section)
     std::wstring globalKey = L"Win+J";
     std::vector<int> cols = {ColDate, ColSize};  // [columns] show: ColKinds, left to right
@@ -186,6 +187,7 @@ const ColorDef kColors[] = {
     {L"error", &cError, 0xF07178, L"error messages"},
     {L"disk_usage", &cDisk, 0x3B8EEA, L"disk usage bar"},
     {L"disk_usage_full", &cDiskFull, 0xE5484D, L"disk usage bar at 90% or more"},
+    {L"recent", &cRecent, 0x6BCB77, L"mark on the files changed lately (recent_mark)"},
 };
 
 std::wstring ConfigDir() {
@@ -332,6 +334,8 @@ void WriteDefaultConfig() {
         "# Selection checkboxes, to select with the mouse (or touch) without Ctrl: no / hover / always.\n"
         "# hover: on the row under the mouse and on the selected ones.\n"
         "checkboxes = no\n"
+        "# A mark at the left of the files changed lately, fading with the hours: today / no / a number of hours, like 6.\n"
+        "recent_mark = today\n"
         "\n[columns]\n"
         "# Columns besides the name, left to right: modified, dimensions, duration, attributes, items, size\n"
         "# dimensions: of images and videos. duration: of songs and videos. items: how many a folder has.\n"
@@ -441,6 +445,11 @@ void LoadConfig() {
             else if (key == L"global_hotkey") g_cfg.globalKey = val;
             else if (key == L"tray_icon") g_cfg.tray = ParseBool(val);
             else if (key == L"open_drives") g_cfg.openDrives = ParseBool(val);
+            else if (key == L"recent_mark") {
+                const std::wstring v = Lower(Trim(val));
+                const int hours = _wtoi(v.c_str());
+                g_cfg.recentMark = v == L"today" || v == L"yes" ? 0 : hours > 0 ? hours : -1;
+            }
             else if (key == L"checkboxes") {
                 const std::wstring v = Lower(Trim(val));
                 g_cfg.checkboxes = v == L"hover" ? 1 : v == L"always" || ParseBool(v) ? 2 : 0;

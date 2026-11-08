@@ -217,6 +217,10 @@ std::vector<SetRow> SettingsRows(int section) {
             choice(L"Selection checkboxes", L"Select with the mouse, without Ctrl. The one in the header: all.",
                    {L"Off", L"On hover", L"Always"}, [] { return g_cfg.checkboxes; },
                    [](int i) { SetGeneral(L"checkboxes", i == 0 ? L"no" : i == 1 ? L"hover" : L"always"); });
+            choice(L"Mark what changed lately", L"A thin bar at the left of the files changed, fading with the hours. A number of hours can go in config.txt.",
+                   {L"Off", L"Today", L"Last 24 hours"},
+                   [] { return g_cfg.recentMark < 0 ? 0 : g_cfg.recentMark == 0 ? 1 : g_cfg.recentMark == 24 ? 2 : -1; },
+                   [](int i) { SetGeneral(L"recent_mark", i == 0 ? L"no" : i == 1 ? L"today" : L"24"); });
             choice(L"Folders above files", L"Sorting by date or size mixes them unless this says always.",
                    {L"Mixed", L"Always", L"When sorting by name"}, [] { return g_foldersFirst.load(); },
                    [](int i) { SetGeneral(L"folders_first", i == 0 ? L"no" : i == 1 ? L"yes" : L"name"); });

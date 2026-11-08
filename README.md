@@ -227,7 +227,9 @@ save** (so do `favorites.txt` and `menu.txt`). Sections:
 
 - `[general]`: font, size, row height, sidebar and preview width, show hidden files, and `folders_first`
   (`yes` / `no` / `name`: by default folders go on top only when sorting by name; by date and size they
-  mix with the files, which is what you'd expect).
+  mix with the files, which is what you'd expect). `recent_mark` (`today` / `no` / a number of hours): a thin
+  bar at the left of the files changed lately (a dot in the grid), strongest for what changed just now and fading
+  with the hours; its color is `recent` in `[colors]`.
 - `[columns]`: which columns to show, left to right, and their widths. Besides `modified` and `size`:
   `dimensions` (images and videos), `duration` (songs and videos), `items` (how many a folder has) and
   `attributes` (R H S A C E, and L for links). They can also be picked with a right click on the column titles,
