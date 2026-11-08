@@ -86,7 +86,7 @@ struct PopupLevel {
 struct Popup {
     std::vector<std::unique_ptr<PopupLevel>> levels;
     std::function<void(UINT)> onSelect;
-    std::function<void(HMENU, int, std::vector<MenuItem>&)> loadSub;
+    std::function<void(HMENU, int, const std::wstring&, std::vector<MenuItem>&)> loadSub;  // the item's key too: "new" is Jolt's
     std::function<void(UINT)> onMiddle;  // middle click on an item, in the menus that want it
     int pendingLevel = -1, pendingItem = -1;
     float maxH = 0;  // 0: as tall as the screen
@@ -342,7 +342,7 @@ void PopupShowLevel(std::vector<MenuItem> items, const RECT& anchor, bool isSub)
 }
 
 void PopupOpen(std::vector<MenuItem> items, const RECT& anchor, std::function<void(UINT)> onSelect,
-               std::function<void(HMENU, int, std::vector<MenuItem>&)> loadSub = nullptr, float maxH = 0, int mark = -1) {
+               std::function<void(HMENU, int, const std::wstring&, std::vector<MenuItem>&)> loadSub = nullptr, float maxH = 0, int mark = -1) {
     PopupClose();
     if (items.empty()) return;
     g_popup.onSelect = std::move(onSelect);
@@ -359,7 +359,7 @@ void PopupOpenSub(int level, int item) {
     MenuItem& m = L.items[item];
     if (!m.enabled || !m.hasSub()) return;
     std::vector<MenuItem> items = m.sub;
-    if (m.hsub && g_popup.loadSub) g_popup.loadSub(m.hsub, item, items);
+    if (m.hsub && g_popup.loadSub) g_popup.loadSub(m.hsub, item, m.key, items);
     if (items.empty()) return;
     L.openSub = item;
     InvalidateRect(L.hwnd, nullptr, FALSE);
@@ -594,6 +594,7 @@ void RegisterPopupClass(HINSTANCE inst) {
 
 // ================================================================ Shell context menu
 constexpr UINT kCmdFirst = 1, kCmdLast = 0x6FFF, kCmdFav = 0x7000, kCmdCustom = 0x7100;  // kCmdCustom + index: the user's commands
+constexpr UINT kCmdTemplate = 0x7200, kCmdTemplatesFolder = 0x72FF;                   // kCmdTemplate + index into Templates()
 constexpr UINT kCmdTagNew = 0x7FFF, kCmdTag = 0x8000;                                   // kCmdTag + index into AllTags()
 void TagPaletteOpen();  // palette.inl
 void RunCustomCommand(int i);  // ops.inl
@@ -638,6 +639,45 @@ struct ShellMenu {
     }
 };
 std::unique_ptr<ShellMenu> g_shellMenu;
+
+std::vector<MenuItem> ReadMenu(ShellMenu& m, HMENU h);
+std::vector<MenuItem> ApplyMenuCfg(const std::wstring& ctx, std::vector<MenuItem> raw, bool includeHidden, std::vector<bool>* visibleOut);
+
+// The "New" submenu: the templates first, then what Windows offers, then the templates folder. Its order and
+// what is hidden come from [background/new] in menu.txt.
+std::vector<MenuItem> NewSubmenuItems(ShellMenu& m, HMENU sub, bool includeHidden, std::vector<bool>* visibleOut = nullptr) {
+    int pos = 0;
+    for (int i = 0, n = GetMenuItemCount(m.hmenu); i < n; ++i)
+        if (GetSubMenu(m.hmenu, i) == sub) pos = i;
+    m.MenuMsg(WM_INITMENUPOPUP, reinterpret_cast<WPARAM>(sub), MAKELPARAM(pos, FALSE));
+    std::vector<MenuItem> items;
+    const std::vector<TemplateDef> tpl = Templates();
+    for (size_t i = 0; i < tpl.size(); ++i) {
+        MenuItem it;
+        it.text = tpl[i].name;
+        it.key = L"jolt:template:" + Lower(tpl[i].name);
+        it.id = kCmdTemplate + static_cast<UINT>(i);
+        it.icon = tpl[i].isDir ? g_iconFolder : -1;
+        it.iconPath = TemplatesDir() + L"\\" + tpl[i].name;
+        items.push_back(std::move(it));
+    }
+    if (!items.empty()) {
+        MenuItem s;
+        s.sep = true;
+        s.key = L"---";
+        items.push_back(s);
+    }
+    for (MenuItem& it : ReadMenu(m, sub)) items.push_back(std::move(it));
+    MenuItem s, f;
+    s.sep = true;
+    s.key = L"---";
+    f.text = L"Templates folder…";
+    f.key = L"jolt:templates";
+    f.id = kCmdTemplatesFolder;
+    items.push_back(s);
+    items.push_back(f);
+    return ApplyMenuCfg(L"background/new", std::move(items), includeHidden, visibleOut);
+}
 
 bool BindFolder(const std::wstring& path, ComPtr<IShellFolder>& psf) {
     PIDLIST_ABSOLUTE pidl = nullptr;
@@ -881,10 +921,10 @@ void LoadMenuCfg() {
 
 void SaveMenuCfg() {
     std::ofstream out(MenuCfgFile(), std::ios::binary);
-    out << "# Jolt context menu. Sections: [background] [file] [folder].\n"
+    out << "# Jolt context menu. Sections: [background] [file] [folder] [background/new] (the New submenu).\n"
            "# One option per line, in the order they appear. \"-\" in front = hidden. \"---\" = separator.\n"
            "# Anything not listed here is added at the end, in the order Windows gives it.\n";
-    for (const wchar_t* ctx : {L"background", L"file", L"folder"}) {
+    for (const wchar_t* ctx : {L"background", L"file", L"folder", L"background/new"}) {
         auto it = g_menuCfg.find(ctx);
         if (it == g_menuCfg.end()) continue;
         out << "\n[" << Utf8(ctx) << "]\n";
@@ -1182,6 +1222,15 @@ void OpenShellMenu(POINT screenPt, int row) {
                 if (id - kCmdTag < all.size()) TagToggle(SelectedFullPaths(T()), all[id - kCmdTag]);
                 return;
             }
+            if (id == kCmdTemplatesFolder) {
+                OpenTemplatesFolder();
+                return;
+            }
+            if (id >= kCmdTemplate) {
+                const std::vector<TemplateDef> tpl = Templates();
+                if (id - kCmdTemplate < tpl.size()) NewFromTemplate(tpl[id - kCmdTemplate].name);
+                return;
+            }
             if (id >= kCmdCustom) {
                 RunCustomCommand(static_cast<int>(id - kCmdCustom));
                 return;
@@ -1204,8 +1253,12 @@ void OpenShellMenu(POINT screenPt, int row) {
             ShellInvoke(*g_shellMenu, id, screenPt);
             if (T().recursive) RecCheckSoon();  // it may have changed what the results show
         },
-        [](HMENU h, int pos, std::vector<MenuItem>& out) {
+        [](HMENU h, int pos, const std::wstring& key, std::vector<MenuItem>& out) {
             if (!g_shellMenu) return;
+            if (key == L"new") {  // Jolt's templates go in, and the user's order and hiding apply
+                out = NewSubmenuItems(*g_shellMenu, h, false);
+                return;
+            }
             g_shellMenu->MenuMsg(WM_INITMENUPOPUP, reinterpret_cast<WPARAM>(h), MAKELPARAM(pos, FALSE));
             out = ReadMenu(*g_shellMenu, h);
         });
@@ -1403,7 +1456,8 @@ void CrumbMenuListed(const Listing& l) {
 // drawn over the main window, like the rename panel: no window of its own, so it is there at once.
 constexpr float kEdW = 640.f, kEdMaxH = 620.f, kEdTop = 54.f, kEdFoot = 44.f, kEdRow = 28.f;
 constexpr UINT WM_APP_MENUED = WM_APP + 14;  // reads a context's menu once the panel has been drawn
-const wchar_t* kEdTabNames[3] = {L"Folder background", L"File", L"Folder"};
+constexpr int kEdCtxCount = 4;
+const wchar_t* kEdTabNames[kEdCtxCount] = {L"Folder background", L"File", L"Folder", L"New submenu"};
 
 struct EditorCtx {
     std::wstring ctx;        // background / file / folder
@@ -1418,7 +1472,7 @@ struct Editor {
     bool open = false;
     D2D1_RECT_F box{};  // the panel, in window DIPs
     std::unordered_map<HBITMAP, ComPtr<ID2D1Bitmap>> bmps;  // made with the main window's target
-    EditorCtx ctxs[3];
+    EditorCtx ctxs[kEdCtxCount];
     int cur = 0;
     int hover = -1, sel = -1;
     int drag = -1;       // item being dragged
@@ -1447,7 +1501,7 @@ void EditorLoadCtx(EditorCtx& c) {
     Tab& t = T();
     std::wstring folder = t.path;
     std::vector<std::wstring> names;
-    if (c.ctx == L"background") {
+    if (c.ctx == L"background" || c.ctx == L"background/new") {
         c.sample = t.path.empty() ? L"This PC" : t.path;
     } else {
         bool wantDir = c.ctx == L"folder";
@@ -1477,10 +1531,20 @@ void EditorLoadCtx(EditorCtx& c) {
         c.sample = L"";
         return;
     }
+    if (c.ctx == L"background/new") {
+        for (const MenuItem& m : ReadMenu(*c.sm, c.sm->hmenu))
+            if (m.key == L"new" && m.hsub) {
+                c.items = NewSubmenuItems(*c.sm, m.hsub, true, &c.visible);
+                return;
+            }
+        c.sample = L"";  // Windows offers no "New" here (a drive list, a virtual folder)
+        return;
+    }
     c.items = ApplyMenuCfg(c.ctx, WithCustomCommands(ReadMenu(*c.sm, c.sm->hmenu)), true, &c.visible);
 }
 
-float EditorListH() { return std::max(0.f, g_ed.box.bottom - g_ed.box.top - kEdTop - kEdFoot); }
+// Before the first frame the panel has no size yet: then nothing needs scrolling.
+float EditorListH() { return g_ed.box.bottom <= g_ed.box.top ? 1e6f : std::max(0.f, g_ed.box.bottom - g_ed.box.top - kEdTop - kEdFoot); }
 
 void EditorClampScroll() {
     EditorCtx& c = g_ed.ctxs[g_ed.cur];
@@ -1499,7 +1563,7 @@ int EditorRowAt(float y) {
 int EditorTabAt(float x, float y) {
     if (y < g_ed.box.top + 12 || y >= g_ed.box.top + 40) return -1;
     float tx = g_ed.box.left + kPad;
-    for (int i = 0; i < 3; ++i) {
+    for (int i = 0; i < kEdCtxCount; ++i) {
         float w = MeasureW(kEdTabNames[i], g_fmtName.Get()) + 26;
         if (x >= tx && x < tx + w) return i;
         tx += w + 6;
@@ -1532,7 +1596,7 @@ void DrawMenuEditor(float W, float H) {
 
     // context selector, and the close button
     float x = x0 + kPad;
-    for (int i = 0; i < 3; ++i) {
+    for (int i = 0; i < kEdCtxCount; ++i) {
         float w = MeasureW(kEdTabNames[i], g_fmtName.Get()) + 26;
         D2D1_RECT_F r = D2D1::RectF(x, y0 + 12, x + w, y0 + 40);
         if (i == g_ed.cur)
@@ -1557,7 +1621,8 @@ void DrawMenuEditor(float W, float H) {
         Text(L"Reading the menu…", g_fmtCenter.Get(), x0 + kPad, listTop, R - kPad, listTop + 80);
     } else if (c.sample.empty()) {
         Color(cDim);
-        Text(L"There is no sample item of this type in the current folder.\nOpen a folder that has one and come back.",
+        Text(c.ctx == L"background/new" ? L"Windows offers no \"New\" submenu in this folder.\nOpen a normal folder and come back."
+                                       : L"There is no sample item of this type in the current folder.\nOpen a folder that has one and come back.",
              g_fmtCenter.Get(), x0 + kPad, listTop, R - kPad, listTop + 80);
     } else {
         const int n = static_cast<int>(c.items.size());
@@ -1593,6 +1658,10 @@ void DrawMenuEditor(float W, float H) {
                         else
                             g_rt->DrawBitmap(it->second.Get(), D2D1::RectF(x0 + 48, y + 6, x0 + 64, y + 22), a, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
                     }
+                } else if (!m.iconPath.empty()) {  // Jolt's own entries (the templates): a folder, or the icon of the extension
+                    if (m.icon == g_iconFolder) DrawIcon(m.iconPath, nullptr, nullptr, 0, false, x0 + 48, y + (kEdRow - kIcon) / 2, a);
+                    else if (const int ix = IconForExt(m.text.c_str(), m.text.size()); ix >= 0)
+                        if (ID2D1Bitmap* b = IconBitmap(ix)) g_rt->DrawBitmap(b, D2D1::RectF(x0 + 48, y + 6, x0 + 64, y + 22), a, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
                 }
                 if (!m.ownerDrawn) {
                     Color(cText, a);
@@ -1651,7 +1720,7 @@ void EditorSelectCtx(int i) {
 
 // WM_APP_MENUED: the panel is on screen, its menu can be read now.
 void MenuEditorLoad(int i) {
-    if (!g_ed.open || i < 0 || i > 2 || g_ed.ctxs[i].loaded) return;
+    if (!g_ed.open || i < 0 || i >= kEdCtxCount || g_ed.ctxs[i].loaded) return;
     EditorLoadCtx(g_ed.ctxs[i]);
     Invalidate();
 }
@@ -1677,6 +1746,7 @@ void OpenMenuEditor() {
     g_ed.ctxs[0].ctx = L"background";
     g_ed.ctxs[1].ctx = L"file";
     g_ed.ctxs[2].ctx = L"folder";
+    g_ed.ctxs[3].ctx = L"background/new";
     EditorSelectCtx(0);
 }
 
@@ -1770,7 +1840,7 @@ void MenuEditorKey(WPARAM vk) {
                 EditorSave(c);
             }
             break;
-        case VK_TAB: EditorSelectCtx((g_ed.cur + (KeyDown(VK_SHIFT) ? 2 : 1)) % 3); return;
+        case VK_TAB: EditorSelectCtx((g_ed.cur + (KeyDown(VK_SHIFT) ? kEdCtxCount - 1 : 1)) % kEdCtxCount); return;
         default: return;
     }
     if (g_ed.sel >= 0) {

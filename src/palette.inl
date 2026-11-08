@@ -160,6 +160,12 @@ void PaletteBuild() {
         add(g_cfg.custom[i].name, L"your command", ShortcutFor(cmd), [cmd] { RunCommand(cmd); });
         g_pal.all.back().cmd = cmd;
     }
+    // templates: a copy of each in this folder
+    for (const TemplateDef& tp : Templates()) {
+        const std::wstring name = tp.name;
+        add(L"New: " + name, tp.isDir ? L"template folder" : L"template", L"", [name] { NewFromTemplate(name); });
+    }
+    add(L"New: templates folder", L"templates: files and folders here become entries of New", L"", [] { OpenTemplatesFolder(); });
     // sort
     add(L"Sort by name", L"sort", L"", [] { SetSortExplicit(SortBy::Name, true); });
     add(L"Sort by date, newest first", L"sort", L"", [] { SetSortExplicit(SortBy::Date, false); });
