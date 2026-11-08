@@ -11,7 +11,7 @@ enum class Cmd {
     SortByType, ZoomIn, ZoomOut, ZoomReset, RowsTaller, RowsShorter, EmptyRecycleBin,
     Undo, Redo, OpenAsAdmin, PinTab, Restore,
     Install, Quit, RenameMany, FolderSiblings, ViewList, ViewGrid, ViewBigger, ViewSmaller, Tag, PreviewWrap,
-    FindDuplicates, SelectExtraCopies, SelectPattern, SelectSameExtension, InvertSelection, Settings,
+    FindDuplicates, SelectExtraCopies, SelectPattern, SelectSameExtension, InvertSelection, Settings, Checkboxes,
     CustomFirst = 1000  // + index into g_cfg.custom: the user's own commands
 };
 inline bool IsCustom(Cmd c) { return static_cast<int>(c) >= static_cast<int>(Cmd::CustomFirst); }
@@ -38,6 +38,7 @@ struct Config {
     bool cloudStatus = true;  // marks the files of cloud folders that are online only, or always on this PC
     int typoMin = 75;         // searches also show names this close to what was typed, in percent; 0: only real matches
     bool background = true, tray = true, openDrives = false;
+    int checkboxes = 0;  // selection checkboxes: 0 none, 1 on the row under the mouse and the selected ones, 2 always
     int hotCount = 10;  // folders in Recents (0: no section)
     std::wstring globalKey = L"Win+J";
     bool colDate = true, colSize = true;
@@ -75,6 +76,7 @@ const CmdDef kCommands[] = {
     {L"select_pattern", Cmd::SelectPattern, L"Ctrl+Alt+A", L"select by pattern: *.png, report*, >10mb, ext:pdf, type:folder, !tmp"},
     {L"select_same_extension", Cmd::SelectSameExtension, L"Ctrl+Alt+X", L"select every file with the extension of the highlighted one"},
     {L"invert_selection", Cmd::InvertSelection, L"Ctrl+I", L"invert the selection"},
+    {L"checkboxes", Cmd::Checkboxes, L"", L"selection checkboxes: none, on hover, always (switches between them)"},
     {L"favorite", Cmd::Favorite, L"Ctrl+D", L"add or remove the current folder from favorites"},
     {L"new_tab", Cmd::NewTab, L"Ctrl+T", L"new tab"},
     {L"close_tab", Cmd::CloseTab, L"Ctrl+W", L"close tab"},
@@ -320,6 +322,9 @@ void WriteDefaultConfig() {
         "tray_icon = yes\n"
         "# Open drives and USB sticks as soon as they are connected: yes / no\n"
         "open_drives = no\n"
+        "# Selection checkboxes, to select with the mouse (or touch) without Ctrl: no / hover / always.\n"
+        "# hover: on the row under the mouse and on the selected ones.\n"
+        "checkboxes = no\n"
         "\n[columns]\n"
         "# Visible columns besides the name: modified, size\n"
         "show = modified, size\n"
@@ -428,6 +433,10 @@ void LoadConfig() {
             else if (key == L"global_hotkey") g_cfg.globalKey = val;
             else if (key == L"tray_icon") g_cfg.tray = ParseBool(val);
             else if (key == L"open_drives") g_cfg.openDrives = ParseBool(val);
+            else if (key == L"checkboxes") {
+                const std::wstring v = Lower(Trim(val));
+                g_cfg.checkboxes = v == L"hover" ? 1 : v == L"always" || ParseBool(v) ? 2 : 0;
+            }
             else if (key == L"preview_width") g_previewW = std::clamp(static_cast<float>(_wtof(val.c_str())), kPreviewMinW, 4000.f);
             else if (key == L"folders_first") {
                 std::wstring v = Lower(Trim(val));

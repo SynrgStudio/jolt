@@ -214,6 +214,9 @@ std::vector<SetRow> SettingsRows(int section) {
         case 0: {  // General
             toggle(L"Show hidden and system files", L"They appear dimmed. Ctrl+H switches it.", [] { return g_cfg.showHidden; },
                    [=](bool b) { SetGeneral(L"show_hidden", yesNo(b)); });
+            choice(L"Selection checkboxes", L"Select with the mouse, without Ctrl. The one in the header: all.",
+                   {L"Off", L"On hover", L"Always"}, [] { return g_cfg.checkboxes; },
+                   [](int i) { SetGeneral(L"checkboxes", i == 0 ? L"no" : i == 1 ? L"hover" : L"always"); });
             choice(L"Folders above files", L"Sorting by date or size mixes them unless this says always.",
                    {L"Mixed", L"Always", L"When sorting by name"}, [] { return g_foldersFirst.load(); },
                    [](int i) { SetGeneral(L"folders_first", i == 0 ? L"no" : i == 1 ? L"yes" : L"name"); });

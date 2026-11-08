@@ -216,6 +216,7 @@ void SelectExtraCopies(Tab& t) {
         S.message = L"Only in duplicate results: " + ShortcutFor(Cmd::FindDuplicates) + L" looks for them";
         return;
     }
+    t.implicitSel = false;
     int n = 0, firstSel = -1;
     uint64_t bytes = 0;
     bool keep = false;

@@ -89,6 +89,7 @@ void BoxArmScroll() {
 void BoxBegin(POINT pressed, float x, float y) {
     Tab& t = T();
     g_box.active = true;
+    T().implicitSel = false;
     g_box.ticking = false;
     g_box.pane = g_act;
     g_box.tab = &t;
