@@ -274,6 +274,13 @@ rebuilt in the background (at low priority, without getting in the way). Without
 minutes the first time; with Ctrl+K → *Reindex the drives now* Jolt asks for administrator rights once and reads the
 drive's table (MFT, like Everything), which takes seconds.
 
+## Seek: the same search, for AI agents
+
+[Seek](https://github.com/SynrgStudio/seek) is Jolt's search for AI agents: an MCP server that lets Claude Code, Codex,
+Cursor and other agents find names on every drive in milliseconds, search text inside a folder's files and PDFs, and know
+what the user changed lately. With Jolt installed it uses Jolt's index and fuzzy matching. It lives in its own repository,
+with benchmarks against Everything, fff and ripgrep at [seek.synrgs.tech](https://seek.synrgs.tech).
+
 ## Context menu
 
 It is the real Windows menu (the same one File Explorer sees, with the installed extensions), requested from the Shell
