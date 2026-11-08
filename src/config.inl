@@ -10,7 +10,7 @@ enum class Cmd {
     Terminal, OpenExplorer, RealLocation, CollapseGroups, ExpandGroups, GroupByDay, GroupByType, NoGroups,
     SortByType, ZoomIn, ZoomOut, ZoomReset, RowsTaller, RowsShorter, EmptyRecycleBin,
     Undo, Redo, OpenAsAdmin, PinTab, Restore,
-    Install, Quit, RenameMany, FolderSiblings, ViewList, ViewGrid, ViewBigger, ViewSmaller, Tag, FolderColor, PreviewWrap,
+    Install, Quit, RenameMany, FolderSiblings, ViewList, ViewGrid, ViewBigger, ViewSmaller, Tag, FolderColor, Zen, PreviewWrap,
     FindDuplicates, SelectExtraCopies, SelectPattern, SelectSameExtension, InvertSelection, Settings, Checkboxes, NewFromTemplate, CopyTo, MoveTo, Attributes, InUse, Unblock,
     CustomFirst = 1000  // + index into g_cfg.custom: the user's own commands
 };
@@ -85,6 +85,7 @@ const CmdDef kCommands[] = {
     {L"previous_tab", Cmd::PreviousTab, L"Ctrl+Shift+Tab", L"previous tab"},
     {L"path", Cmd::Path, L"Ctrl+L", L"type a path"},
     {L"sidebar", Cmd::Sidebar, L"Ctrl+B", L"show or hide the sidebar"},
+    {L"zen", Cmd::Zen, L"F11", L"zen mode: only the tabs and the list, without the sidebar and the navigation bar"},
     {L"reload", Cmd::Reload, L"Ctrl+R", L"reload the folder"},
     {L"timings", Cmd::Timings, L"F12", L"show or hide timings"},
     {L"context_menu", Cmd::ContextMenu, L"Shift+F10, Menu", L"context menu"},
