@@ -1396,9 +1396,10 @@ void CrumbMenuListed(const Listing& l) {
 }
 
 // ================================================================ context menu editor
-// Shows the real Windows menu for three contexts and lets you hide (checkbox) and reorder (drag).
-constexpr wchar_t kEditorClass[] = L"JoltMenuEditor";
-constexpr float kEdTop = 54.f, kEdFoot = 44.f, kEdRow = 28.f;
+// Shows the real Windows menu for three contexts and lets you hide (checkbox) and reorder (drag). It is a panel
+// drawn over the main window, like the rename panel: no window of its own, so it is there at once.
+constexpr float kEdW = 640.f, kEdMaxH = 620.f, kEdTop = 54.f, kEdFoot = 44.f, kEdRow = 28.f;
+constexpr UINT WM_APP_MENUED = WM_APP + 14;  // reads a context's menu once the panel has been drawn
 const wchar_t* kEdTabNames[3] = {L"Folder background", L"File", L"Folder"};
 
 struct EditorCtx {
@@ -1411,10 +1412,9 @@ struct EditorCtx {
 };
 
 struct Editor {
-    HWND hwnd = nullptr;
-    ComPtr<ID2D1HwndRenderTarget> rt;
-    ComPtr<ID2D1SolidColorBrush> brush;
-    std::unordered_map<HBITMAP, ComPtr<ID2D1Bitmap>> bmps;
+    bool open = false;
+    D2D1_RECT_F box{};  // the panel, in window DIPs
+    std::unordered_map<HBITMAP, ComPtr<ID2D1Bitmap>> bmps;  // made with the main window's target
     EditorCtx ctxs[3];
     int cur = 0;
     int hover = -1, sel = -1;
@@ -1423,8 +1423,11 @@ struct Editor {
     bool dragging = false;
     float scroll = 0;
     int hoverTab = -1;
-    bool hoverReset = false;
+    bool hoverReset = false, hoverClose = false;
 } g_ed;
+
+// The main target is being recreated: the item icons made with it go too.
+void MenuEditorReleaseBitmaps() { g_ed.bmps.clear(); }
 
 void EditorSave(EditorCtx& c) {
     std::vector<MenuCfgItem> cfg;
@@ -1474,11 +1477,7 @@ void EditorLoadCtx(EditorCtx& c) {
     c.items = ApplyMenuCfg(c.ctx, WithCustomCommands(ReadMenu(*c.sm, c.sm->hmenu)), true, &c.visible);
 }
 
-float EditorListH() {
-    RECT rc;
-    GetClientRect(g_ed.hwnd, &rc);
-    return rc.bottom * 96.f / g_dpi - kEdTop - kEdFoot;
-}
+float EditorListH() { return std::max(0.f, g_ed.box.bottom - g_ed.box.top - kEdTop - kEdFoot); }
 
 void EditorClampScroll() {
     EditorCtx& c = g_ed.ctxs[g_ed.cur];
@@ -1488,118 +1487,15 @@ void EditorClampScroll() {
 
 int EditorRowAt(float y) {
     EditorCtx& c = g_ed.ctxs[g_ed.cur];
-    if (y < kEdTop || y >= kEdTop + EditorListH()) return -1;
-    int r = static_cast<int>((y - kEdTop + g_ed.scroll) / kEdRow);
+    const float top = g_ed.box.top + kEdTop;
+    if (y < top || y >= top + EditorListH()) return -1;
+    int r = static_cast<int>((y - top + g_ed.scroll) / kEdRow);
     return r >= 0 && r < static_cast<int>(c.items.size()) ? r : -1;
 }
 
-void EditorDraw() {
-    if (!g_ed.rt && !CreateTargetFor(g_ed.hwnd, g_ed.rt, g_ed.brush)) return;
-    TargetScope scope(g_ed.rt.Get(), g_ed.brush.Get());
-    D2D1_SIZE_F sz = g_rt->GetSize();
-    const float W = sz.width, H = sz.height;
-    EditorCtx& c = g_ed.ctxs[g_ed.cur];
-    g_rt->BeginDraw();
-    g_rt->Clear(D2D1::ColorF(cBg));
-
-    // context selector
-    const wchar_t* const* names = kEdTabNames;
-    float x = kPad;
-    for (int i = 0; i < 3; ++i) {
-        float w = MeasureW(names[i], g_fmtName.Get()) + 26;
-        D2D1_RECT_F r = D2D1::RectF(x, 12, x + w, 40);
-        if (i == g_ed.cur)
-            Round(r, 6, cAccent, 0.25f);
-        else if (i == g_ed.hoverTab)
-            Round(r, 6, 0xFFFFFF, 0.06f);
-        Color(i == g_ed.cur ? cText : cDim);
-        Text(names[i], wcslen(names[i]), g_fmtCrumb.Get(), r.left, r.top, r.right, r.bottom);
-        x += w + 6;
-    }
-    HLine(0, W, kEdTop - 1);
-
-    // list
-    const float listTop = kEdTop, listBot = H - kEdFoot;
-    g_rt->PushAxisAlignedClip(D2D1::RectF(0, listTop, W, listBot), D2D1_ANTIALIAS_MODE_ALIASED);
-    if (c.sample.empty()) {
-        Color(cDim);
-        Text(L"There is no sample item of this type in the current folder.\nOpen a folder that has one and come back.",
-             g_fmtCenter.Get(), kPad, listTop, W - kPad, listTop + 80);
-    } else {
-        const int n = static_cast<int>(c.items.size());
-        for (int i = std::max(0, static_cast<int>(g_ed.scroll / kEdRow)); i < n; ++i) {
-            float y = listTop + i * kEdRow - g_ed.scroll;
-            if (y >= listBot) break;
-            if (g_ed.dragging && i == g_ed.drag) y = std::clamp(g_ed.dragY - kEdRow / 2, listTop, listBot - kEdRow);
-            const MenuItem& m = c.items[i];
-            const bool vis = c.visible[i];
-            D2D1_RECT_F row = D2D1::RectF(8, y + 1, W - 8, y + kEdRow - 1);
-            if (g_ed.dragging && i == g_ed.drag)
-                Round(row, 5, cTop);
-            else if (i == g_ed.sel)
-                Round(row, 5, cAccent, 0.18f);
-            else if (i == g_ed.hover)
-                Round(row, 5, 0xFFFFFF, 0.05f);
-            // checkbox
-            Color(vis ? cAccent : cFaint);
-            Glyph(vis ? 0xE73A : 0xE739, g_fmtIcon.Get(), 16, y, 40, y + kEdRow);
-            const float a = vis ? 1.f : 0.45f;
-            if (m.sep) {
-                Color(cFaint, a);
-                HLine(72, W - 40, y + kEdRow / 2, cBorder);
-                Text(L"separator", g_fmtRight.Get(), 44, y, 70 + 60, y + kEdRow);
-            } else {
-                if (m.hbm) {
-                    auto it = g_ed.bmps.find(m.hbm);
-                    if (it == g_ed.bmps.end()) it = g_ed.bmps.emplace(m.hbm, BitmapFromHBitmap(m.hbm)).first;
-                    if (it->second) {
-                        D2D1_SIZE_F bs = it->second->GetSize();
-                        if (m.ownerDrawn)
-                            g_rt->DrawBitmap(it->second.Get(), D2D1::RectF(48, y + (kEdRow - bs.height) / 2, 48 + bs.width, y + (kEdRow + bs.height) / 2), a);
-                        else
-                            g_rt->DrawBitmap(it->second.Get(), D2D1::RectF(48, y + 6, 64, y + 22), a, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
-                    }
-                }
-                if (!m.ownerDrawn) {
-                    Color(cText, a);
-                    Text(m.text, m.bold ? g_fmtNameBold.Get() : g_fmtName.Get(), 74, y, W - 120, y + kEdRow);
-                }
-                Color(cFaint, a);
-                Text(m.key, g_fmtRight.Get(), W - 220, y, W - 40, y + kEdRow);
-            }
-            // handle
-            Color(cFaint, 0.8f);
-            Glyph(0xE700, g_fmtIconSm.Get(), W - 34, y, W - 14, y + kEdRow);
-        }
-        const float contentH = n * kEdRow, viewH = listBot - listTop;
-        if (contentH > viewH) {
-            const float thumbH = std::max(24.f, viewH * viewH / contentH);
-            const float thumbY = listTop + (viewH - thumbH) * (g_ed.scroll / (contentH - viewH));
-            Round(D2D1::RectF(W - 5, thumbY, W - 2, thumbY + thumbH), 1.5f, 0xFFFFFF, 0.14f);
-        }
-    }
-    g_rt->PopAxisAlignedClip();
-
-    // footer
-    HLine(0, W, listBot);
-    Color(cDim);
-    Text(L"Checkbox: show or hide  ·  Drag to reorder  ·  Space and Ctrl+↑/↓ on the keyboard",
-         g_fmtStatus.Get(), kPad, listBot, W - 130, H);
-    D2D1_RECT_F rb = D2D1::RectF(W - 118, listBot + 9, W - kPad, H - 9);
-    Round(rb, 5, g_ed.hoverReset ? 0xFFFFFF : cTop, g_ed.hoverReset ? 0.12f : 1.f);
-    Color(cText);
-    Text(L"Reset", g_fmtCrumb.Get(), rb.left, rb.top, rb.right, rb.bottom);
-
-    if (g_rt->EndDraw() == D2DERR_RECREATE_TARGET) {
-        g_ed.bmps.clear();
-        g_ed.brush.Reset();
-        g_ed.rt.Reset();
-    }
-}
-
 int EditorTabAt(float x, float y) {
-    if (y < 12 || y >= 40) return -1;
-    float tx = kPad;
+    if (y < g_ed.box.top + 12 || y >= g_ed.box.top + 40) return -1;
+    float tx = g_ed.box.left + kPad;
     for (int i = 0; i < 3; ++i) {
         float w = MeasureW(kEdTabNames[i], g_fmtName.Get()) + 26;
         if (x >= tx && x < tx + w) return i;
@@ -1608,9 +1504,122 @@ int EditorTabAt(float x, float y) {
     return -1;
 }
 
-bool EditorResetAt(float x, float y) {
-    D2D1_SIZE_F sz = g_ed.rt ? g_ed.rt->GetSize() : D2D1::SizeF(600, 600);
-    return x >= sz.width - 118 && x < sz.width - kPad && y >= sz.height - kEdFoot + 9 && y < sz.height - 9;
+D2D1_RECT_F EditorResetRect() {
+    const D2D1_RECT_F& b = g_ed.box;
+    return D2D1::RectF(b.right - 118, b.bottom - kEdFoot + 9, b.right - kPad, b.bottom - 9);
+}
+D2D1_RECT_F EditorCloseRect() {
+    const D2D1_RECT_F& b = g_ed.box;
+    return D2D1::RectF(b.right - 42, b.top + 12, b.right - 12, b.top + 40);
+}
+bool InRect(const D2D1_RECT_F& r, float x, float y) { return x >= r.left && x < r.right && y >= r.top && y < r.bottom; }
+
+void DrawMenuEditor(float W, float H) {
+    if (!g_ed.open) return;
+    const float pw = std::min(kEdW, W - 40), ph = std::min(kEdMaxH, H - kTabH - 24);
+    const float x0 = std::floor((W - pw) / 2), y0 = std::floor(std::max(kTabH + 8, (H - ph) / 2));
+    const float R = x0 + pw, B = y0 + ph;
+    Fill(D2D1::RectF(0, 0, W, H), 0x000000, 0.45f);
+    g_ed.box = D2D1::RectF(x0, y0, R, B);
+    for (int i = 4; i >= 1; --i) Round(D2D1::RectF(x0 - i, y0 - i + 2, R + i, B + i + 2), 12.f + i, 0x000000, 0.10f);
+    Round(g_ed.box, 12, cTop);
+    Color(cBorder);
+    g_rt->DrawRoundedRectangle(D2D1::RoundedRect(g_ed.box, 12, 12), g_brush.Get(), 1.f);
+    EditorCtx& c = g_ed.ctxs[g_ed.cur];
+
+    // context selector, and the close button
+    float x = x0 + kPad;
+    for (int i = 0; i < 3; ++i) {
+        float w = MeasureW(kEdTabNames[i], g_fmtName.Get()) + 26;
+        D2D1_RECT_F r = D2D1::RectF(x, y0 + 12, x + w, y0 + 40);
+        if (i == g_ed.cur)
+            Round(r, 6, cAccent, 0.25f);
+        else if (i == g_ed.hoverTab)
+            Round(r, 6, 0xFFFFFF, 0.06f);
+        Color(i == g_ed.cur ? cText : cDim);
+        Text(kEdTabNames[i], wcslen(kEdTabNames[i]), g_fmtCrumb.Get(), r.left, r.top, r.right, r.bottom);
+        x += w + 6;
+    }
+    const D2D1_RECT_F cb = EditorCloseRect();
+    if (g_ed.hoverClose) Round(cb, 6, 0xFFFFFF, 0.08f);
+    Color(g_ed.hoverClose ? cText : cDim);
+    Glyph(0xE711, g_fmtIconSm.Get(), cb.left, cb.top, cb.right, cb.bottom);  // ×
+    HLine(x0, R, y0 + kEdTop - 1);
+
+    // list
+    const float listTop = y0 + kEdTop, listBot = B - kEdFoot;
+    g_rt->PushAxisAlignedClip(D2D1::RectF(x0, listTop, R, listBot), D2D1_ANTIALIAS_MODE_ALIASED);
+    if (!c.loaded) {
+        Color(cFaint);
+        Text(L"Reading the menu…", g_fmtCenter.Get(), x0 + kPad, listTop, R - kPad, listTop + 80);
+    } else if (c.sample.empty()) {
+        Color(cDim);
+        Text(L"There is no sample item of this type in the current folder.\nOpen a folder that has one and come back.",
+             g_fmtCenter.Get(), x0 + kPad, listTop, R - kPad, listTop + 80);
+    } else {
+        const int n = static_cast<int>(c.items.size());
+        for (int i = std::max(0, static_cast<int>(g_ed.scroll / kEdRow)); i < n; ++i) {
+            float y = listTop + i * kEdRow - g_ed.scroll;
+            if (y >= listBot) break;
+            if (g_ed.dragging && i == g_ed.drag) y = std::clamp(g_ed.dragY - kEdRow / 2, listTop, listBot - kEdRow);
+            const MenuItem& m = c.items[i];
+            const bool vis = c.visible[i];
+            D2D1_RECT_F row = D2D1::RectF(x0 + 8, y + 1, R - 8, y + kEdRow - 1);
+            if (g_ed.dragging && i == g_ed.drag)
+                Round(row, 5, cAccent, 0.32f);
+            else if (i == g_ed.sel)
+                Round(row, 5, cAccent, 0.18f);
+            else if (i == g_ed.hover)
+                Round(row, 5, 0xFFFFFF, 0.05f);
+            // checkbox
+            Color(vis ? cAccent : cFaint);
+            Glyph(vis ? 0xE73A : 0xE739, g_fmtIcon.Get(), x0 + 16, y, x0 + 40, y + kEdRow);
+            const float a = vis ? 1.f : 0.45f;
+            if (m.sep) {
+                Color(cFaint, a);
+                HLine(x0 + 72, R - 40, y + kEdRow / 2, cBorder);
+                Text(L"separator", g_fmtRight.Get(), x0 + 44, y, x0 + 130, y + kEdRow);
+            } else {
+                if (m.hbm) {
+                    auto it = g_ed.bmps.find(m.hbm);
+                    if (it == g_ed.bmps.end()) it = g_ed.bmps.emplace(m.hbm, BitmapFromHBitmap(m.hbm)).first;
+                    if (it->second) {
+                        D2D1_SIZE_F bs = it->second->GetSize();
+                        if (m.ownerDrawn)
+                            g_rt->DrawBitmap(it->second.Get(), D2D1::RectF(x0 + 48, y + (kEdRow - bs.height) / 2, x0 + 48 + bs.width, y + (kEdRow + bs.height) / 2), a);
+                        else
+                            g_rt->DrawBitmap(it->second.Get(), D2D1::RectF(x0 + 48, y + 6, x0 + 64, y + 22), a, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
+                    }
+                }
+                if (!m.ownerDrawn) {
+                    Color(cText, a);
+                    Text(m.text, m.bold ? g_fmtNameBold.Get() : g_fmtName.Get(), x0 + 74, y, R - 120, y + kEdRow);
+                }
+                Color(cFaint, a);
+                Text(m.key, g_fmtRight.Get(), R - 220, y, R - 40, y + kEdRow);
+            }
+            // handle
+            Color(cFaint, 0.8f);
+            Glyph(0xE700, g_fmtIconSm.Get(), R - 34, y, R - 14, y + kEdRow);
+        }
+        const float contentH = n * kEdRow, viewH = listBot - listTop;
+        if (contentH > viewH) {
+            const float thumbH = std::max(24.f, viewH * viewH / contentH);
+            const float thumbY = listTop + (viewH - thumbH) * (g_ed.scroll / (contentH - viewH));
+            Round(D2D1::RectF(R - 6, thumbY, R - 3, thumbY + thumbH), 1.5f, 0xFFFFFF, 0.14f);
+        }
+    }
+    g_rt->PopAxisAlignedClip();
+
+    // footer
+    HLine(x0, R, listBot);
+    Color(cDim);
+    Text(L"Checkbox: show or hide  ·  Drag or Ctrl+↑/↓ to reorder  ·  Space toggles  ·  Esc closes",
+         g_fmtStatus.Get(), x0 + kPad, listBot, R - 130, B);
+    const D2D1_RECT_F rb = EditorResetRect();
+    Round(rb, 5, g_ed.hoverReset ? 0xFFFFFF : cBg, g_ed.hoverReset ? 0.12f : 1.f);
+    Color(cText);
+    Text(L"Reset", g_fmtCrumb.Get(), rb.left, rb.top, rb.right, rb.bottom);
 }
 
 void EditorMove(int from, int to) {
@@ -1631,188 +1640,141 @@ void EditorSelectCtx(int i) {
     g_ed.cur = i;
     g_ed.sel = g_ed.hover = -1;
     g_ed.scroll = 0;
-    if (!g_ed.ctxs[i].loaded) EditorLoadCtx(g_ed.ctxs[i]);
-    InvalidateRect(g_ed.hwnd, nullptr, FALSE);
+    // Windows builds the menu with every shell extension (tens of ms, hundreds the first time): first the
+    // panel draws "Reading the menu…", then it reads it
+    if (!g_ed.ctxs[i].loaded) PostMessageW(g_hwnd, WM_APP_MENUED, static_cast<WPARAM>(i), 0);
+    Invalidate();
 }
 
-LRESULT CALLBACK EditorProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
-    auto dipx = [&] { return GET_X_LPARAM(lp) * 96.f / g_dpi; };
-    auto dipy = [&] { return GET_Y_LPARAM(lp) * 96.f / g_dpi; };
-    auto inv = [&] { InvalidateRect(hwnd, nullptr, FALSE); };
-    EditorCtx& c = g_ed.ctxs[g_ed.cur];
-    switch (msg) {
-        case WM_PAINT: {
-            PAINTSTRUCT ps;
-            BeginPaint(hwnd, &ps);
-            EditorDraw();
-            EndPaint(hwnd, &ps);
-            return 0;
-        }
-        case WM_ERASEBKGND:
-            return 1;
-        case WM_SIZE:
-            if (g_ed.rt) g_ed.rt->Resize(D2D1::SizeU(LOWORD(lp), HIWORD(lp)));
-            EditorClampScroll();
-            inv();
-            return 0;
-        case WM_GETMINMAXINFO:
-            reinterpret_cast<MINMAXINFO*>(lp)->ptMinTrackSize = {MulDiv(520, g_dpi, 96), MulDiv(360, g_dpi, 96)};
-            return 0;
-        case WM_MOUSEMOVE: {
-            float x = dipx(), y = dipy();
-            D2D1_SIZE_F sz = g_ed.rt ? g_ed.rt->GetSize() : D2D1::SizeF(600, 600);
-            if (g_ed.dragging) {
-                g_ed.dragY = y;
-                int to = EditorRowAt(std::clamp(y, kEdTop, kEdTop + EditorListH() - 1));
-                if (to >= 0 && to != g_ed.drag) {
-                    EditorMove(g_ed.drag, to);
-                    g_ed.drag = to;
-                }
-                inv();
-                return 0;
-            }
-            (void)sz;
-            int ht = EditorTabAt(x, y);
-            bool hr = EditorResetAt(x, y);
-            int row = EditorRowAt(y);
-            if (row != g_ed.hover || ht != g_ed.hoverTab || hr != g_ed.hoverReset) {
-                g_ed.hover = row;
-                g_ed.hoverTab = ht;
-                g_ed.hoverReset = hr;
-                inv();
-            }
-            TRACKMOUSEEVENT tme{sizeof(tme), TME_LEAVE, hwnd, 0};
-            TrackMouseEvent(&tme);
-            return 0;
-        }
-        case WM_MOUSELEAVE:
-            g_ed.hover = g_ed.hoverTab = -1;
-            g_ed.hoverReset = false;
-            inv();
-            return 0;
-        case WM_LBUTTONDOWN: {
-            float x = dipx(), y = dipy();
-            SetFocus(hwnd);
-            int tab = EditorTabAt(x, y);
-            if (tab >= 0) {
-                EditorSelectCtx(tab);
-                return 0;
-            }
-            if (EditorResetAt(x, y)) {
-                g_menuCfg.erase(c.ctx);
-                SaveMenuCfg();
-                EditorLoadCtx(c);
-                g_ed.sel = -1;
-                inv();
-                return 0;
-            }
-            int row = EditorRowAt(y);
-            if (row < 0) return 0;
-            g_ed.sel = row;
-            if (x < 44) {
-                c.visible[row] = !c.visible[row];
-                EditorSave(c);
-            } else {
-                g_ed.drag = row;
-                g_ed.dragY = y;
-                g_ed.dragging = true;
-                SetCapture(hwnd);
-            }
-            inv();
-            return 0;
-        }
-        case WM_LBUTTONUP:
-            if (g_ed.dragging) {
-                g_ed.dragging = false;
-                ReleaseCapture();
-                inv();
-            }
-            return 0;
-        case WM_CAPTURECHANGED:
-            g_ed.dragging = false;
-            inv();
-            return 0;
-        case WM_MOUSEWHEEL:
-            g_ed.scroll -= GET_WHEEL_DELTA_WPARAM(wp) / 120.f * 3 * kEdRow;
-            EditorClampScroll();
-            inv();
-            return 0;
-        case WM_KEYDOWN: {
-            const bool ctrl = KeyDown(VK_CONTROL);
-            int n = static_cast<int>(c.items.size());
-            switch (wp) {
-                case VK_ESCAPE: DestroyWindow(hwnd); return 0;
-                case VK_UP:
-                    if (ctrl) EditorMove(g_ed.sel, g_ed.sel - 1);
-                    else if (n) g_ed.sel = std::max(0, g_ed.sel - 1);
-                    break;
-                case VK_DOWN:
-                    if (ctrl) EditorMove(g_ed.sel, g_ed.sel + 1);
-                    else if (n) g_ed.sel = std::min(n - 1, g_ed.sel + 1);
-                    break;
-                case VK_SPACE:
-                    if (g_ed.sel >= 0 && g_ed.sel < n) {
-                        c.visible[g_ed.sel] = !c.visible[g_ed.sel];
-                        EditorSave(c);
-                    }
-                    break;
-                case VK_TAB: EditorSelectCtx((g_ed.cur + 1) % 3); return 0;
-            }
-            if (g_ed.sel >= 0) {
-                float top = g_ed.sel * kEdRow, h = EditorListH();
-                if (top < g_ed.scroll) g_ed.scroll = top;
-                if (top + kEdRow > g_ed.scroll + h) g_ed.scroll = top + kEdRow - h;
-                EditorClampScroll();
-            }
-            inv();
-            return 0;
-        }
-        case WM_DESTROY:
-            g_ed.bmps.clear();
-            g_ed.brush.Reset();
-            g_ed.rt.Reset();
-            for (auto& cx : g_ed.ctxs) {
-                cx.items.clear();
-                cx.sm.reset();
-                cx.loaded = false;
-            }
-            g_ed.hwnd = nullptr;
-            return 0;
-    }
-    return DefWindowProcW(hwnd, msg, wp, lp);
+// WM_APP_MENUED: the panel is on screen, its menu can be read now.
+void MenuEditorLoad(int i) {
+    if (!g_ed.open || i < 0 || i > 2 || g_ed.ctxs[i].loaded) return;
+    EditorLoadCtx(g_ed.ctxs[i]);
+    Invalidate();
 }
 
-void RegisterEditorClass(HINSTANCE inst) {
-    WNDCLASSEXW wc{sizeof(wc)};
-    wc.lpfnWndProc = EditorProc;
-    wc.hInstance = inst;
-    wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
-    wc.lpszClassName = kEditorClass;
-    RegisterClassExW(&wc);
+void MenuEditorClose() {
+    if (!g_ed.open) return;
+    if (g_ed.dragging && GetCapture() == g_hwnd) ReleaseCapture();
+    g_ed = Editor{};  // the shell menus and their icons go with it
+    Invalidate();
 }
+
+void ViewEditorClose();  // viewedit.inl
+void PaletteClose();     // palette.inl
 
 void OpenMenuEditor() {
-    if (g_ed.hwnd) {
-        SetForegroundWindow(g_ed.hwnd);
-        return;
-    }
+    if (g_ed.open) return;
+    PopupClose();
+    PaletteClose();
+    ViewEditorClose();
+    CancelRename();
     g_ed = Editor{};
+    g_ed.open = true;
     g_ed.ctxs[0].ctx = L"background";
     g_ed.ctxs[1].ctx = L"file";
     g_ed.ctxs[2].ctx = L"folder";
-    RECT prc;
-    GetWindowRect(g_hwnd, &prc);
-    int w = MulDiv(640, g_dpi, 96), h = MulDiv(620, g_dpi, 96);
-    int x = prc.left + ((prc.right - prc.left) - w) / 2, y = prc.top + ((prc.bottom - prc.top) - h) / 2;
-    g_ed.hwnd = CreateWindowExW(0, kEditorClass, L"Context menu — Jolt", WS_OVERLAPPEDWINDOW & ~WS_MINIMIZEBOX, x, y, w,
-                                h, g_hwnd, nullptr, GetModuleHandleW(nullptr), nullptr);
-    if (!g_ed.hwnd) {
-        S.message = L"Could not open the menu editor (error " + std::to_wstring(GetLastError()) + L")";
+    EditorSelectCtx(0);
+}
+
+void MenuEditorMouseMove(float x, float y) {
+    if (g_ed.dragging) {
+        g_ed.dragY = y;
+        const float top = g_ed.box.top + kEdTop;
+        int to = EditorRowAt(std::clamp(y, top, top + EditorListH() - 1));
+        if (to >= 0 && to != g_ed.drag) {
+            EditorMove(g_ed.drag, to);
+            g_ed.drag = to;
+        }
         Invalidate();
         return;
     }
-    BOOL dark = TRUE;
-    DwmSetWindowAttribute(g_ed.hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark, sizeof(dark));
-    EditorSelectCtx(0);
-    ShowWindow(g_ed.hwnd, SW_SHOW);
+    const int ht = EditorTabAt(x, y), row = EditorRowAt(y);
+    const bool hr = InRect(EditorResetRect(), x, y), hc = InRect(EditorCloseRect(), x, y);
+    if (row != g_ed.hover || ht != g_ed.hoverTab || hr != g_ed.hoverReset || hc != g_ed.hoverClose) {
+        g_ed.hover = row;
+        g_ed.hoverTab = ht;
+        g_ed.hoverReset = hr;
+        g_ed.hoverClose = hc;
+        Invalidate();
+    }
+}
+
+void MenuEditorClick(float x, float y) {
+    if (!InRect(g_ed.box, x, y) || InRect(EditorCloseRect(), x, y)) {  // outside, or the ×
+        MenuEditorClose();
+        return;
+    }
+    EditorCtx& c = g_ed.ctxs[g_ed.cur];
+    int tab = EditorTabAt(x, y);
+    if (tab >= 0) {
+        EditorSelectCtx(tab);
+        return;
+    }
+    if (InRect(EditorResetRect(), x, y)) {
+        g_menuCfg.erase(c.ctx);
+        SaveMenuCfg();
+        EditorLoadCtx(c);
+        g_ed.sel = -1;
+        Invalidate();
+        return;
+    }
+    int row = EditorRowAt(y);
+    if (row < 0) return;
+    g_ed.sel = row;
+    if (x < g_ed.box.left + 44) {
+        c.visible[row] = !c.visible[row];
+        EditorSave(c);
+    } else {
+        g_ed.drag = row;
+        g_ed.dragY = y;
+        g_ed.dragging = true;
+        SetCapture(g_hwnd);
+    }
+    Invalidate();
+}
+
+void MenuEditorMouseUp() {
+    if (!g_ed.dragging) return;
+    g_ed.dragging = false;
+    if (GetCapture() == g_hwnd) ReleaseCapture();
+    Invalidate();
+}
+
+void MenuEditorWheel(int delta) {
+    g_ed.scroll -= delta / 120.f * 3 * kEdRow;
+    EditorClampScroll();
+    Invalidate();
+}
+
+void MenuEditorKey(WPARAM vk) {
+    EditorCtx& c = g_ed.ctxs[g_ed.cur];
+    const bool ctrl = KeyDown(VK_CONTROL);
+    const int n = static_cast<int>(c.items.size());
+    switch (vk) {
+        case VK_ESCAPE: MenuEditorClose(); return;
+        case VK_UP:
+            if (ctrl) EditorMove(g_ed.sel, g_ed.sel - 1);
+            else if (n) g_ed.sel = std::max(0, g_ed.sel - 1);
+            break;
+        case VK_DOWN:
+            if (ctrl) EditorMove(g_ed.sel, g_ed.sel + 1);
+            else if (n) g_ed.sel = std::min(n - 1, g_ed.sel + 1);
+            break;
+        case VK_SPACE:
+            if (g_ed.sel >= 0 && g_ed.sel < n) {
+                c.visible[g_ed.sel] = !c.visible[g_ed.sel];
+                EditorSave(c);
+            }
+            break;
+        case VK_TAB: EditorSelectCtx((g_ed.cur + (KeyDown(VK_SHIFT) ? 2 : 1)) % 3); return;
+        default: return;
+    }
+    if (g_ed.sel >= 0) {
+        float top = g_ed.sel * kEdRow, h = EditorListH();
+        if (top < g_ed.scroll) g_ed.scroll = top;
+        if (top + kEdRow > g_ed.scroll + h) g_ed.scroll = top + kEdRow - h;
+        EditorClampScroll();
+    }
+    Invalidate();
 }
