@@ -2866,7 +2866,8 @@ Columns Cols(int pane) {
 float RowIndent(const Tab& t, int row) { return FlatView(t) ? 0.f : t.rows[row].depth * kIndent; }
 float RowTextX(const Columns& c, const Tab& t, int row) { return c.nameL + kChev + RowIndent(t, row) + 28; }
 
-// --- checkbox animation. The box fades and grows in, the check pops in a moment later with a little overshoot,
+// --- checkbox animation. The box only fades in, and stays put: scaling it reads as movement. The check pops in a
+// moment later with a little overshoot,
 // and shrinks away when unchecked. Keyed by path, so it survives the list being rebuilt; entries not drawn for a
 // while go away.
 struct CheckAnim {
@@ -2877,7 +2878,7 @@ struct CheckAnim {
 std::unordered_map<std::wstring, CheckAnim> g_checkAnim;
 unsigned g_checkFrame = 0;
 double g_checkPruneAt = 0;
-constexpr double kCheckBoxMs = 110, kCheckDelayMs = 50, kCheckPopMs = 170, kCheckOffMs = 90, kCheckBumpMs = 160;
+constexpr double kCheckBoxMs = 110, kCheckDelayMs = 50, kCheckPopMs = 170, kCheckOffMs = 90;
 
 float EaseOut(float p) {
     p = std::clamp(p, 0.f, 1.f);
@@ -2930,19 +2931,16 @@ void DrawCheckbox(const std::wstring& key, const D2D1_RECT_F& r, bool on, wchar_
     }
     const CheckAnim& a = it->second;
     const float pBox = a.shownAt ? static_cast<float>((now - a.shownAt) / kCheckBoxMs) : 1.f;
-    const float pBump = a.onAt ? static_cast<float>((now - a.onAt) / kCheckBumpMs) : 1.f;
     const float alpha = EaseOut(pBox);
-    float boxScale = 0.7f + 0.3f * EaseOut(pBox);
-    if (pBump < 1) boxScale *= 1 + 0.1f * std::sin(3.14159f * std::clamp(pBump, 0.f, 1.f));
     const float q = !a.onAt ? 1.f : on ? static_cast<float>((now - a.onAt - kCheckDelayMs) / kCheckPopMs) : static_cast<float>((now - a.onAt) / kCheckOffMs);
     const float markScale = on ? (q <= 0 ? 0.f : PopScale(q)) : 1 - EaseOut(q);
-    const bool busy = pBox < 1 || pBump < 1 || q < 1;
+    const bool busy = pBox < 1 || q < 1;
     if (busy) SetTimer(g_hwnd, kTimerTabSlide, 15, nullptr);
     if (backed) Round(r, 5, 0x000000, 0.55f * alpha);
     Color(on || markScale > 0 ? boxOn : boxOff, alpha);
-    GlyphScaled(0xE739, g_fmtIcon.Get(), r, boxScale);
+    Glyph(0xE739, g_fmtIcon.Get(), r.left, r.top, r.right, r.bottom);
     Color(markColor, alpha);
-    GlyphScaled(mark, g_fmtIcon.Get(), r, boxScale * 0.6f * markScale);
+    GlyphScaled(mark, g_fmtIcon.Get(), r, 0.6f * markScale);
 }
 
 void DrawHeader(int pane) {
