@@ -144,6 +144,8 @@ works too). Options in `config.txt`: `run_in_background`, `global_hotkey`, `tray
 | Ctrl+Alt+C | copy the name of the selection (or of the folder). Ctrl+K → "copy the path with forward slashes" gives `C:/Users/...` |
 | Alt+Enter | Windows properties |
 | Shift+Alt+Enter | **attributes and dates** of the selection: hidden and read-only as switches (a dash when the items differ: those stay as they are), and the modified and created dates as text, with a Now button. Nothing changes until Apply |
+| Ctrl+K → "in use" | **who has it open**: the programs holding the selection (asked to the Restart Manager), each with a Close button: its windows are asked to close; a program without windows is ended, and one that stays gets Force. When a copy, move, delete or rename fails because a file is open, the same panel opens by itself with the reason and goes again once they're closed, or with Try again. Other failures say why on the status line, with no Windows dialog |
+| Ctrl+K → "unblock" | **unblock** downloaded files: drops the Zone.Identifier mark from the selection (folders: everything inside), so Windows stops warning about them |
 | Ctrl+C / Ctrl+X / Ctrl+V | copy, cut and paste, compatible with File Explorer (Windows progress, conflicts and undo) |
 | Ctrl+V with an image or text on the clipboard | saves it in the folder as a PNG or a UTF-8 .txt named by the moment, ready to rename |
 | Del / Shift+Del | to the Recycle Bin / delete permanently |

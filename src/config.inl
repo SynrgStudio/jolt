@@ -11,7 +11,7 @@ enum class Cmd {
     SortByType, ZoomIn, ZoomOut, ZoomReset, RowsTaller, RowsShorter, EmptyRecycleBin,
     Undo, Redo, OpenAsAdmin, PinTab, Restore,
     Install, Quit, RenameMany, FolderSiblings, ViewList, ViewGrid, ViewBigger, ViewSmaller, Tag, PreviewWrap,
-    FindDuplicates, SelectExtraCopies, SelectPattern, SelectSameExtension, InvertSelection, Settings, Checkboxes, NewFromTemplate, CopyTo, MoveTo, Attributes,
+    FindDuplicates, SelectExtraCopies, SelectPattern, SelectSameExtension, InvertSelection, Settings, Checkboxes, NewFromTemplate, CopyTo, MoveTo, Attributes, InUse, Unblock,
     CustomFirst = 1000  // + index into g_cfg.custom: the user's own commands
 };
 inline bool IsCustom(Cmd c) { return static_cast<int>(c) >= static_cast<int>(Cmd::CustomFirst); }
@@ -114,6 +114,8 @@ const CmdDef kCommands[] = {
     {L"group_in_folder", Cmd::GroupInFolder, L"Ctrl+Shift+G", L"move the selection into a new folder"},
     {L"properties", Cmd::Properties, L"Alt+Enter", L"Windows properties"},
     {L"attributes", Cmd::Attributes, L"Shift+Alt+Enter", L"attributes and dates of the selection: hidden, read-only, modified, created"},
+    {L"in_use", Cmd::InUse, L"", L"which programs have the selection open, with a button to close each"},
+    {L"unblock", Cmd::Unblock, L"", L"unblock the selection: drop the \"downloaded from the internet\" mark (Zone.Identifier)"},
     {L"folder_sizes", Cmd::FolderSizes, L"Alt+R", L"calculate folder sizes"},
     {L"show_folders", Cmd::ShowFolders, L"", L"show or hide folders (toggle folders)"},
     {L"show_files", Cmd::ShowFiles, L"", L"show or hide files (toggle files)"},

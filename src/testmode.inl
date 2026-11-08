@@ -697,6 +697,27 @@ void TestRunStep() {
                 for (size_t i = 0; i < L.items.size() && i < 12; ++i) out += L" | " + L.items[i].text;
                 TestLog(out);
             }
+        } else if (s.cmd == L"inuse") {  // the In use panel: title, subtitle, each holder with its button (and where it is)
+            if (!g_iu.open) {
+                TestLog(L"inuse: closed");
+            } else {
+                Render();
+                std::wstring out = L"inuse: " + g_iu.title + L" | " + g_iu.sub;
+                for (size_t i = 0; i < g_iu.holders.size(); ++i) {
+                    const Holder& h = g_iu.holders[i];
+                    bool clickable = false;
+                    const std::wstring label = IuLabel(h, clickable);
+                    out += L" | " + LeafOf(h.exe) + L" " + label;
+                    for (const IuHit& hit : g_iu.hits)
+                        if (hit.k == IuK::Act && hit.idx == static_cast<int>(i))
+                            out += L" @" + std::to_wstring(static_cast<int>((hit.r.left + hit.r.right) / 2)) + L"," + std::to_wstring(static_cast<int>((hit.r.top + hit.r.bottom) / 2));
+                    if (!clickable) out += L" (no button)";
+                }
+                for (const IuHit& hit : g_iu.hits)
+                    if (hit.k == IuK::Retry)
+                        out += L" | retry @" + std::to_wstring(static_cast<int>((hit.r.left + hit.r.right) / 2)) + L"," + std::to_wstring(static_cast<int>((hit.r.top + hit.r.bottom) / 2));
+                TestLog(out);
+            }
         } else if (s.cmd == L"crumbs") {  // where the segments and chevrons are, to click them
             Render();
             std::wstring out = L"crumbs:";

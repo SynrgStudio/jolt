@@ -89,6 +89,7 @@ struct OpRecorder : IFileOperationProgressSink {
     DWORD cookie = 0;
     std::unordered_set<std::wstring> sources, existed;
     std::vector<UndoItem> moved, copied, deleted;
+    std::vector<std::pair<std::wstring, HRESULT>> failed;  // what the engine couldn't do (nested items too), and why
 
     STDMETHODIMP QueryInterface(REFIID riid, void** ppv) override {
         if (riid == IID_IUnknown || riid == __uuidof(IFileOperationProgressSink)) {
@@ -108,6 +109,7 @@ struct OpRecorder : IFileOperationProgressSink {
 
     bool Asked(IShellItem* item) const { return sources.count(Key(ItemPath(item))) != 0; }
     void After(std::vector<UndoItem>& out, IShellItem* src, IShellItem* dest, LPCWSTR name, HRESULT hr, IShellItem* made) {
+        if (FAILED(hr)) failed.emplace_back(ItemPath(src), hr);
         if (FAILED(hr) || !Asked(src)) return;
         UndoItem it;
         it.from = ItemPath(src);
@@ -135,6 +137,7 @@ struct OpRecorder : IFileOperationProgressSink {
     }
     STDMETHODIMP PreDeleteItem(DWORD, IShellItem*) override { return S_OK; }
     STDMETHODIMP PostDeleteItem(DWORD, IShellItem* s, HRESULT hr, IShellItem* made) override {
+        if (FAILED(hr)) failed.emplace_back(ItemPath(s), hr);
         if (SUCCEEDED(hr) && Asked(s)) {
             UndoItem it;
             it.from = ItemPath(s);
@@ -187,7 +190,33 @@ struct OpRecorder : IFileOperationProgressSink {
     }
 };
 
-// Copies, moves or deletes with IFileOperation: progress, conflicts and elevation like File Explorer.
+void InUseAfterFailure(const std::wstring& what, const std::vector<std::wstring>& files, const std::wstring& reason, std::function<void()> retry);  // inuse.inl
+std::wstring HrText(HRESULT hr);
+bool FileOp(FileOpKind kind, const std::vector<std::wstring>& files, const std::wstring& dest, DWORD extraFlags, const std::vector<std::wstring>* newNames, OpRecorder* rec);
+
+// What the engine couldn't do, without its dialogs (FOF_NOERRORUI): the reason on the status line, or the In use panel
+// when a program holds the file, with the same operation to go again.
+void OpFailed(FileOpKind kind, const std::vector<std::wstring>& files, const std::wstring& dest, DWORD extraFlags,
+              const std::vector<std::wstring>* newNames, const std::vector<std::pair<std::wstring, HRESULT>>& failed) {
+    std::vector<std::wstring> bad;
+    HRESULT first = S_OK;
+    for (const auto& [path, hr] : failed) {
+        if (hr == COPYENGINE_E_USER_CANCELLED || hr == COPYENGINE_E_CANCELLED || hr == HRESULT_FROM_WIN32(ERROR_CANCELLED) ||
+            hr == COPYENGINE_E_REQUIRES_ELEVATION)
+            continue;
+        bad.push_back(path);
+        if (first == S_OK) first = hr;
+    }
+    if (bad.empty()) return;
+    const wchar_t* verb = kind == FileOpKind::Copy ? L"copy " : kind == FileOpKind::Move ? L"move " : L"delete ";
+    const std::wstring what = L"Couldn't " + std::wstring(verb) + (bad.size() == 1 ? LeafOf(bad[0]) : Thousands(static_cast<int>(bad.size())) + L" items");
+    const std::vector<std::wstring> again = files, names = newNames ? *newNames : std::vector<std::wstring>{};
+    const bool hasNames = newNames != nullptr;
+    InUseAfterFailure(what, bad, HrText(first), [=] { FileOp(kind, again, dest, extraFlags, hasNames ? &names : nullptr, nullptr); });
+}
+
+// Copies, moves or deletes with IFileOperation: progress, conflicts and elevation like File Explorer. Errors don't get
+// its dialogs: OpFailed says why, and offers to close whatever holds a file.
 // newNames (optional, parallel to files): the name of each copy. rec: the caller keeps what
 // happened; otherwise it goes to the history.
 bool FileOp(FileOpKind kind, const std::vector<std::wstring>& files, const std::wstring& dest, DWORD extraFlags = 0,
@@ -199,7 +228,7 @@ bool FileOp(FileOpKind kind, const std::vector<std::wstring>& files, const std::
     ComPtr<IFileOperation> op;
     if (FAILED(CoCreateInstance(CLSID_FileOperation, nullptr, CLSCTX_ALL, IID_PPV_ARGS(&op)))) return false;
     op->SetOwnerWindow(g_hwnd);
-    DWORD flags = FOF_NOCONFIRMMKDIR | FOFX_SHOWELEVATIONPROMPT | extraFlags;
+    DWORD flags = FOF_NOCONFIRMMKDIR | FOFX_SHOWELEVATIONPROMPT | FOF_NOERRORUI | extraFlags;
     // FOF_ALLOWUNDO sends to the Recycle Bin: a permanent delete can't use it
     if (kind != FileOpKind::Delete || (extraFlags & FOFX_RECYCLEONDELETE)) flags |= FOF_ALLOWUNDO | FOFX_ADDUNDORECORD;
     if (kind == FileOpKind::Delete && (extraFlags & FOFX_RECYCLEONDELETE)) flags |= FOF_WANTNUKEWARNING;
@@ -225,6 +254,7 @@ bool FileOp(FileOpKind kind, const std::vector<std::wstring>& files, const std::
         ok = SUCCEEDED(op->PerformOperations());
         r->Detach(op.Get());
         if (own) own->Commit();
+        if (!r->failed.empty()) OpFailed(kind, files, dest, extraFlags, newNames, r->failed);
         // the folders it touched are read again: whatever shows them catches up, subfolder search results too
         std::unordered_set<std::wstring> again;
         for (const std::wstring& f : files)
