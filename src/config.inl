@@ -11,6 +11,7 @@ enum class Cmd {
     SortByType, ZoomIn, ZoomOut, ZoomReset, RowsTaller, RowsShorter, EmptyRecycleBin,
     Undo, Redo, OpenAsAdmin, PinTab, Restore,
     Install, Quit, RenameMany, FolderSiblings, ViewList, ViewGrid, ViewBigger, ViewSmaller, Tag, PreviewWrap,
+    FindDuplicates, SelectExtraCopies,
     CustomFirst = 1000  // + index into g_cfg.custom: the user's own commands
 };
 inline bool IsCustom(Cmd c) { return static_cast<int>(c) >= static_cast<int>(Cmd::CustomFirst); }
@@ -85,6 +86,8 @@ const CmdDef kCommands[] = {
     {L"palette", Cmd::Palette, L"Ctrl+K", L"command palette"},
     {L"go_to", Cmd::GoTo, L"Ctrl+P", L"go to a recent, favorite or system folder, or a path"},
     {L"search_subfolders", Cmd::SearchSubfolders, L"Ctrl+Shift+F", L"search this folder and all its subfolders"},
+    {L"find_duplicates", Cmd::FindDuplicates, L"Ctrl+Alt+F", L"find duplicate files in this folder and its subfolders"},
+    {L"select_extra_copies", Cmd::SelectExtraCopies, L"Ctrl+Shift+A", L"in duplicates: select every copy but the oldest of each set"},
     {L"expand", Cmd::Expand, L"Shift+Right", L"expand or collapse the highlighted folder (tree)"},
     {L"collapse", Cmd::Collapse, L"Shift+Left", L"collapse the folder (or go to the one above in the tree)"},
     {L"go_to_location", Cmd::GoToLocation, L"Ctrl+Shift+E", L"open the folder containing the highlighted item"},
