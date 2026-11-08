@@ -233,14 +233,24 @@ std::vector<SetRow> SettingsRows(int section) {
             toggle(L"Open drives as they are connected", L"USB sticks and drives open in a tab.", [] { return g_cfg.openDrives; },
                    [=](bool b) { SetGeneral(L"open_drives", yesNo(b)); });
             head(L"Columns");
-            auto cols = [](bool date, bool size) {
-                std::wstring v = date ? L"modified" : L"";
-                if (size) v += (v.empty() ? L"" : L", ") + std::wstring(L"size");
-                ConfigSetValue(L"columns", L"show", v);
-                SettingsSaved(L"Saved: columns = " + (v.empty() ? std::wstring(L"name only") : v));
-            };
-            toggle(L"Modified", L"", [] { return g_cfg.colDate; }, [=](bool b) { cols(b, g_cfg.colSize); });
-            toggle(L"Size", L"", [] { return g_cfg.colSize; }, [=](bool b) { cols(g_cfg.colDate, b); });
+            {
+                // one turned on goes where its kind is in the usual order, among the others, whatever their order
+                auto has = [](int k) { return std::find(g_cfg.cols.begin(), g_cfg.cols.end(), k) != g_cfg.cols.end(); };
+                auto set = [](int k, bool on) {
+                    std::vector<int> v = g_cfg.cols;
+                    v.erase(std::remove(v.begin(), v.end(), k), v.end());
+                    if (on) v.insert(std::find_if(v.begin(), v.end(), [k](int o) { return o > k; }), k);
+                    std::wstring s;
+                    for (int o : v) s += (s.empty() ? L"" : L", ") + std::wstring(kColDefs[o].key);
+                    ConfigSetValue(L"columns", L"show", s);
+                    SettingsSaved(L"Saved: columns = " + (s.empty() ? std::wstring(L"name only") : s));
+                };
+                const wchar_t* help[ColKinds] = {L"", L"Width × height of images and videos.", L"How long songs and videos last.",
+                                                 L"R read-only, H hidden, S system, A archive, C compressed, E encrypted, L link.",
+                                                 L"How many items each folder has.", L""};
+                for (int k = 0; k < ColKinds; ++k)
+                    toggle(kColDefs[k].label, help[k], [=] { return has(k); }, [=](bool b) { set(k, b); });
+            }
             head(L"Always ready");
             toggle(L"Keep running when the window closes", L"Closing hides it, and it comes back at once. ☰ → Quit really closes.",
                    [] { return g_cfg.background; }, [=](bool b) { SetGeneral(L"run_in_background", yesNo(b)); });

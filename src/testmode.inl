@@ -25,6 +25,7 @@
 //   drag_over 300 140 copy C:\a.txt | C:\b.txt     drag_over 300 140 move selection
 //   exists C:\a.txt (logs whether it is there)      touch C:\a.txt (appends a byte, or creates it)      message (logs the bottom notice)
 //   rows (logs the names the list shows, in order)     selection (logs the selected names and the cursor)
+//   cells (logs each row's [columns] show texts)        config columns | show | modified, items (sets it and reloads)
 //   drop / cancel_drag             drag_out C:\target copy   (the selection dropped on another folder)
 // Activation:  activate no / activate yes   (the window loses or regains focus)
 // Mouse in parts:  press x y / drag x y / release x y   (move with the button held)
@@ -52,6 +53,7 @@ void TestLog(const std::wstring& s) {
 
 // Prepares the test data folder: a fresh copy of the user's configuration.
 std::wstring SessionRoundTrip();  // app.cpp
+void ReloadConfig();              // app.cpp
 
 void TestPrepareData() {
     wchar_t tmp[MAX_PATH];
@@ -644,6 +646,24 @@ void TestRunStep() {
                 if (T().rows[i].closeness) names += L"(" + std::to_wstring(T().rows[i].closeness) + L"%)";
             }
             TestLog(L"rows: " + std::to_wstring(RowCount(T())) + names);
+        } else if (s.cmd == L"config") {  // section | key | value, in the test copy of config.txt
+            const size_t bar = s.arg.find(L'|'), bar2 = s.arg.find(L'|', bar + 1);
+            ConfigSetValue(Trim(s.arg.substr(0, bar)), Trim(s.arg.substr(bar + 1, bar2 - bar - 1)), Trim(s.arg.substr(bar2 + 1)));
+            ReloadConfig();
+            Invalidate();
+        } else if (s.cmd == L"cells") {  // the [columns] show columns of each row (fitting or not): name[a|b]
+            std::wstring out;
+            for (int i = 0; i < RowCount(T()) && i < 40; ++i) {
+                if (IsHeader(T(), i)) continue;
+                const bool drives = T().rows[i].l->path.empty();
+                out += L" " + RowName(T(), i) + L"[";
+                for (size_t j = 0; j < g_cfg.cols.size(); ++j) {
+                    bool faint = false;
+                    out += (j ? L"|" : L"") + CellText(g_cfg.cols[j], EntryAt(T(), i), drives ? RowName(T(), i) + L"\\" : RowPath(T(), i), drives, faint);
+                }
+                out += L"]";
+            }
+            TestLog(L"cells:" + out);
         } else if (s.cmd == L"rename_preview") {  // the rename panel's rows: old -> new, with problems
             std::wstring out = L"rename_preview: " + std::to_wstring(g_rn.changing) + L" change, " + std::to_wstring(g_rn.problems) + L" problems";
             for (const RnItem& it : g_rn.items)

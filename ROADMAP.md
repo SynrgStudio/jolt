@@ -2,7 +2,7 @@
 
 Every planned feature, one line per GitHub issue. A line is checked and struck through when its PR is merged.
 
-**33 of 88 done.**
+**34 of 88 done.**
 
 ## Navigation
 
@@ -48,10 +48,10 @@ Every planned feature, one line per GitHub issue. A line is checked and struck t
 
 ## View
 
-3 of 9 done.
+4 of 9 done.
 
 - [x] ~~[#21](https://github.com/SynrgStudio/jolt/issues/21) Icon and thumbnail view with adjustable size, and compact list~~
-- [ ] [#22](https://github.com/SynrgStudio/jolt/issues/22) Extra columns: dimensions, duration, item count, attributes
+- [x] ~~[#22](https://github.com/SynrgStudio/jolt/issues/22) Extra columns: dimensions, duration, item count, attributes~~
 - [x] ~~[#23](https://github.com/SynrgStudio/jolt/issues/23) Colors by extension or rule, and tags on files and folders~~
 - [ ] [#24](https://github.com/SynrgStudio/jolt/issues/24) Custom folder icons and colors (read desktop.ini)
 - [ ] [#25](https://github.com/SynrgStudio/jolt/issues/25) Highlight files modified today

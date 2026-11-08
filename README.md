@@ -181,7 +181,7 @@ works too). Options in `config.txt`: `run_in_background`, `global_hotkey`, `tray
 | Ctrl+D | add or remove the current folder from Favorites |
 | Ctrl+1 … Ctrl+9 | go to favorite N |
 | click on Name / Modified / Size | sort (second click reverses) |
-| drag the left edge of Modified or Size | change the column width (double click: fit the content). Saved in `config.txt` |
+| drag the left edge of a column | change its width (double click: fit the content). Saved in `config.txt` |
 | Ctrl + / Ctrl - / Ctrl+0 | enlarge, shrink or return the whole interface to normal size (saved as `scale`) |
 | right click / Shift+F10 / Menu key | Windows context menu (file, folder or background); with Shift, the extended one |
 | ☰ (top left) | app menu: settings, context menu editor, configuration folder, quit |
@@ -225,7 +225,9 @@ save** (so do `favorites.txt` and `menu.txt`). Sections:
 - `[general]`: font, size, row height, sidebar and preview width, show hidden files, and `folders_first`
   (`yes` / `no` / `name`: by default folders go on top only when sorting by name; by date and size they
   mix with the files, which is what you'd expect).
-- `[columns]`: which columns to show and their widths.
+- `[columns]`: which columns to show, left to right, and their widths. Besides `modified` and `size`:
+  `dimensions` (images and videos), `duration` (songs and videos), `items` (how many a folder has) and
+  `attributes` (R H S A C E, and L for links). They can also be turned on in Settings (Ctrl+,).
 - `[colors]`: all interface colors in RRGGBB.
 - `[shortcuts]`: one command per line with its keys (`up = Backspace, Left, Alt+Up`). By default, as
   in a commander: **→ enters the highlighted folder and ← goes up one level**. The up/down arrows, PageUp/PageDown,
