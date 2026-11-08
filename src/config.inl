@@ -11,7 +11,7 @@ enum class Cmd {
     SortByType, ZoomIn, ZoomOut, ZoomReset, RowsTaller, RowsShorter, EmptyRecycleBin,
     Undo, Redo, OpenAsAdmin, PinTab, Restore,
     Install, Quit, RenameMany, FolderSiblings, ViewList, ViewGrid, ViewBigger, ViewSmaller, Tag, PreviewWrap,
-    FindDuplicates, SelectExtraCopies,
+    FindDuplicates, SelectExtraCopies, SelectPattern, SelectSameExtension, InvertSelection,
     CustomFirst = 1000  // + index into g_cfg.custom: the user's own commands
 };
 inline bool IsCustom(Cmd c) { return static_cast<int>(c) >= static_cast<int>(Cmd::CustomFirst); }
@@ -72,6 +72,9 @@ const CmdDef kCommands[] = {
     {L"cut", Cmd::Cut, L"Ctrl+X", L"cut"},
     {L"paste", Cmd::Paste, L"Ctrl+V", L"paste"},
     {L"select_all", Cmd::SelectAll, L"Ctrl+A", L"select all"},
+    {L"select_pattern", Cmd::SelectPattern, L"Ctrl+Alt+A", L"select by pattern: *.png, report*, >10mb, ext:pdf, type:folder, !tmp"},
+    {L"select_same_extension", Cmd::SelectSameExtension, L"Ctrl+Alt+X", L"select every file with the extension of the highlighted one"},
+    {L"invert_selection", Cmd::InvertSelection, L"Ctrl+I", L"invert the selection"},
     {L"favorite", Cmd::Favorite, L"Ctrl+D", L"add or remove the current folder from favorites"},
     {L"new_tab", Cmd::NewTab, L"Ctrl+T", L"new tab"},
     {L"close_tab", Cmd::CloseTab, L"Ctrl+W", L"close tab"},
