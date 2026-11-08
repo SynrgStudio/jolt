@@ -2,7 +2,7 @@
 
 Every planned feature, one line per GitHub issue. A line is checked and struck through when its PR is merged.
 
-**29 of 88 done.**
+**30 of 88 done.**
 
 ## Navigation
 
@@ -33,12 +33,12 @@ Every planned feature, one line per GitHub issue. A line is checked and struck t
 
 ## Editing
 
-6 of 10 done.
+7 of 10 done.
 
 - [x] ~~[#11](https://github.com/SynrgStudio/jolt/issues/11) Rename several files at once with a preview~~
 - [x] ~~[#12](https://github.com/SynrgStudio/jolt/issues/12) Select by pattern, by extension of the highlighted item, and invert selection~~
 - [x] ~~[#13](https://github.com/SynrgStudio/jolt/issues/13) Optional selection checkboxes~~
-- [ ] [#14](https://github.com/SynrgStudio/jolt/issues/14) File templates and editing the "New" submenu
+- [x] ~~[#14](https://github.com/SynrgStudio/jolt/issues/14) File templates and editing the "New" submenu~~
 - [x] ~~[#15](https://github.com/SynrgStudio/jolt/issues/15) Group the selection into a new folder~~
 - [x] ~~[#16](https://github.com/SynrgStudio/jolt/issues/16) Copy name only and copy path with forward slashes~~
 - [x] ~~[#17](https://github.com/SynrgStudio/jolt/issues/17) Paste an image or text from the clipboard as a file~~

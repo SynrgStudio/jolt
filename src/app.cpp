@@ -3846,6 +3846,7 @@ int HitRowIn(int pane, float x, float y);
 Hit HitAt(float x, float y);
 RECT ScreenRect(const D2D1_RECT_F& r);
 #include "undo.inl"
+#include "templates.inl"
 #include "menu.inl"
 #include "dragdrop.inl"
 #include "boxselect.inl"
@@ -4142,6 +4143,12 @@ void RunCommand(Cmd cmd) {
         case Cmd::Delete: DeleteSelection(); break;
         case Cmd::NewFolder: NewItem(true); break;
         case Cmd::NewFile: NewItem(false); break;
+        case Cmd::NewFromTemplate:  // the palette, showing only the templates
+            PaletteOpen(0);
+            g_pal.text = L"New: ";
+            PaletteFilter();
+            Invalidate();
+            break;
         case Cmd::Copy:
             if (ClipboardSetFiles(SelectedFullPaths(t), false)) {
                 g_ignoreClipUpdate = true;

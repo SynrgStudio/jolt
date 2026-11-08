@@ -11,7 +11,7 @@ enum class Cmd {
     SortByType, ZoomIn, ZoomOut, ZoomReset, RowsTaller, RowsShorter, EmptyRecycleBin,
     Undo, Redo, OpenAsAdmin, PinTab, Restore,
     Install, Quit, RenameMany, FolderSiblings, ViewList, ViewGrid, ViewBigger, ViewSmaller, Tag, PreviewWrap,
-    FindDuplicates, SelectExtraCopies, SelectPattern, SelectSameExtension, InvertSelection, Settings, Checkboxes,
+    FindDuplicates, SelectExtraCopies, SelectPattern, SelectSameExtension, InvertSelection, Settings, Checkboxes, NewFromTemplate,
     CustomFirst = 1000  // + index into g_cfg.custom: the user's own commands
 };
 inline bool IsCustom(Cmd c) { return static_cast<int>(c) >= static_cast<int>(Cmd::CustomFirst); }
@@ -107,6 +107,7 @@ const CmdDef kCommands[] = {
     {L"copy_name", Cmd::CopyName, L"Ctrl+Alt+C", L"copy the name of the selection (or of the folder)"},
     {L"copy_path_unix", Cmd::CopyPathUnix, L"", L"copy the path with forward slashes (C:/Users/...)"},
     {L"new_file", Cmd::NewFile, L"Ctrl+N", L"new file"},
+    {L"new_from_template", Cmd::NewFromTemplate, L"", L"new file or folder from a template (the files in %APPDATA%\\Jolt\\Templates)"},
     {L"duplicate", Cmd::Duplicate, L"Ctrl+Shift+D", L"duplicate the selection"},
     {L"group_in_folder", Cmd::GroupInFolder, L"Ctrl+Shift+G", L"move the selection into a new folder"},
     {L"properties", Cmd::Properties, L"Alt+Enter", L"Windows properties"},

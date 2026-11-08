@@ -136,6 +136,7 @@ works too). Options in `config.txt`: `run_in_background`, `global_hotkey`, `tray
 | F2 | rename (the name without the extension is selected); **Tab / Shift+Tab** saves and moves to the next / previous one |
 | F2 with several selected, Ctrl+F2 | **rename several at once**: a new name as a pattern (`{name}` `{name:lower}` `{NAME}` `{Name}` `{ext}`, a counter `{n}` `{n:3}` `{n:3:10:5}` with padding, start and step, dates `{date}` `{date:YYYYMMDD_hhmm}` `{time}` `{created}`, `{parent}`, and random text `{random}` `{random:12:letters}` `{random:6:digits}` `{uuid}`), find and replace (plain, or `/regex/` with `$1`), and a preview of every result with conflicts marked. Enter renames, Ctrl+Z takes it all back; the last pattern comes back next time |
 | Ctrl+N / Ctrl+Shift+N | new file / new folder, ready to rename |
+| New → template | **templates**: every file or folder in `%APPDATA%\Jolt\Templates` is an entry at the top of the right-click "New" submenu, and in Ctrl+K as "New: name" (the `new_from_template` command lists just them). A copy lands in the folder, named like the template, ready to rename. "Templates folder…" at the end of the submenu (and Settings → More) opens it |
 | Ctrl+Shift+D | duplicate ("name - Copy.ext") |
 | Ctrl+Shift+G | **group in a new folder**: moves the selection into a new folder next to it (named after the item if there is one) and starts renaming it. Ctrl+Z undoes it in two steps |
 | Ctrl+Shift+C | copy the path of the selection (or of the folder), with quotes only if needed |
@@ -306,7 +307,9 @@ properties
 ```
 
 Each option is identified by its "verb" (what the editor's gray column shows). Whatever isn't listed in the
-file is added at the end, in the order Windows gives it. Submenus can't be customized yet.
+file is added at the end, in the order Windows gives it. The editor's fourth tab is the **"New" submenu**: Windows'
+entries and the templates, hidden and reordered the same way, saved under `[background/new]`. Other submenus
+can't be customized yet.
 
 ---
 

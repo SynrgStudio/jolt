@@ -304,7 +304,10 @@ open in vs code = Ctrl+Alt+V</code></pre>
 git_shell
 ---                   <span class="c">← separator</span>
 properties</code></pre>
-<p>Each entry is identified by its verb (the gray column in the editor). Whatever isn't listed is added at the end in the order Windows gives it. Submenus can't be customized yet. Delete goes through Jolt so it stays in the undo history.</p>
+<p>Each entry is identified by its verb (the gray column in the editor). Whatever isn't listed is added at the end in the order Windows gives it. The editor's fourth tab is the <strong>"New" submenu</strong>: Windows' entries and your <a href="#templates">templates</a>, hidden and reordered the same way, saved under <code>[background/new]</code>. Other submenus can't be customized yet. Delete goes through Jolt so it stays in the undo history.</p>
+
+<h3 id="templates">Templates</h3>
+<p>Every file or folder in <code>%APPDATA%\Jolt\Templates</code> is an entry at the top of the right-click <strong>New</strong> submenu, and in <kbd>Ctrl</kbd>+<kbd>K</kbd> as "New: name" (the <code>new_from_template</code> command lists just them). A copy lands in the folder, named like the template (or "name (2)"), ready to rename; a folder template is copied with everything in it. "Templates folder…" at the end of the submenu, and Settings → More, opens the folder, making it the first time.</p>
 
 <h2 id="cli">Command line</h2>
 <table>

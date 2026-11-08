@@ -503,6 +503,8 @@ std::vector<SetRow> SettingsRows(int section) {
                 std::wstring f = ConfigFile();
                 if (!f.empty()) ShellExecuteW(nullptr, L"open", f.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
             });
+            button(L"Templates folder", L"Files and folders put there become entries of New, Ctrl+K lists them as \"New: name\".",
+                   [] { OpenTemplatesFolder(); });
             button(L"Open the config folder", L"config.txt, views.txt, menu.txt, tags.txt and the favorites, in a new tab.",
                    [] { NewTab(ConfigDir()); });
             break;
