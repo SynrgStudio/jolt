@@ -1,6 +1,6 @@
 // Tags and colors. Tags are labels you put on files and folders, each with a color, shown as little tag-shaped
 // labels after the name (dots where there's no room) and usable in the filter ("tag:urgent"); they live in
-// %APPDATA%\Jolt\tags.txt.
+// %APPDATA%\Jolt\tags.txt, and so do the folder colors (foldercolor.inl).
 // Name colors by rule come from [file_colors] in config.txt ("patterns = RRGGBB").
 // Included from app.cpp after the filter code, before BuildRows.
 
@@ -11,6 +11,7 @@ struct TagDef {
 std::vector<TagDef> g_tagDefs;                                             // known tags, in file order
 std::unordered_map<std::wstring, std::vector<std::wstring>> g_tagsByPath;  // Key(path) -> tag names
 std::vector<std::wstring> g_tagTargets;                                    // what the tag palette acts on
+std::unordered_map<std::wstring, UINT32> g_folderColors;                   // Key(folder) -> RRGGBB of its icon
 std::wstring Thousands(int n);
 
 std::wstring TagsFile() {
@@ -65,7 +66,8 @@ void SaveTags() {
     if (f.empty()) return;
     std::wstring s =
         L"# Jolt tags. [tags]: name = RRGGBB (a tag without a color gets one on its own).\n"
-        L"# [items]: path = tags, separated by spaces. Edited by hand it reloads on save.\n\n[tags]\n";
+        L"# [items]: path = tags, separated by spaces. [folder_colors]: folder = RRGGBB, the color of its icon in Jolt.\n"
+        L"# Edited by hand it reloads on save.\n\n[tags]\n";
     for (const TagDef& d : g_tagDefs) s += d.name + L" = " + Hex(d.color) + L"\n";
     s += L"\n[items]\n";
     std::vector<std::pair<std::wstring, const std::vector<std::wstring>*>> rows;
@@ -77,6 +79,10 @@ void SaveTags() {
         for (size_t i = 0; i < v->size(); ++i) line += (i ? L" " : L"") + (*v)[i];
         s += line + L"\n";
     }
+    s += L"\n[folder_colors]\n";
+    std::vector<std::pair<std::wstring, UINT32>> colors(g_folderColors.begin(), g_folderColors.end());
+    std::sort(colors.begin(), colors.end());
+    for (const auto& [k, c] : colors) s += k + L" = " + Hex(c) + L"\n";
     std::ofstream out(f, std::ios::binary);
     out << "\xEF\xBB\xBF" << Utf8(s);
     out.close();
@@ -86,6 +92,7 @@ void SaveTags() {
 void LoadTags() {
     g_tagDefs.clear();
     g_tagsByPath.clear();
+    g_folderColors.clear();
     std::ifstream in(TagsFile(), std::ios::binary);
     if (!in) return;
     std::string raw((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
@@ -102,8 +109,8 @@ void LoadTags() {
             section = Lower(line.substr(1, line.size() - 2));
             continue;
         }
-        // the path may hold '=': the last one separates the tags
-        size_t eq = section == L"items" ? line.rfind(L'=') : line.find(L'=');
+        // the path may hold '=': the last one separates the tags (or the color)
+        size_t eq = section == L"items" || section == L"folder_colors" ? line.rfind(L'=') : line.find(L'=');
         if (eq == std::wstring::npos) continue;
         std::wstring key = Trim(line.substr(0, eq)), val = Trim(line.substr(eq + 1));
         if (key.empty()) continue;
@@ -114,6 +121,10 @@ void LoadTags() {
         } else if (section == L"items") {
             std::vector<std::wstring> tags = TagSplit(val);
             if (!tags.empty()) g_tagsByPath[Key(Normalize(key))] = std::move(tags);
+        } else if (section == L"folder_colors") {
+            std::wstring h = val;
+            if (!h.empty() && h[0] == L'#') h.erase(0, 1);
+            if (h.size() == 6) g_folderColors[Key(Normalize(key))] = static_cast<UINT32>(wcstoul(h.c_str(), nullptr, 16));
         }
     }
 }
@@ -150,14 +161,22 @@ void TagToggle(const std::vector<std::wstring>& paths, std::wstring tag) {
     Invalidate();
 }
 
-// A renamed or moved item keeps its tags.
+// A renamed or moved item keeps its tags, and a folder its color.
 void TagsFollow(const std::wstring& from, const std::wstring& to) {
-    auto it = g_tagsByPath.find(Key(from));
-    if (it == g_tagsByPath.end()) return;
-    std::vector<std::wstring> v = std::move(it->second);
-    g_tagsByPath.erase(it);
-    g_tagsByPath[Key(to)] = std::move(v);
-    SaveTags();
+    bool moved = false;
+    if (auto it = g_tagsByPath.find(Key(from)); it != g_tagsByPath.end()) {
+        std::vector<std::wstring> v = std::move(it->second);
+        g_tagsByPath.erase(it);
+        g_tagsByPath[Key(to)] = std::move(v);
+        moved = true;
+    }
+    if (auto it = g_folderColors.find(Key(from)); it != g_folderColors.end()) {
+        const UINT32 c = it->second;
+        g_folderColors.erase(it);
+        g_folderColors[Key(to)] = c;
+        moved = true;
+    }
+    if (moved) SaveTags();
 }
 
 // ---- name colors by rule ([file_colors] in config.txt)

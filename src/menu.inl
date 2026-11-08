@@ -57,6 +57,8 @@ struct MenuItem {
     std::wstring text, shortcut, key;
     UINT id = 0;  // 0 = no action
     bool sep = false, enabled = true, checked = false, bold = false;
+    bool swatch = false;      // a disc of swatchColor where the icon goes (ringed when checked)
+    UINT32 swatchColor = 0;
     HMENU hsub = nullptr;        // Shell submenu (read when opened)
     std::vector<MenuItem> sub;   // own submenu
     HBITMAP hbm = nullptr;       // icon (owned by the HMENU or the ShellMenu)
@@ -234,6 +236,14 @@ void DrawLevel(PopupLevel& L) {
                                                  y + (hh + bh) / 2),
                                      m.enabled ? 1.f : 0.5f, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
                 }
+            }
+        } else if (m.swatch) {
+            const D2D1_POINT_2F c = D2D1::Point2F(kMenuIconX + 8, y + hh / 2);
+            Color(m.swatchColor);
+            g_rt->FillEllipse(D2D1::Ellipse(c, 5.5f, 5.5f), g_brush.Get());
+            if (m.checked) {
+                Color(cText);
+                g_rt->DrawEllipse(D2D1::Ellipse(c, 8.f, 8.f), g_brush.Get(), 1.3f);
             }
         } else if (m.checked) {
             Color(cText);
@@ -595,6 +605,7 @@ void RegisterPopupClass(HINSTANCE inst) {
 // ================================================================ Shell context menu
 constexpr UINT kCmdFirst = 1, kCmdLast = 0x6FFF, kCmdFav = 0x7000, kCmdCustom = 0x7100;  // kCmdCustom + index: the user's commands
 constexpr UINT kCmdTemplate = 0x7200, kCmdTemplatesFolder = 0x72FF;                   // kCmdTemplate + index into Templates()
+constexpr UINT kCmdFolderColor = 0x7300;  // + 0: none; + 1 + index into kFolderColors
 constexpr UINT kCmdTagNew = 0x7FFF, kCmdTag = 0x8000;                                   // kCmdTag + index into AllTags()
 void TagPaletteOpen();  // palette.inl
 void RunCustomCommand(int i);  // ops.inl
@@ -1150,6 +1161,68 @@ void OpenBinMenu(POINT screenPt, int row) {
     });
 }
 
+// ================================================================ folder colors
+// The folders in the selection (the colors are for folders only).
+std::vector<std::wstring> SelectedFolders(const Tab& t) {
+    std::vector<std::wstring> out;
+    if ((t.path.empty() && !t.recursive) || IsVirtual(t.path)) return out;
+    for (int i = 0; i < RowCount(t); ++i)
+        if (!IsHeader(t, i) && IsSel(t, i) && EntryAt(t, i).isDir()) out.push_back(RowPath(t, i));
+    return out;
+}
+
+// None and the palette, with the one all of them have checked.
+std::vector<MenuItem> FolderColorItems(const std::vector<std::wstring>& dirs) {
+    auto all = [&](bool has, UINT32 color) {
+        for (const std::wstring& d : dirs) {
+            UINT32 c = 0;
+            const bool h = FolderColor(d, c);
+            if (h != has || (h && c != color)) return false;
+        }
+        return !dirs.empty();
+    };
+    std::vector<MenuItem> v;
+    MenuItem none, sep;
+    none.text = L"None";
+    none.id = kCmdFolderColor;
+    none.checked = all(false, 0);
+    sep.sep = true;
+    v.push_back(none);
+    v.push_back(sep);
+    for (size_t i = 0; i < std::size(kFolderColors); ++i) {
+        MenuItem m;
+        m.text = kFolderColors[i].name;
+        m.id = kCmdFolderColor + 1 + static_cast<UINT>(i);
+        m.swatch = true;
+        m.swatchColor = kFolderColors[i].color;
+        m.checked = all(true, kFolderColors[i].color);
+        v.push_back(m);
+    }
+    return v;
+}
+
+bool FolderColorPick(UINT id, const std::vector<std::wstring>& dirs) {
+    if (id < kCmdFolderColor || id > kCmdFolderColor + std::size(kFolderColors)) return false;
+    if (id == kCmdFolderColor) FolderColorSet(dirs, false, 0);
+    else FolderColorSet(dirs, true, kFolderColors[id - kCmdFolderColor - 1].color);
+    return true;
+}
+
+// The folder_color command: the palette as a menu, by the cursor's row.
+void FolderColorMenu() {
+    Tab& t = T();
+    const std::vector<std::wstring> dirs = SelectedFolders(t);
+    if (dirs.empty()) {
+        S.message = L"Folder color: select one or more folders";
+        Invalidate();
+        return;
+    }
+    const D2D1_RECT_F rr = RowRect(t, std::clamp(t.sel, 0, RowCount(t) - 1));
+    const float y = ListTop() + rr.bottom - t.scroll, x = PaneGeo(g_act).L + 60;
+    const RECT sr = ScreenRect(D2D1::RectF(x, y, x, y));
+    PopupOpen(FolderColorItems(dirs), sr, [dirs](UINT id) { FolderColorPick(id, dirs); });
+}
+
 void OpenShellMenu(POINT screenPt, int row) {
     Tab& t = T();
     if (!t.list || t.list->error) return;
@@ -1195,6 +1268,13 @@ void OpenShellMenu(POINT screenPt, int row) {
         tg.sub.push_back(nw);
         sep.sep = true;
         items.insert(items.begin(), {tg, sep});
+        if (const std::vector<std::wstring> dirs = SelectedFolders(t); !dirs.empty()) {  // right after Tags
+            MenuItem fc;
+            fc.text = L"Folder color";
+            fc.key = L"jolt:folder_color";
+            fc.sub = FolderColorItems(dirs);
+            items.insert(items.begin() + 1, fc);
+        }
     }
     std::wstring favPath;  // on a single folder, it can be added to favorites without entering it
     if (ctx == L"folder" && SelCount(t) == 1) {
@@ -1222,6 +1302,7 @@ void OpenShellMenu(POINT screenPt, int row) {
                 if (id - kCmdTag < all.size()) TagToggle(SelectedFullPaths(T()), all[id - kCmdTag]);
                 return;
             }
+            if (FolderColorPick(id, SelectedFolders(T()))) return;
             if (id == kCmdTemplatesFolder) {
                 OpenTemplatesFolder();
                 return;

@@ -10,7 +10,7 @@ enum class Cmd {
     Terminal, OpenExplorer, RealLocation, CollapseGroups, ExpandGroups, GroupByDay, GroupByType, NoGroups,
     SortByType, ZoomIn, ZoomOut, ZoomReset, RowsTaller, RowsShorter, EmptyRecycleBin,
     Undo, Redo, OpenAsAdmin, PinTab, Restore,
-    Install, Quit, RenameMany, FolderSiblings, ViewList, ViewGrid, ViewBigger, ViewSmaller, Tag, PreviewWrap,
+    Install, Quit, RenameMany, FolderSiblings, ViewList, ViewGrid, ViewBigger, ViewSmaller, Tag, FolderColor, PreviewWrap,
     FindDuplicates, SelectExtraCopies, SelectPattern, SelectSameExtension, InvertSelection, Settings, Checkboxes, NewFromTemplate, CopyTo, MoveTo, Attributes, InUse, Unblock,
     CustomFirst = 1000  // + index into g_cfg.custom: the user's own commands
 };
@@ -143,6 +143,7 @@ const CmdDef kCommands[] = {
     {L"view_bigger", Cmd::ViewBigger, L"", L"bigger cells in the grid (Ctrl+Alt+wheel up)"},
     {L"view_smaller", Cmd::ViewSmaller, L"", L"smaller cells, down to the list (Ctrl+Alt+wheel down)"},
     {L"tag", Cmd::Tag, L"", L"tag the selection: add or remove a tag"},
+    {L"folder_color", Cmd::FolderColor, L"", L"color the icon of the selected folders, only in Jolt"},
     {L"empty_recycle_bin", Cmd::EmptyRecycleBin, L"", L"empty the Recycle Bin"},
     {L"restore", Cmd::Restore, L"Ctrl+Shift+R", L"in the Recycle Bin: put the selection back where it was"},
     {L"undo", Cmd::Undo, L"Ctrl+Z", L"undo the last action (rename, move, copy, create, Recycle Bin)"},
