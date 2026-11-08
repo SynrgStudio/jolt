@@ -41,7 +41,7 @@ struct Config {
     int checkboxes = 0;  // selection checkboxes: 0 none, 1 on the row under the mouse and the selected ones, 2 always
     int hotCount = 10;  // folders in Recents (0: no section)
     std::wstring globalKey = L"Win+J";
-    bool colDate = true, colSize = true;
+    std::vector<int> cols = {ColDate, ColSize};  // [columns] show: ColKinds, left to right
     std::vector<KeyBind> keys;
     std::vector<FileColorRule> fileColors;  // [file_colors]
     struct Custom {
@@ -332,7 +332,9 @@ void WriteDefaultConfig() {
         "# hover: on the row under the mouse and on the selected ones.\n"
         "checkboxes = no\n"
         "\n[columns]\n"
-        "# Visible columns besides the name: modified, size\n"
+        "# Columns besides the name, left to right: modified, dimensions, duration, attributes, items, size\n"
+        "# dimensions: of images and videos. duration: of songs and videos. items: how many a folder has.\n"
+        "# attributes: R read-only, H hidden, S system, A archive, C compressed, E encrypted, L link.\n"
         "show = modified, size\n"
         "modified_width = 118\n"
         "size_width = 72\n"
@@ -378,8 +380,7 @@ void LoadConfig() {
     kSideW = 208;
     g_previewW = kPreviewDefaultW;
     g_foldersFirst = 2;
-    kDateW = 118;
-    kSizeW = 72;
+    for (int k = 0; k < ColKinds; ++k) g_colW[k] = kColDefs[k].def;
     for (const CmdDef& c : kCommands) AddBindings(c.cmd, c.defaults);
 
     std::wstring f = ConfigFile();
@@ -450,13 +451,16 @@ void LoadConfig() {
             }
         } else if (section == L"columns") {
             if (key == L"show") {
-                g_cfg.colDate = g_cfg.colSize = false;
-                for (const std::wstring& c : SplitList(Lower(val))) {
-                    if (c == L"modified") g_cfg.colDate = true;
-                    if (c == L"size") g_cfg.colSize = true;
-                }
-            } else if (key == L"modified_width") kDateW = std::clamp(static_cast<float>(_wtof(val.c_str())), kDateMin, kDateMax);
-            else if (key == L"size_width") kSizeW = std::clamp(static_cast<float>(_wtof(val.c_str())), kSizeMin, kSizeMax);
+                g_cfg.cols.clear();
+                for (const std::wstring& c : SplitList(Lower(val)))
+                    for (int k = 0; k < ColKinds; ++k)
+                        if (c == kColDefs[k].key && std::find(g_cfg.cols.begin(), g_cfg.cols.end(), k) == g_cfg.cols.end())
+                            g_cfg.cols.push_back(k);
+            } else {
+                for (int k = 0; k < ColKinds; ++k)
+                    if (key == std::wstring(kColDefs[k].key) + L"_width")
+                        g_colW[k] = std::clamp(static_cast<float>(_wtof(val.c_str())), kColDefs[k].min, kColDefs[k].max);
+            }
         } else if (section == L"colors") {
             for (const ColorDef& c : kColors)
                 if (key == c.name) {

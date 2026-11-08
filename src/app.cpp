@@ -67,8 +67,17 @@ float g_previewW = kPreviewDefaultW;  // configurable
 bool g_pvDrag = false;  // dragging the preview's left edge
 float g_pvDragX = 0, g_pvDragW = 0;
 constexpr float kSideRow = 25.f;
-float kDateW = 118.f, kSizeW = 72.f;  // configurable (and draggable from the header)
-constexpr float kDateMin = 64.f, kDateMax = 400.f, kSizeMin = 48.f, kSizeMax = 300.f;
+// The columns besides the name ([columns] show picks them and their order). Widths are configurable, and
+// draggable from the header. The enum's order is where Settings puts a column it turns on.
+enum ColKind { ColDate, ColDims, ColDur, ColAttrs, ColItems, ColSize, ColKinds };
+struct ColDef {
+    const wchar_t *key, *label;
+    float def, min, max;
+};
+const ColDef kColDefs[ColKinds] = {
+    {L"modified", L"Modified", 118, 64, 400}, {L"dimensions", L"Dimensions", 96, 56, 300}, {L"duration", L"Duration", 72, 48, 300},
+    {L"attributes", L"Attributes", 76, 40, 300}, {L"items", L"Items", 60, 40, 300},     {L"size", L"Size", 72, 48, 300}};
+float g_colW[ColKinds] = {118, 96, 72, 76, 60, 72};
 constexpr float kPad = 12.f, kTabMaxW = 190.f, kTabMinW = 70.f, kTabPinMaxW = 112.f;
 constexpr float kIcon = 16.f;
 
@@ -2841,25 +2850,41 @@ void DrawSidebar(float H) {
 }
 
 // --- column header and list
-int g_colDrag = 0, g_colDragPane = 0;  // column being dragged (1 = date, 2 = size)
+#include "columns.inl"
+int g_colDrag = 0, g_colDragPane = 0;  // column being dragged: its ColKind + 1 (0: none)
 float g_colDragX = 0, g_colDragW = 0;
 struct Columns {
-    bool showSize, showDate;
-    float L, R, checkL, nameL, nameR, dateL, sizeL, right;
+    float L, R, checkL, nameL, nameR, right;
+    int n = 0;  // the extra columns that fit, left to right
+    int kind[ColKinds];
+    float l[ColKinds], r[ColKinds];
 };
 Columns Cols(int pane) {
     Columns c;
     const PaneX g = PaneGeo(pane);
     c.L = g.L;
     c.R = g.R;
-    c.showSize = g_cfg.colSize && g.R - g.L >= kSizeW + 308;
-    c.showDate = g_cfg.colDate && g.R - g.L >= kSizeW + kDateW + 350;
     c.right = g.R - kPad - 6;
-    c.sizeL = c.right - kSizeW;
-    c.dateL = (c.showSize ? c.sizeL - 18 : c.right) - kDateW;
     c.checkL = g.L + kPad;
     c.nameL = g.L + kPad + (g_cfg.checkboxes ? kCheckW : 0.f);  // with checkboxes, everything moves right to make room
-    c.nameR = c.showDate ? c.dateL - 18 : (c.showSize ? c.sizeL - 18 : c.right);
+    // laid out from the right edge: on a narrow pane, the leftmost ones give way first and the name keeps ~290
+    int ks[ColKinds], m = 0;
+    float x = c.right, used = 0, ls[ColKinds];
+    for (size_t i = g_cfg.cols.size(); i-- > 0 && m < ColKinds;) {
+        const int k = g_cfg.cols[i];
+        used += g_colW[k] + 18;
+        if (g.R - g.L < used + 290) break;
+        ks[m] = k;
+        ls[m++] = x - g_colW[k];
+        x -= g_colW[k] + 18;
+    }
+    c.n = m;
+    for (int j = 0; j < m; ++j) {
+        c.kind[j] = ks[m - 1 - j];
+        c.l[j] = ls[m - 1 - j];
+        c.r[j] = c.l[j] + g_colW[c.kind[j]];
+    }
+    c.nameR = m ? c.l[0] - 18 : c.right;
     return c;
 }
 
@@ -2991,47 +3016,37 @@ void DrawHeader(int pane) {
             g_hits.push_back({fb, HitKind::FoldBtn, pane});
         }
     }
-    struct Col {
-        const wchar_t* label;
-        SortBy by;
-        float l, r;
-        bool right;
-        bool show;
-    } cols[] = {{L"Name", SortBy::Name, c.nameL, c.nameR, false, true},
-                {IsBin(PT(pane).path) ? L"Deleted" : L"Modified", SortBy::Date, c.dateL, c.dateL + kDateW, true, c.showDate},
-                {L"Size", SortBy::Size, c.sizeL, c.right, true, c.showSize}};
-    int i = 0;
-    for (const Col& col : cols) {
-        if (col.show) {
-            // "Name" starts after the view button
-            D2D1_RECT_F r = D2D1::RectF(col.right ? col.l - 6 : col.l + kChev + 26, y0 + 3, col.r + 6, y1 - 4);
-            bool active = hasSort && by == col.by;
-            int hid = pane * 3 + i;
-            if (IsHover(HitKind::Header, hid)) Round(r, 4, 0xFFFFFF, 0.05f);
-            Color(active ? cText : cDim);
-            float tl = col.l + (col.right ? 0 : kChev + 28), tr = col.r;
-            if (active) {
-                wchar_t g = sortAsc ? gSortUp : gSortDown;
-                float w = MeasureW(col.label, g_fmtHeader.Get());
-                // right next to the title, even if the column is wide
-                if (col.right) Glyph(g, g_fmtIconSm.Get(), tr - w - 18, y0, tr - w - 4, y1);
-                else Glyph(g, g_fmtIconSm.Get(), tl + w + 4, y0, tl + w + 18, y1);
-            }
-            Text(col.label, wcslen(col.label), col.right ? g_fmtRight.Get() : g_fmtHeader.Get(), tl, y0, tr, y1);
-            g_hits.push_back({r, HitKind::Header, hid});
+    // sort: 0 name, 1 date, 2 size (the Header hit is pane * 3 + sort); -1: the column doesn't sort
+    auto title = [&](const std::wstring& label, int sort, float l, float rt, bool right) {
+        // "Name" starts after the view button
+        D2D1_RECT_F r = D2D1::RectF(right ? l - 6 : l + kChev + 26, y0 + 3, rt + 6, y1 - 4);
+        const SortBy sb = static_cast<SortBy>(std::max(sort, 0));
+        const bool active = sort >= 0 && hasSort && by == sb;
+        const int hid = pane * 3 + sort;
+        if (sort >= 0 && IsHover(HitKind::Header, hid)) Round(r, 4, 0xFFFFFF, 0.05f);
+        Color(active ? cText : cDim);
+        float tl = l + (right ? 0 : kChev + 28), tr = rt;
+        if (active) {
+            wchar_t g = sortAsc ? gSortUp : gSortDown;
+            float w = MeasureW(label, g_fmtHeader.Get());
+            // right next to the title, even if the column is wide
+            if (right) Glyph(g, g_fmtIconSm.Get(), tr - w - 18, y0, tr - w - 4, y1);
+            else Glyph(g, g_fmtIconSm.Get(), tl + w + 4, y0, tl + w + 18, y1);
         }
-        ++i;
-    }
-    // edges for changing the width: the line only appears with the mouse over it
-    auto edge = [&](int which, float colL) {
-        const float x = colL - 9;
-        const int id = pane * 2 + which;
-        if (IsHover(HitKind::ColEdge, id) || (g_colDrag == which + 1 && g_colDragPane == pane))
+        Text(label, right ? g_fmtRight.Get() : g_fmtHeader.Get(), tl, y0, tr, y1);
+        if (sort >= 0) g_hits.push_back({r, HitKind::Header, hid});
+    };
+    title(L"Name", 0, c.nameL, c.nameR, false);
+    for (int j = 0; j < c.n; ++j) {
+        const int k = c.kind[j];
+        title(ColLabel(k, pane), k == ColDate ? 1 : k == ColSize ? 2 : -1, c.l[j], c.r[j], true);
+        // its left edge changes the width: the line only appears with the mouse over it
+        const float x = c.l[j] - 9;
+        const int id = pane * ColKinds + k;
+        if (IsHover(HitKind::ColEdge, id) || (g_colDrag == k + 1 && g_colDragPane == pane))
             Fill(D2D1::RectF(x, y0 + 6, x + 1, y1 - 7), cDim);
         g_hits.push_back({D2D1::RectF(x - 5, y0, x + 6, y1 - 1), HitKind::ColEdge, id});
-    };
-    if (c.showDate) edge(0, c.dateL);
-    if (c.showSize) edge(1, c.sizeL);
+    }
 }
 
 void DrawBox(int pane, float listTop, float listBot);  // boxselect.inl
@@ -3170,7 +3185,6 @@ void DrawList(int pane, float H) {
         const bool flat = FlatView(t);
         const int hoverHeader = g_hoverHeader;
         const std::wstring filterPat = ParseFilter(t.filter).fuzzy;  // only the words light up in the names
-        wchar_t buf[64];
         const Geo geo = GeoFor(t);
         int first = std::max(0, static_cast<int>(t.scroll / kRow));
         if (geo.grid) {
@@ -3314,26 +3328,12 @@ void DrawList(int pane, float H) {
                     part(s.substr(end), selected && focused ? 0x9FB3D9 : cFaint);
                 }
             }
-            Color(selected && focused ? 0xC6D4EE : cDim, a);
-            if (c.showDate && e.mtime) {
-                FormatDate(e.mtime, buf, 64);
-                Text(buf, wcslen(buf), g_fmtRight.Get(), c.dateL, y, c.dateL + kDateW, y + kRow);
-            }
-            if (c.showSize && !e.isDir()) {
-                FormatSize(e.size, buf, 64);
-                Text(buf, wcslen(buf), g_fmtRight.Get(), c.sizeL, y, c.right, y + kRow);
-            } else if (c.showSize && !drives && g_dsAny) {
-                DirSize ds;
-                if (DirSizeOf(Key(Normalize(full)), ds)) {
-                    std::wstring s;
-                    if (ds.done || ds.bytes) {
-                        FormatSize(ds.bytes, buf, 64);
-                        s = buf;
-                    }
-                    if (!ds.done) s += L"…";
-                    if (!ds.done) Color(cFaint, a);
-                    Text(s, g_fmtRight.Get(), c.sizeL, y, c.right, y + kRow);
-                }
+            for (int j = 0; j < c.n; ++j) {
+                bool faint = false;
+                const std::wstring s = CellText(c.kind[j], e, full, drives, faint);
+                if (s.empty()) continue;
+                Color(faint ? cFaint : selected && focused ? 0xC6D4EE : cDim, a);
+                Text(s, g_fmtRight.Get(), c.l[j], y, c.r[j], y + kRow);
             }
         }
         // thin scrollbar, only when needed
@@ -4466,27 +4466,30 @@ bool g_divDrag = false;  // dragging the split view divider
 bool g_eatSysChar = false;  // the Alt key combo was already used: its WM_SYSCHAR must not beep
 int g_tabWheelAcc = 0;      // Ctrl+wheel on high-resolution wheels: accumulates until a full step
 
-// New width of a column (1 = date, 2 = size), always leaving room for the name.
-void SetColWidth(int which, float w, int pane) {
+// New width of a column (a ColKind), always leaving room for the name and the other columns: as wide as it can be
+// and still fit, by Cols()' own rule.
+void SetColWidth(int kind, float w, int pane) {
     const PaneX g = PaneGeo(pane);
-    const float room = g.R - g.L - 350;
-    if (which == 1) kDateW = std::clamp(w, kDateMin, std::max(kDateMin, std::min(kDateMax, room - kSizeW)));
-    else kSizeW = std::clamp(w, kSizeMin, std::max(kSizeMin, std::min(kSizeMax, room - (Cols(pane).showDate ? kDateW : -42.f))));
+    const Columns c = Cols(pane);
+    float others = 0;
+    for (int j = 0; j < c.n; ++j)
+        if (c.kind[j] != kind) others += g_colW[c.kind[j]] + 18;
+    const ColDef& d = kColDefs[kind];
+    g_colW[kind] = std::clamp(w, d.min, std::max(d.min, std::min(d.max, g.R - g.L - 308 - others)));
     LayoutRename();
     Invalidate();
 }
 
-void SaveColWidth(int which) {
-    ConfigSetValue(L"columns", which == 1 ? L"modified_width" : L"size_width",
-                   std::to_wstring(std::lround(which == 1 ? kDateW : kSizeW)));
+void SaveColWidth(int kind) {
+    ConfigSetValue(L"columns", std::wstring(kColDefs[kind].key) + L"_width", std::to_wstring(std::lround(g_colW[kind])));
     RefreshConfigSig();
 }
 
 void ColDragEnd() {
     if (!g_colDrag) return;
-    const int which = g_colDrag;
+    const int kind = g_colDrag - 1;
     g_colDrag = 0;
-    SaveColWidth(which);
+    SaveColWidth(kind);
     Invalidate();
 }
 
@@ -4511,27 +4514,21 @@ void PreviewDragEnd() {
 }
 
 // Double click on the edge: exactly the width needed for the folder's contents.
-void FitColumn(int which, int pane) {
+void FitColumn(int kind, int pane) {
     Tab& t = PT(pane);
-    float w = MeasureW(which == 1 ? L"Modified" : L"Size", g_fmtRight.Get()) + 16;
-    wchar_t buf[64];
+    float w = MeasureW(ColLabel(kind, pane), g_fmtRight.Get()) + 16;
     const int n = std::min(RowCount(t), 3000);
     for (int i = 0; i < n; ++i) {
         if (IsHeader(t, i)) continue;
         const Entry& e = EntryAt(t, i);
-        buf[0] = 0;
-        if (which == 1) {
-            if (e.mtime) FormatDate(e.mtime, buf, 64);
-        } else if (!e.isDir()) {
-            FormatSize(e.size, buf, 64);
-        } else if (g_dsAny) {
-            DirSize ds;
-            if (DirSizeOf(Key(RowPath(t, i)), ds) && (ds.done || ds.bytes)) FormatSize(ds.bytes, buf, 64);
-        }
-        if (buf[0]) w = std::max(w, MeasureW(buf, g_fmtRight.Get()) + 4);
+        const bool drives = t.rows[i].l->path.empty();
+        bool faint = false;
+        // what is not known yet is not asked for here: it would queue thousands of files at once
+        const std::wstring s = CellText(kind, e, drives ? RowName(t, i) + L"\\" : RowPath(t, i), drives, faint, false);
+        if (!s.empty()) w = std::max(w, MeasureW(s, g_fmtRight.Get()) + 4);
     }
-    SetColWidth(which, std::ceil(w), pane);
-    SaveColWidth(which);
+    SetColWidth(kind, std::ceil(w), pane);
+    SaveColWidth(kind);
 }
 
 void OnClick(float x, float y, bool middle) {
@@ -4604,10 +4601,10 @@ void OnClick(float x, float y, bool middle) {
         }
         case HitKind::ColEdge:
             if (!middle) {
-                g_colDrag = h.idx % 2 + 1;
-                g_colDragPane = h.idx / 2;
+                g_colDrag = h.idx % ColKinds + 1;
+                g_colDragPane = h.idx / ColKinds;
                 g_colDragX = x;
-                g_colDragW = g_colDrag == 1 ? kDateW : kSizeW;
+                g_colDragW = g_colW[g_colDrag - 1];
                 SetCapture(g_hwnd);
                 Invalidate();
             }
@@ -5025,6 +5022,10 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             g_thumbDirty = false;
             Invalidate();
             return 0;
+        case WM_APP_META:
+            g_metaDirty = false;
+            Invalidate();
+            return 0;
         case WM_APP_IDXMSG: {
             std::unique_ptr<std::wstring> m(reinterpret_cast<std::wstring*>(lp));
             S.message = *m;
@@ -5295,7 +5296,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             Hit dh = HitAt(DipX(lp), DipY(lp));
             if (dh.kind == HitKind::FolderNote) return 0;  // the first click already did it
             if (dh.kind == HitKind::ColEdge) {
-                FitColumn(dh.idx % 2 + 1, dh.idx / 2);
+                FitColumn(dh.idx % ColKinds, dh.idx / ColKinds);
                 return 0;
             }
             if (dh.kind == HitKind::PreviewEdge) {
@@ -5396,7 +5397,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             }
             if (g_colDrag) {
                 // columns are anchored to the right: the left edge follows the mouse
-                SetColWidth(g_colDrag, g_colDragW + g_colDragX - x, g_colDragPane);
+                SetColWidth(g_colDrag - 1, g_colDragW + g_colDragX - x, g_colDragPane);
                 return 0;
             }
             if (g_pvDrag) {
