@@ -2,7 +2,7 @@
 
 Every planned feature, one line per GitHub issue. A line is checked and struck through when its PR is merged.
 
-**25 of 86 done.**
+**26 of 87 done.**
 
 ## Navigation
 
@@ -149,3 +149,9 @@ Every planned feature, one line per GitHub issue. A line is checked and struck t
 
 - [x] ~~[#82](https://github.com/SynrgStudio/jolt/issues/82) Website with the features explained (filter terms, custom commands, shortcuts)~~
 - [ ] [#86](https://github.com/SynrgStudio/jolt/issues/86) Docs site: GIFs for the visual features (menu editor, views, rename panel, split, preview)
+
+## Seek: search for AI agents
+
+1 of 1 done. Seek lives in its own repository, [SynrgStudio/seek](https://github.com/SynrgStudio/seek), with its own issues.
+
+- [x] ~~[#115](https://github.com/SynrgStudio/jolt/issues/115) Seek: fast file search for AI agents (MCP server)~~
