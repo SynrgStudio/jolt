@@ -84,7 +84,7 @@ constexpr float kIcon = 16.f;
 // Colors (configurable in config.txt; these are the defaults)
 UINT32 cBg = 0x1A1A1E, cTabBar = 0x0F0F12, cTop = 0x202024, cSide = 0x151518, cBorder = 0x2B2B31, cText = 0xE9E9EE,
        cDim = 0x8C8C97, cFaint = 0x4C4C55, cAccent = 0x4F8CF7, cSel = 0x2C4C86, cError = 0xF07178, cDisk = 0x3B8EEA,
-       cDiskFull = 0xE5484D;
+       cDiskFull = 0xE5484D, cRecent = 0x6BCB77;
 
 constexpr wchar_t gBack = 0xE72B, gFwd = 0xE72A, gUp = 0xE74A, gAdd = 0xE710, gClose = 0xE8BB, gChevron = 0xE76C,
                   gPc = 0xE977, gStar = 0xE734, gSortUp = 0xE96D, gSortDown = 0xE96E, gFolder = 0xE8B7,
@@ -2405,6 +2405,27 @@ void DrawIcon(const std::wstring& fullPath, const Entry* e, const wchar_t* name,
     }
 }
 
+// --- the mark on files changed lately ([general] recent_mark): a thin bar at the row's left edge (a dot in the grid's
+// corner), strongest for what changed just now and fading toward the start of the window.
+// From when it counts (FILETIME, UTC): local midnight, or N hours ago; 0: no mark.
+int64_t RecentSince(int64_t now) {
+    if (g_cfg.recentMark < 0) return 0;
+    if (g_cfg.recentMark > 0) return now - g_cfg.recentMark * 36000000000ll;
+    SYSTEMTIME local, utc;
+    GetLocalTime(&local);
+    local.wHour = local.wMinute = local.wSecond = local.wMilliseconds = 0;
+    FILETIME f;
+    if (!TzSpecificLocalTimeToSystemTime(nullptr, &local, &utc) || !SystemTimeToFileTime(&utc, &f)) return 0;
+    return (static_cast<int64_t>(f.dwHighDateTime) << 32) | f.dwLowDateTime;
+}
+
+// How strong the mark is: 0, none; from 1 (just now) down to 0.35 (at the start of the window).
+float RecentAlpha(int64_t mtime, int64_t since, int64_t now) {
+    if (!since || mtime < since) return 0;
+    const double frac = now > since ? std::clamp(static_cast<double>(now - mtime) / static_cast<double>(now - since), 0.0, 1.0) : 0;
+    return static_cast<float>(1 - 0.65 * frac);
+}
+
 void FormatDate(int64_t ft, wchar_t* buf, size_t n) {
     FILETIME f{static_cast<DWORD>(ft), static_cast<DWORD>(static_cast<uint64_t>(ft) >> 32)};
     SYSTEMTIME u, l;
@@ -3228,6 +3249,9 @@ void DrawList(int pane, float H) {
         const bool flat = FlatView(t);
         const int hoverHeader = g_hoverHeader;
         const std::wstring filterPat = ParseFilter(t.filter).fuzzy;  // only the words light up in the names
+        FILETIME nowFt;
+        GetSystemTimeAsFileTime(&nowFt);
+        const int64_t now = (static_cast<int64_t>(nowFt.dwHighDateTime) << 32) | nowFt.dwLowDateTime, since = RecentSince(now);
         const Geo geo = GeoFor(t);
         int first = std::max(0, static_cast<int>(t.scroll / kRow));
         if (geo.grid) {
@@ -3285,12 +3309,21 @@ void DrawList(int pane, float H) {
                 g_rt->DrawRoundedRectangle(D2D1::RoundedRect(D2D1::RectF(rr.left + 0.5f, rr.top + 0.5f, rr.right - 0.5f, rr.bottom - 0.5f), 5, 5), g_brush.Get(), 1.5f);
             }
             const bool showCheck = g_cfg.checkboxes == 2 || (g_cfg.checkboxes == 1 && (hover || selected));
+            const float recent = e.isDir() || drives ? 0.f : RecentAlpha(e.mtime, since, now);
             if (geo.grid) {
                 DrawGridCell(e, name, full, cell, y, geo, a, filterPat, row.closeness);
+                if (recent > 0 && !row.closeness) {  // the corner the closeness percentage would use; over the picture
+                    const D2D1_POINT_2F p = D2D1::Point2F(cell.right - 13, y + 13);
+                    Color(0x000000, 0.45f * a);
+                    g_rt->FillEllipse(D2D1::Ellipse(p, 5.5f, 5.5f), g_brush.Get());
+                    Color(cRecent, recent * a);
+                    g_rt->FillEllipse(D2D1::Ellipse(p, 3.5f, 3.5f), g_brush.Get());
+                }
                 if (showCheck) DrawRowCheck(std::to_wstring(pane) + Key(full), D2D1::RectF(cell.left + 6, y + 6, cell.left + 28, y + 28), selected, true, false);
                 continue;
             }
             if (showCheck) DrawRowCheck(std::to_wstring(pane) + Key(full), D2D1::RectF(c.checkL - 2, y, c.checkL + kCheckW - 4, y + kRow), selected, false, selected && focused);
+            if (recent > 0) Round(D2D1::RectF(rr.left + 1, y + 6, rr.left + 3.5f, y + kRow - 6), 1.25f, cRecent, recent * a);
             const float indent = flat ? 0.f : row.depth * kIndent;
             const float chevX = c.nameL + indent;
             // tree guides: one faint line per level
