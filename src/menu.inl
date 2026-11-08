@@ -1202,7 +1202,7 @@ void OpenShellMenu(POINT screenPt, int row) {
                 }
             }
             ShellInvoke(*g_shellMenu, id, screenPt);
-            if (T().recursive) SetTimer(g_hwnd, kTimerRecCheck, 800, nullptr);  // it may have changed what the results show
+            if (T().recursive) RecCheckSoon();  // it may have changed what the results show
         },
         [](HMENU h, int pos, std::vector<MenuItem>& out) {
             if (!g_shellMenu) return;

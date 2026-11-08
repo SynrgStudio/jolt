@@ -230,7 +230,7 @@ void StartDrag() {
     DWORD effect = DROPEFFECT_NONE;
     HRESULT hr = SHDoDragDrop(g_hwnd, pdo.Get(), nullptr, DROPEFFECT_COPY | DROPEFFECT_MOVE | DROPEFFECT_LINK, &effect);
     Log(L"SHDoDragDrop hr=0x%08X effect=%u", static_cast<unsigned>(hr), effect);
-    if (T().recursive) SetTimer(g_hwnd, kTimerRecCheck, 800, nullptr);  // dropped in another app, it may have moved them
+    if (T().recursive) RecCheckSoon();  // dropped in another app, it may have moved them
     RunPendingDrop();
 }
 

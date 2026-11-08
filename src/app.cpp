@@ -84,6 +84,14 @@ constexpr UINT_PTR kTimerRevalidate = 1, kTimerPrefetch = 2, kTimerTabSlide = 12
 constexpr UINT_PTR kTimerRecCheck = 15;  // a Windows command or a drag may have changed what the results show
 
 HWND g_hwnd = nullptr;
+
+// Windows may finish a drop or a menu command in the background, a while later: the results on screen are read
+// again a few times (0.8 s, then 2 s and 5 s after that) instead of once.
+int g_recChecksLeft = 0;
+void RecCheckSoon() {
+    g_recChecksLeft = 3;
+    SetTimer(g_hwnd, kTimerRecCheck, 800, nullptr);
+}
 HWND g_edit = nullptr;
 // g_dpi is the DPI used for drawing: the monitor's times the interface zoom. Since the whole layout
 // is in DIPs, changing it scales the entire app. Zoom is in font pixels over 12 so that text
@@ -4688,7 +4696,10 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case WM_TIMER:
             KillTimer(hwnd, wp);
             if (wp == kTimerRevalidate) RevalidateVisible();
-            if (wp == kTimerRecCheck) RecRevalidateShown();
+            if (wp == kTimerRecCheck) {
+                RecRevalidateShown();
+                if (--g_recChecksLeft > 0) SetTimer(hwnd, kTimerRecCheck, g_recChecksLeft == 2 ? 2000 : 5000, nullptr);
+            }
             if (wp == kTimerPreview) PreviewLoad();
             if (wp == kTimerTest) {
                 if (g_testBlocking) SetTimer(hwnd, kTimerTest, 30, nullptr);  // a step is still waiting

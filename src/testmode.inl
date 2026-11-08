@@ -457,7 +457,7 @@ void TestDragOut(const std::wstring& arg) {
     dt->DragOver(keys, pt, &eff);
     dt->Drop(d.Get(), keys, pt, &eff);
     TestLog(L"dragged out to " + a + L": " + EffectText(eff));
-    if (T().recursive) SetTimer(g_hwnd, kTimerRecCheck, 800, nullptr);  // as after a real drag (StartDrag)
+    if (T().recursive) RecCheckSoon();  // as after a real drag (StartDrag)
 }
 
 void TestActivate(bool on) {
