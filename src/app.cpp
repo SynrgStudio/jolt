@@ -546,6 +546,7 @@ struct Tab {
     int sel = 0;                 // cursor
     int anchor = 0;              // start of the Shift range
     std::vector<uint8_t> selMask;  // parallel to rows
+    bool implicitSel = false;      // the selection is only the cursor the folder opened with: nobody chose it
     std::wstring filter;           // fuzzy filter text ("" = no filter)
     int nearRows = 0;              // how many of the rows are only close to it
     std::vector<Row> rows;         // visible rows: flattened tree and, with a filter, sorted by score
@@ -605,7 +606,7 @@ bool g_ignoreClipUpdate = false;
 int g_dropRow = -1, g_dropPane = 0, g_dropSide = -1, g_dropTab = -1;  // target highlighted during a drag
 
 // Clickable areas, recomputed on every draw.
-enum class HitKind { None, Tab, TabClose, TabNew, SideToggle, AppMenu, Back, Fwd, Up, Crumb, CrumbChev, PathEmpty, Side, Header, Divider, ViewBtn, FoldBtn, ColEdge, PreviewEdge, FolderNote };
+enum class HitKind { None, Tab, TabClose, TabNew, SideToggle, AppMenu, Back, Fwd, Up, Crumb, CrumbChev, PathEmpty, Side, Header, Divider, ViewBtn, FoldBtn, ColEdge, PreviewEdge, FolderNote, HeadCheck };
 struct Hit {
     D2D1_RECT_F r;
     HitKind kind;
@@ -1171,6 +1172,7 @@ void SelectToggle(Tab& t, int i) {
 // With a filter, the close names below the real matches stay out: Ctrl+A and then Del must not take a file
 // that only looks like what was typed. If there is nothing but close names, those are what there is.
 void SelectAll(Tab& t) {
+    t.implicitSel = false;
     const bool onlyReal = t.nearRows > 0 && t.nearRows < RowCount(t);
     for (int i = 0; i < static_cast<int>(t.selMask.size()); ++i) t.selMask[i] = !IsHeader(t, i) && !(onlyReal && t.rows[i].closeness);
 }
@@ -1286,6 +1288,7 @@ void Rebuild(Tab& t, const Place* keep, const std::wstring& prefer) {
     if (n > 0) t.sel = SkipHeader(t, t.sel, 1);
     t.anchor = t.sel;
     if (n > 0) t.selMask[t.sel] = 1;
+    if (!keep) t.implicitSel = true;
     if (keep && keep->sel.size() > 1) {
         std::unordered_set<std::wstring> ks(keep->sel.begin(), keep->sel.end());
         for (int i = 0; i < n; ++i)
@@ -1755,6 +1758,7 @@ void MoveCursor(int i, bool extend = false, bool toggle = false) {
     int n = Count();
     if (n == 0) return;
     i = SkipHeader(t, i, i >= t.sel ? 1 : -1);
+    t.implicitSel = false;
     if (extend)
         SelectRange(t, i);
     else if (toggle)
@@ -1778,7 +1782,7 @@ void Prefetch() {
 }
 
 // --- tree: expanding folders inside the list
-constexpr float kChev = 14.f, kIndent = 18.f;
+constexpr float kChev = 14.f, kIndent = 18.f, kCheckW = 22.f;  // kCheckW: the selection checkbox, left of everything
 bool IsExpanded(const Tab& t, int row) {
     return row >= 0 && row < RowCount(t) && !FlatView(t) && EntryAt(t, row).isDir() && t.expanded.count(RowKey(t, row));
 }
@@ -2840,7 +2844,7 @@ int g_colDrag = 0, g_colDragPane = 0;  // column being dragged (1 = date, 2 = si
 float g_colDragX = 0, g_colDragW = 0;
 struct Columns {
     bool showSize, showDate;
-    float L, R, nameL, nameR, dateL, sizeL, right;
+    float L, R, checkL, nameL, nameR, dateL, sizeL, right;
 };
 Columns Cols(int pane) {
     Columns c;
@@ -2852,7 +2856,8 @@ Columns Cols(int pane) {
     c.right = g.R - kPad - 6;
     c.sizeL = c.right - kSizeW;
     c.dateL = (c.showSize ? c.sizeL - 18 : c.right) - kDateW;
-    c.nameL = g.L + kPad;
+    c.checkL = g.L + kPad;
+    c.nameL = g.L + kPad + (g_cfg.checkboxes ? kCheckW : 0.f);  // with checkboxes, everything moves right to make room
     c.nameR = c.showDate ? c.dateL - 18 : (c.showSize ? c.sizeL - 18 : c.right);
     return c;
 }
@@ -2870,6 +2875,23 @@ void DrawHeader(int pane) {
     SortBy by = SortBy::Name;
     bool sortAsc = true;
     const bool hasSort = ViewPrimarySort(view, by, sortAsc);
+    if (g_cfg.checkboxes) {  // select all, or none: checked, empty, or a dash when only some are
+        const Tab& pt = PT(pane);
+        const bool onlyReal = pt.nearRows > 0 && pt.nearRows < RowCount(pt);
+        int can = 0, on = 0;
+        for (int i = 0; i < RowCount(pt); ++i) {
+            if (IsHeader(pt, i) || (onlyReal && pt.rows[i].closeness)) continue;
+            ++can;
+            on += IsSel(pt, i);
+        }
+        const D2D1_RECT_F cb = D2D1::RectF(c.checkL - 2, y0 + 3, c.checkL + kCheckW - 4, y1 - 4);
+        const bool hov = IsHover(HitKind::HeadCheck, pane);
+        if (hov) Round(cb, 5, 0xFFFFFF, 0.08f);
+        Color(on ? cAccent : hov ? cText : cDim);
+        if (on && on < can) Glyph(0xE739, g_fmtIcon.Get(), cb.left, cb.top, cb.right, cb.bottom);  // the dash glyph has no box of its own
+        Glyph(!on ? 0xE739 : on >= can ? 0xE73A : 0xE73C, g_fmtIcon.Get(), cb.left, cb.top, cb.right, cb.bottom);
+        g_hits.push_back({cb, HitKind::HeadCheck, pane});
+    }
     // view button (filter): highlighted if the folder has its own (or inherited) view
     {
         const bool own = &view != &g_viewAll;
@@ -3046,6 +3068,13 @@ void DrawGridCell(const Entry& e, const wchar_t* name, const std::wstring& full,
     }
 }
 
+// A selection checkbox. Over a thumbnail it gets a dark backing, so it reads on any picture.
+void DrawRowCheck(const D2D1_RECT_F& r, bool on, bool backed, bool onSel) {
+    if (backed) Round(r, 5, 0x000000, 0.55f);
+    Color(on ? (onSel ? 0xFFFFFF : cAccent) : (onSel ? 0xC6D4EE : cDim));
+    Glyph(on ? 0xE73A : 0xE739, g_fmtIcon.Get(), r.left, r.top, r.right, r.bottom);
+}
+
 void DrawList(int pane, float H) {
     const float listTop = ListTop(), listBot = H - kStatus;
     Tab& t = PT(pane);
@@ -3125,10 +3154,13 @@ void DrawList(int pane, float H) {
                 Color(cAccent, 0.9f);
                 g_rt->DrawRoundedRectangle(D2D1::RoundedRect(D2D1::RectF(rr.left + 0.5f, rr.top + 0.5f, rr.right - 0.5f, rr.bottom - 0.5f), 5, 5), g_brush.Get(), 1.5f);
             }
+            const bool showCheck = g_cfg.checkboxes == 2 || (g_cfg.checkboxes == 1 && (hover || selected));
             if (geo.grid) {
                 DrawGridCell(e, name, full, cell, y, geo, a, filterPat, row.closeness);
+                if (showCheck) DrawRowCheck(D2D1::RectF(cell.left + 6, y + 6, cell.left + 28, y + 28), selected, true, false);
                 continue;
             }
+            if (showCheck) DrawRowCheck(D2D1::RectF(c.checkL - 2, y, c.checkL + kCheckW - 4, y + kRow), selected, false, selected && focused);
             const float indent = flat ? 0.f : row.depth * kIndent;
             const float chevX = c.nameL + indent;
             // tree guides: one faint line per level
@@ -4096,6 +4128,18 @@ void RunCommand(Cmd cmd) {
         }
         case Cmd::Palette: PaletteOpen(0); break;
         case Cmd::Settings: SettingsOpen(); break;
+        case Cmd::Checkboxes: {
+            g_cfg.checkboxes = (g_cfg.checkboxes + 1) % 3;
+            const wchar_t* const v[] = {L"no", L"hover", L"always"};
+            ConfigSetValue(L"general", L"checkboxes", v[g_cfg.checkboxes]);
+            RefreshConfigSig();  // written and applied already
+            S.message = g_cfg.checkboxes == 0 ? L"Checkboxes: off"
+                        : g_cfg.checkboxes == 1 ? L"Checkboxes: on the row under the mouse and the selected ones"
+                                                : L"Checkboxes: on every row";
+            LayoutRename();
+            Invalidate();
+            break;
+        }
         case Cmd::GoTo: PaletteOpen(1); break;
         case Cmd::SearchSubfolders:
             if (t.recursive) StopRecursive(t, true);
@@ -4288,6 +4332,38 @@ bool OnChevron(int row, float x) {
     return x >= cx - 4 && x < cx + kChev + 2;
 }
 
+// Is the point over a row's selection checkbox? In the list it is at the left edge, in the grid at the cell's corner.
+// It counts wherever it would show: with "hover", the mouse is over the row, so it is there.
+bool OnCheckbox(int row, float x, float y) {
+    Tab& t = T();
+    if (!g_cfg.checkboxes || row < 0 || row >= Count() || IsHeader(t, row)) return false;
+    if (GeoFor(t).grid) {
+        const D2D1_RECT_F cell = RowRect(t, row);
+        const float top = ListTop() + cell.top - t.scroll;
+        return x >= cell.left + 2 && x < cell.left + 32 && y >= top + 2 && y < top + 32;
+    }
+    const Columns c = Cols(g_act);
+    return x >= c.checkL - 4 && x < c.checkL + kCheckW - 2;
+}
+
+// A click on a row's checkbox: that row joins or leaves the selection and the rest stays, as with Ctrl+click.
+// The selection a folder opens with (only the cursor) was nobody's choice: the first checkbox replaces it.
+// With Shift, the whole range from the last one is checked.
+void CheckboxToggle(int r) {
+    Tab& t = T();
+    if (KeyDown(VK_SHIFT) && Count() > 0) {
+        const int a = std::clamp(t.anchor, 0, Count() - 1);
+        for (int i = std::min(a, r); i <= std::max(a, r); ++i)
+            if (!IsHeader(t, i)) t.selMask[i] = 1;
+        t.sel = r;
+    } else {
+        if (t.implicitSel && SelCount(t) == 1 && IsSel(t, t.sel) && t.sel != r) t.selMask[t.sel] = 0;
+        SelectToggle(t, r);
+    }
+    t.implicitSel = false;
+    Invalidate();
+}
+
 bool g_divDrag = false;  // dragging the split view divider
 bool g_eatSysChar = false;  // the Alt key combo was already used: its WM_SYSCHAR must not beep
 int g_tabWheelAcc = 0;      // Ctrl+wheel on high-resolution wheels: accumulates until a full step
@@ -4405,6 +4481,20 @@ void OnClick(float x, float y, bool middle) {
                 Navigate(T(), g_sidePaths[h.idx], true);
             return;
         case HitKind::Header: SetSort(static_cast<SortBy>(h.idx % 3)); return;
+        case HitKind::HeadCheck: {  // all of them, or (when all are) none
+            ActivatePane(h.idx);
+            Tab& t = T();
+            const bool onlyReal = t.nearRows > 0 && t.nearRows < Count();
+            bool all = true;
+            for (int i = 0; i < Count() && all; ++i)
+                if (!IsHeader(t, i) && !(onlyReal && t.rows[i].closeness) && !IsSel(t, i)) all = false;
+            if (all) std::fill(t.selMask.begin(), t.selMask.end(), uint8_t{0});
+            else SelectAll(t);
+            t.implicitSel = false;
+            S.message = all ? L"Nothing selected" : Thousands(SelCount(t)) + L" selected";
+            Invalidate();
+            return;
+        }
         case HitKind::FoldBtn: {
             ActivatePane(h.idx);
             Tab& t = T();
@@ -4970,6 +5060,10 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 return 0;
             }
             int r = HitRow(x, y);
+            if (r >= 0 && OnCheckbox(r, x, y)) {  // before the row takes the click: no drag, no box
+                CheckboxToggle(r);
+                return 0;
+            }
             if (r >= 0 && OnChevron(r, x)) {
                 OnClick(x, y, false);
                 return 0;
@@ -5082,6 +5176,10 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             int r = HitRow(DipX(lp), DipY(lp));
             // the second quick click arrives as a double click: on a group title or a chevron it counts
             // as another normal click (collapse and expand instantly, without waiting)
+            if (r >= 0 && OnCheckbox(r, DipX(lp), DipY(lp))) {  // a second quick click on a checkbox: another toggle, not open
+                CheckboxToggle(r);
+                return 0;
+            }
             if (HeaderRowIn(g_act, DipX(lp), DipY(lp)) >= 0 || (r >= 0 && OnChevron(r, DipX(lp)))) {
                 OnClick(DipX(lp), DipY(lp), false);
                 return 0;

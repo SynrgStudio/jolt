@@ -8,6 +8,7 @@ bool OnlyRealRows(const Tab& t) { return t.nearRows > 0 && t.nearRows < RowCount
 bool Selectable(const Tab& t, int i, bool onlyReal) { return !IsHeader(t, i) && !(onlyReal && t.rows[i].closeness); }
 
 void InvertSelection(Tab& t) {
+    t.implicitSel = false;
     const bool onlyReal = OnlyRealRows(t);
     const int n = std::min(RowCount(t), static_cast<int>(t.selMask.size()));
     int on = 0;
@@ -20,6 +21,7 @@ void InvertSelection(Tab& t) {
 
 // Every file with the extension of the highlighted one; on a folder, every folder.
 void SelectSameExtension(Tab& t) {
+    t.implicitSel = false;
     if (t.sel < 0 || t.sel >= RowCount(t) || IsHeader(t, t.sel)) {
         S.message = L"Highlight a file first";
         return;
@@ -133,6 +135,7 @@ void SelPatternApply(int action, bool commit) {
         if (t.selMask[i] && first < 0) first = i;
     }
     if (commit) {
+        t.implicitSel = false;
         if (first >= 0 && !IsSel(t, t.sel)) {  // the cursor goes to the first one taken, so Del and the rest act on what is seen
             t.sel = t.anchor = first;
             EnsureVisible(t);
