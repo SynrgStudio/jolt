@@ -616,7 +616,7 @@ bool g_ignoreClipUpdate = false;
 int g_dropRow = -1, g_dropPane = 0, g_dropSide = -1, g_dropTab = -1;  // target highlighted during a drag
 
 // Clickable areas, recomputed on every draw.
-enum class HitKind { None, Tab, TabClose, TabNew, SideToggle, AppMenu, Back, Fwd, Up, Crumb, CrumbChev, PathEmpty, Side, Header, Divider, ViewBtn, FoldBtn, ColEdge, PreviewEdge, FolderNote, HeadCheck };
+enum class HitKind { None, Tab, TabClose, TabNew, SideToggle, AppMenu, Back, Fwd, Up, Crumb, CrumbChev, PathEmpty, Side, Header, Divider, ViewBtn, FoldBtn, ColEdge, PreviewEdge, FolderNote, HeadCheck, HeadCol };
 struct Hit {
     D2D1_RECT_F r;
     HitKind kind;
@@ -2857,7 +2857,9 @@ struct Columns {
     float L, R, checkL, nameL, nameR, right;
     int n = 0;  // the extra columns that fit, left to right
     int kind[ColKinds];
-    float l[ColKinds], r[ColKinds];
+    float l[ColKinds], r[ColKinds];  // where each one is (clicks go there)
+    float dx[ColKinds];              // and how far from there it is drawn: sliding to its place, or being dragged
+    bool sliding = false;
 };
 Columns Cols(int pane) {
     Columns c;
@@ -2885,6 +2887,12 @@ Columns Cols(int pane) {
         c.r[j] = c.l[j] + g_colW[c.kind[j]];
     }
     c.nameR = m ? c.l[0] - 18 : c.right;
+    for (int j = 0; j < m; ++j) {
+        c.dx[j] = ColSlide(c.kind[j]);
+        c.sliding |= c.dx[j] != 0;
+        if (g_colMove.active && g_colMove.pane == pane && g_colMove.kind == c.kind[j])  // under the mouse, between the ends
+            c.dx[j] = std::clamp(g_colMove.x - g_colMove.grab, c.l[0], c.right - g_colW[c.kind[j]]) - c.l[j];
+    }
     return c;
 }
 
@@ -3016,15 +3024,18 @@ void DrawHeader(int pane) {
             g_hits.push_back({fb, HitKind::FoldBtn, pane});
         }
     }
-    // sort: 0 name, 1 date, 2 size (the Header hit is pane * 3 + sort); -1: the column doesn't sort
-    auto title = [&](const std::wstring& label, int sort, float l, float rt, bool right) {
+    // sort: 0 name, 1 date, 2 size; -1: the column doesn't sort. lifted: the one being dragged.
+    auto title = [&](const std::wstring& label, int sort, float l, float rt, bool right, bool hover, bool lifted) {
         // "Name" starts after the view button
-        D2D1_RECT_F r = D2D1::RectF(right ? l - 6 : l + kChev + 26, y0 + 3, rt + 6, y1 - 4);
-        const SortBy sb = static_cast<SortBy>(std::max(sort, 0));
-        const bool active = sort >= 0 && hasSort && by == sb;
-        const int hid = pane * 3 + sort;
-        if (sort >= 0 && IsHover(HitKind::Header, hid)) Round(r, 4, 0xFFFFFF, 0.05f);
-        Color(active ? cText : cDim);
+        const D2D1_RECT_F r = D2D1::RectF(right ? l - 6 : l + kChev + 26, y0 + 3, rt + 6, y1 - 4);
+        const bool active = sort >= 0 && hasSort && by == static_cast<SortBy>(sort);
+        if (lifted) {
+            Round(r, 4, cBg);  // covers what it passes over
+            Round(r, 4, 0xFFFFFF, 0.09f);
+        } else if (hover) {
+            Round(r, 4, 0xFFFFFF, 0.05f);
+        }
+        Color(active || lifted ? cText : cDim);
         float tl = l + (right ? 0 : kChev + 28), tr = rt;
         if (active) {
             wchar_t g = sortAsc ? gSortUp : gSortDown;
@@ -3034,19 +3045,32 @@ void DrawHeader(int pane) {
             else Glyph(g, g_fmtIconSm.Get(), tl + w + 4, y0, tl + w + 18, y1);
         }
         Text(label, right ? g_fmtRight.Get() : g_fmtHeader.Get(), tl, y0, tr, y1);
-        if (sort >= 0) g_hits.push_back({r, HitKind::Header, hid});
+        return r;
     };
-    title(L"Name", 0, c.nameL, c.nameR, false);
+    g_hits.push_back({title(L"Name", 0, c.nameL, c.nameR, false, IsHover(HitKind::Header, pane * 3), false), HitKind::Header, pane * 3});
+    // The other titles sort on release and can be dragged to another place (HeadCol: pane * ColKinds + kind).
+    // Their hits stay where they end up, even while they slide there.
+    int lifted = -1;
     for (int j = 0; j < c.n; ++j) {
-        const int k = c.kind[j];
-        title(ColLabel(k, pane), k == ColDate ? 1 : k == ColSize ? 2 : -1, c.l[j], c.r[j], true);
+        const int k = c.kind[j], id = pane * ColKinds + k;
+        g_hits.push_back({D2D1::RectF(c.l[j] - 6, y0 + 3, c.r[j] + 6, y1 - 4), HitKind::HeadCol, id});
+        if (g_colMove.active && g_colMove.pane == pane && g_colMove.kind == k) {
+            lifted = j;  // drawn last, over the others
+            continue;
+        }
+        title(ColLabel(k, pane), ColSortOf(k), c.l[j] + c.dx[j], c.r[j] + c.dx[j], true, !g_colMove.active && IsHover(HitKind::HeadCol, id), false);
+        if (g_colMove.active) continue;  // no width edges while one moves
         // its left edge changes the width: the line only appears with the mouse over it
         const float x = c.l[j] - 9;
-        const int id = pane * ColKinds + k;
         if (IsHover(HitKind::ColEdge, id) || (g_colDrag == k + 1 && g_colDragPane == pane))
             Fill(D2D1::RectF(x, y0 + 6, x + 1, y1 - 7), cDim);
         g_hits.push_back({D2D1::RectF(x - 5, y0, x + 6, y1 - 1), HitKind::ColEdge, id});
     }
+    if (lifted >= 0) {
+        const int k = c.kind[lifted];
+        title(ColLabel(k, pane), ColSortOf(k), c.l[lifted] + c.dx[lifted], c.r[lifted] + c.dx[lifted], true, false, true);
+    }
+    if (c.sliding) SetTimer(g_hwnd, kTimerTabSlide, 15, nullptr);
 }
 
 void DrawBox(int pane, float listTop, float listBot);  // boxselect.inl
@@ -3333,7 +3357,7 @@ void DrawList(int pane, float H) {
                 const std::wstring s = CellText(c.kind[j], e, full, drives, faint);
                 if (s.empty()) continue;
                 Color(faint ? cFaint : selected && focused ? 0xC6D4EE : cDim, a);
-                Text(s, g_fmtRight.Get(), c.l[j], y, c.r[j], y + kRow);
+                Text(s, g_fmtRight.Get(), c.l[j] + c.dx[j], y, c.r[j] + c.dx[j], y + kRow);
             }
         }
         // thin scrollbar, only when needed
@@ -4493,6 +4517,105 @@ void ColDragEnd() {
     Invalidate();
 }
 
+// --- a column's title: a click sorts (Modified, Size), a drag moves the column. Like the sidebar, a click acts on
+// release, since until then it may become a drag.
+int ColIndex(const Columns& c, int kind) {
+    for (int j = 0; j < c.n; ++j)
+        if (c.kind[j] == kind) return j;
+    return -1;
+}
+
+bool ColMoveStart(const Hit& h, float x) {
+    if (h.kind != HitKind::HeadCol) return false;
+    const int pane = h.idx / ColKinds, kind = h.idx % ColKinds;
+    const Columns c = Cols(pane);
+    const int j = ColIndex(c, kind);
+    if (j < 0) return false;
+    g_colMove = {};
+    g_colMove.press = true;
+    g_colMove.pane = pane;
+    g_colMove.kind = kind;
+    g_colMove.x0 = g_colMove.x = x;
+    g_colMove.grab = x - c.l[j];
+    g_colMove.before = g_cfg.cols;
+    SetCapture(g_hwnd);
+    return true;
+}
+
+// When the dragged title's middle passes a neighbor's middle, they swap places and the neighbor slides to its new one.
+// (Swapping back needs the middle to cross the neighbor's new middle, so it doesn't flicker between the two.)
+void ColMoveTo(float x) {
+    ColMove& d = g_colMove;
+    if (!d.press || (!d.active && std::abs(x - d.x0) < 4)) return;
+    d.active = true;
+    d.x = x;
+    const float mid = x - d.grab + g_colW[d.kind] / 2;
+    for (int guard = 0; guard < ColKinds; ++guard) {
+        const Columns c = Cols(d.pane);
+        const int j = ColIndex(c, d.kind);
+        if (j < 0) break;
+        int to = -1;
+        if (j > 0 && mid < c.l[j - 1] + g_colW[c.kind[j - 1]] / 2) to = j - 1;
+        else if (j + 1 < c.n && mid > c.l[j + 1] + g_colW[c.kind[j + 1]] / 2) to = j + 1;
+        if (to < 0) break;
+        const int other = c.kind[to];
+        std::iter_swap(std::find(g_cfg.cols.begin(), g_cfg.cols.end(), d.kind), std::find(g_cfg.cols.begin(), g_cfg.cols.end(), other));
+        const Columns after = Cols(d.pane);
+        const int k = ColIndex(after, other);
+        if (k >= 0) ColSlideBy(other, c.l[to] - after.l[k]);
+    }
+    Invalidate();
+}
+
+// keep: drop it where it is (or, without a drag, the click); otherwise (Esc) everything goes back to how it was.
+void ColMoveEnd(bool keep) {
+    if (!g_colMove.press) return;
+    const ColMove d = g_colMove;
+    g_colMove = {};
+    if (GetCapture() == g_hwnd) ReleaseCapture();
+    Invalidate();
+    if (!d.active) {
+        if (keep && ColSortOf(d.kind) >= 0) SetSort(static_cast<SortBy>(ColSortOf(d.kind)));
+        return;
+    }
+    // what was being dragged slides from under the mouse to its place
+    const Columns c = Cols(d.pane);
+    const int j = ColIndex(c, d.kind);
+    if (j >= 0) ColSlideBy(d.kind, std::clamp(d.x - d.grab, c.l[0], c.right - g_colW[d.kind]) - c.l[j]);
+    if (!keep) g_cfg.cols = d.before;
+    if (g_cfg.cols != d.before) ColSave();
+}
+
+// Right click on the column titles: which ones show. Name always does.
+void OpenColumnMenu(POINT screenPt) {
+    std::vector<MenuItem> items;
+    MenuItem name;
+    name.text = L"Name";
+    name.checked = true;
+    name.enabled = false;
+    items.push_back(std::move(name));
+    for (int k = 0; k < ColKinds; ++k) {
+        MenuItem m;
+        m.text = kColDefs[k].label;
+        m.id = static_cast<UINT>(k + 1);
+        m.checked = ColShown(k);
+        items.push_back(std::move(m));
+    }
+    const RECT anchor{screenPt.x, screenPt.y, screenPt.x, screenPt.y};
+    PopupOpen(std::move(items), anchor, [](UINT id) {
+        if (id >= 1 && id <= ColKinds) ColShow(static_cast<int>(id) - 1, !ColShown(static_cast<int>(id) - 1));
+    });
+}
+
+// Is the point on a pane's column titles? (with the view button and the checkbox at their left)
+bool OnColumnTitles(float x, float y) {
+    const float y0 = kTabH + kToolH;
+    const int pane = PaneAt(x, y);
+    if (pane < 0 || y < y0 || y >= y0 + kHeadH) return false;
+    const PaneX g = PaneGeo(pane);
+    return x >= g.L && x < g.R;
+}
+
 void SetPreviewW(float w) {
     if (!g_preview) return;
     g_previewW = std::round(w);
@@ -4576,6 +4699,9 @@ void OnClick(float x, float y, bool middle) {
                 Navigate(T(), g_sidePaths[h.idx], true);
             return;
         case HitKind::Header: SetSort(static_cast<SortBy>(h.idx % 3)); return;
+        case HitKind::HeadCol:
+            if (ColSortOf(h.idx % ColKinds) >= 0) SetSort(static_cast<SortBy>(ColSortOf(h.idx % ColKinds)));
+            return;
         case HitKind::HeadCheck: {  // all of them, or (when all are) none
             ActivatePane(h.idx);
             Tab& t = T();
@@ -5098,6 +5224,10 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 if (wp == VK_ESCAPE) SideDragCancel();
                 return 0;
             }
+            if (g_colMove.press) {
+                if (wp == VK_ESCAPE) ColMoveEnd(false);
+                return 0;
+            }
             if (g_box.active) {  // while the box is being drawn, the keyboard doesn't change the list
                 if (wp == VK_ESCAPE) BoxCancel();
                 return 0;
@@ -5197,6 +5327,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             }
             if (HitAt(x, y).kind != HitKind::Divider) ActivatePane(PaneAt(x, y));
             if (SideDragStart(HitAt(x, y), x, y)) return 0;
+            if (ColMoveStart(HitAt(x, y), x)) return 0;
             if (HitAt(x, y).kind == HitKind::FolderNote) {  // before the row under it takes the click
                 OnClick(x, y, false);
                 return 0;
@@ -5236,6 +5367,11 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 SideDragEnd();
                 return 0;
             }
+            if (g_colMove.press) {
+                ColMoveTo(DipX(lp));
+                ColMoveEnd(true);
+                return 0;
+            }
             if (g_colDrag) {
                 ColDragEnd();
                 ReleaseCapture();
@@ -5261,6 +5397,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case WM_CAPTURECHANGED:
             g_press = {};
             g_sideDrag = {};
+            ColMoveEnd(false);
             BoxEnd();
             g_divDrag = false;
             ColDragEnd();
@@ -5288,6 +5425,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             else if (side.kind == HitKind::Tab || side.kind == HitKind::TabClose) OpenTabMenu(side.idx, pt);
             else if (side.kind == HitKind::Crumb) CrumbMenu(CrumbSiblingsDir(g_crumbPaths[side.idx]), side.r);
             else if (side.kind == HitKind::CrumbChev) CrumbMenu(g_crumbPaths[side.idx], side.r);
+            else if (OnColumnTitles(x, y)) OpenColumnMenu(pt);
             else if (PaneAt(x, y) == g_act && y >= ListTop() && y < ListBottom()) OpenShellMenu(pt, HitRow(x, y));
             return 0;
         }
@@ -5393,6 +5531,11 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (g_sideDrag.press) {
                 if (wp & MK_LBUTTON) SideDragMove(x, y);
                 else SideDragCancel();
+                return 0;
+            }
+            if (g_colMove.press) {
+                if (wp & MK_LBUTTON) ColMoveTo(x);
+                else ColMoveEnd(true);
                 return 0;
             }
             if (g_colDrag) {

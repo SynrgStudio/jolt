@@ -211,6 +211,58 @@ std::wstring CellText(int kind, const Entry& e, const std::wstring& full, bool d
     return {};
 }
 
+// --- which columns, in what order
+void RefreshConfigSig();  // app.cpp
+void LayoutRename();      // app.cpp
+
+bool ColShown(int kind) { return std::find(g_cfg.cols.begin(), g_cfg.cols.end(), kind) != g_cfg.cols.end(); }
+
+// The order in g_cfg.cols goes to config.txt as it is ("" = only the name). Saving doesn't reload the file.
+std::wstring ColSave() {
+    std::wstring s;
+    for (int k : g_cfg.cols) s += (s.empty() ? L"" : L", ") + std::wstring(kColDefs[k].key);
+    ConfigSetValue(L"columns", L"show", s);
+    RefreshConfigSig();
+    LayoutRename();
+    Invalidate();
+    return s;
+}
+
+// Turns a column on or off. One turned on goes where its kind is in the usual order, among the others, whatever
+// their order.
+std::wstring ColShow(int kind, bool on) {
+    std::vector<int>& v = g_cfg.cols;
+    v.erase(std::remove(v.begin(), v.end(), kind), v.end());
+    if (on) v.insert(std::find_if(v.begin(), v.end(), [kind](int o) { return o > kind; }), kind);
+    return ColSave();
+}
+
+// Which sort a column's title gives: 1 date, 2 size (as SortBy), -1 none.
+int ColSortOf(int kind) { return kind == ColDate ? 1 : kind == ColSize ? 2 : -1; }
+
+// --- moving a column by dragging its title, like tabs: it follows the mouse, and the others slide out of its way
+constexpr double kColSlideMs = 150;
+float g_colSlide[ColKinds] = {};  // how far each one still is from its place, in DIPs
+double g_colSlideAt[ColKinds] = {};
+float ColSlide(int kind) {
+    if (g_colSlide[kind] == 0) return 0;
+    const double p = (NowMs() - g_colSlideAt[kind]) / kColSlideMs;
+    if (p >= 1) return g_colSlide[kind] = 0;
+    const float left = static_cast<float>(1 - p);  // slows down at the end
+    return g_colSlide[kind] * left * left * left;
+}
+void ColSlideBy(int kind, float dips) {
+    g_colSlide[kind] = ColSlide(kind) + dips;
+    g_colSlideAt[kind] = NowMs();
+}
+
+struct ColMove {
+    bool press = false, active = false;  // pressed on a title / it has moved: it is a drag, not a click
+    int pane = 0, kind = 0;
+    float x0 = 0, x = 0, grab = 0;  // grab: from the title's left edge to the mouse
+    std::vector<int> before;        // the order it started with, for Esc
+} g_colMove;
+
 // A column's title: in the Recycle Bin, the date is when it was deleted.
 std::wstring ColLabel(int kind, int pane) {
     return kind == ColDate && IsBin(PT(pane).path) ? L"Deleted" : kColDefs[kind].label;
