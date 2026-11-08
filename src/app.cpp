@@ -2225,9 +2225,11 @@ void CreateFormats() {
 
 void PreviewReleaseBitmap();  // preview.inl
 void ThumbsReleaseBitmaps();  // thumbs.inl
+void MenuEditorReleaseBitmaps();  // menu.inl
 void ReleaseTarget() {
     PreviewReleaseBitmap();
     ThumbsReleaseBitmaps();
+    MenuEditorReleaseBitmaps();
     g_iconBmp.clear();
     g_brushAccent.Reset();
     g_brush.Reset();
@@ -3351,6 +3353,7 @@ void DrawPreview(float W, float H);     // preview.inl
 void DrawViewEditor(float W, float H);  // viewedit.inl
 void DrawInstallPanel(float W, float H);  // install.inl
 void DrawRenamePanel(float W, float H);   // rename.inl
+void DrawMenuEditor(float W, float H);    // menu.inl
 
 // Milliseconds since the process started (includes loading the executable).
 double MsSinceProcessStart() {
@@ -3396,6 +3399,7 @@ void Render() {
     DrawPalette(W, H);
     DrawInstallPanel(W, H);
     DrawRenamePanel(W, H);
+    DrawMenuEditor(W, H);
     if (g_rt->EndDraw() == D2DERR_RECREATE_TARGET) ReleaseTarget();
     if (g_firstFrameMs == 0) g_firstFrameMs = MsSinceProcessStart();
 
@@ -4500,6 +4504,40 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return 0;
         }
     }
+    // the context menu editor: a panel over everything, with the mouse and the keyboard
+    if (msg == WM_APP_MENUED) {
+        MenuEditorLoad(static_cast<int>(wp));
+        return 0;
+    }
+    if (g_ed.open) {
+        if (msg == WM_KEYDOWN) {
+            MenuEditorKey(wp);
+            return 0;
+        }
+        if (msg == WM_CHAR) return 0;
+        if (msg == WM_MOUSEMOVE) {
+            MenuEditorMouseMove(DipX(lp), DipY(lp));
+            return 0;
+        }
+        if (msg == WM_LBUTTONDOWN || msg == WM_LBUTTONDBLCLK) {
+            MenuEditorClick(DipX(lp), DipY(lp));
+            return 0;
+        }
+        if (msg == WM_LBUTTONUP) {
+            MenuEditorMouseUp();
+            return 0;
+        }
+        if (msg == WM_MOUSEWHEEL) {
+            MenuEditorWheel(GET_WHEEL_DELTA_WPARAM(wp));
+            return 0;
+        }
+        if (msg == WM_CAPTURECHANGED) g_ed.dragging = false;
+        if (msg == WM_RBUTTONDOWN || msg == WM_RBUTTONUP || msg == WM_MBUTTONDOWN) return 0;
+        if (msg == WM_SETCURSOR && LOWORD(lp) == HTCLIENT) {
+            SetCursor(LoadCursorW(nullptr, g_ed.dragging ? IDC_SIZENS : IDC_ARROW));
+            return TRUE;
+        }
+    }
     // with the palette open, the keyboard belongs to the palette
     if (g_pal.open) {
         if (msg == WM_KEYDOWN || (msg == WM_SYSKEYDOWN && (g_pal.capture >= 0 || wp != VK_F4))) {
@@ -5372,7 +5410,6 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdLine, int show) {
     wc.lpszClassName = g_test ? L"JoltTest" : g_adminWindow ? kAdminClass : kWindowClass;  // neither is mistaken for the open Jolt
     RegisterClassExW(&wc);
     RegisterPopupClass(inst);
-    RegisterEditorClass(inst);
 
     UINT sysDpi = GetDpiForSystem();
     g_hwnd = CreateWindowExW(0, wc.lpszClassName, L"Jolt", WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT,
