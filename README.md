@@ -143,6 +143,7 @@ works too). Options in `config.txt`: `run_in_background`, `global_hotkey`, `tray
 | Ctrl+Shift+C | copy the path of the selection (or of the folder), with quotes only if needed |
 | Ctrl+Alt+C | copy the name of the selection (or of the folder). Ctrl+K → "copy the path with forward slashes" gives `C:/Users/...` |
 | Alt+Enter | Windows properties |
+| Shift+Alt+Enter | **attributes and dates** of the selection: hidden and read-only as switches (a dash when the items differ: those stay as they are), and the modified and created dates as text, with a Now button. Nothing changes until Apply |
 | Ctrl+C / Ctrl+X / Ctrl+V | copy, cut and paste, compatible with File Explorer (Windows progress, conflicts and undo) |
 | Ctrl+V with an image or text on the clipboard | saves it in the folder as a PNG or a UTF-8 .txt named by the moment, ready to rename |
 | Del / Shift+Del | to the Recycle Bin / delete permanently |

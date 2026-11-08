@@ -3459,6 +3459,7 @@ void DrawInstallPanel(float W, float H);  // install.inl
 void DrawRenamePanel(float W, float H);   // rename.inl
 void DrawMenuEditor(float W, float H);    // menu.inl
 void DrawSettings(float W, float H);      // settings.inl
+void DrawAttrs(float W, float H);         // attrs.inl
 
 // Milliseconds since the process started (includes loading the executable).
 double MsSinceProcessStart() {
@@ -3507,6 +3508,7 @@ void Render() {
     DrawRenamePanel(W, H);
     DrawMenuEditor(W, H);
     DrawSettings(W, H);
+    DrawAttrs(W, H);
     if (g_rt->EndDraw() == D2DERR_RECREATE_TARGET) ReleaseTarget();
     if (g_firstFrameMs == 0) g_firstFrameMs = MsSinceProcessStart();
 
@@ -3859,6 +3861,7 @@ void ViewEditorOpen(int pane);
 #include "select.inl"
 #include "viewedit.inl"
 #include "settings.inl"
+#include "attrs.inl"
 #include "ops.inl"
 #include "search.inl"
 #include "dups.inl"
@@ -4264,6 +4267,7 @@ void RunCommand(Cmd cmd) {
         case Cmd::Undo: UndoStep(true); break;
         case Cmd::Redo: UndoStep(false); break;
         case Cmd::Properties: Properties(); break;
+        case Cmd::Attributes: AttrsOpen(); break;
         case Cmd::FolderSizes: ComputeFolderSizes(); break;
         case Cmd::ShowFolders:
             g_hideDirs = !g_hideDirs;
@@ -4711,6 +4715,27 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         if (msg == WM_RBUTTONDOWN || msg == WM_RBUTTONUP || msg == WM_MBUTTONDOWN) return 0;
         if (msg == WM_SETCURSOR && LOWORD(lp) == HTCLIENT) {
             SetCursor(LoadCursorW(nullptr, g_ed.dragging ? IDC_SIZENS : IDC_ARROW));
+            return TRUE;
+        }
+    }
+    // attributes and dates: a panel over everything
+    if (g_at.open) {
+        if (msg == WM_KEYDOWN || (msg == WM_SYSKEYDOWN && wp != VK_F4)) {
+            AttrsKey(wp);
+            return 0;
+        }
+        if (msg == WM_CHAR || msg == WM_SYSCHAR) return 0;
+        if (msg == WM_MOUSEMOVE) {
+            AttrsMouseMove(DipX(lp), DipY(lp));
+            return 0;
+        }
+        if (msg == WM_LBUTTONDOWN || msg == WM_LBUTTONDBLCLK) {
+            AttrsClick(DipX(lp), DipY(lp));
+            return 0;
+        }
+        if (msg == WM_LBUTTONUP || msg == WM_RBUTTONDOWN || msg == WM_RBUTTONUP || msg == WM_MBUTTONDOWN || msg == WM_MOUSEWHEEL) return 0;
+        if (msg == WM_SETCURSOR && LOWORD(lp) == HTCLIENT) {
+            SetCursor(LoadCursorW(nullptr, g_at.hovering && g_at.hover.k == AtK::Field ? IDC_IBEAM : g_at.hovering ? IDC_HAND : IDC_ARROW));
             return TRUE;
         }
     }
