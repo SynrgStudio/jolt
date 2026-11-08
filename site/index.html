@@ -213,6 +213,7 @@
 </table>
 <h3>Tags and colors</h3>
 <p>Right click → <strong>Tags</strong>, or <kbd>Ctrl</kbd>+<kbd>K</kbd> → "tag", puts a label on the selection: pick a known one or type a new name. Each tag gets a color and shows as a little tag-shaped label after the name, with its name inside while there is room (a dot when there isn't, and in the grid's corner), and in the preview's info; an item can have several. <code>tag:urgent</code> in the filter keeps the tagged items, <code>!tag:done</code> leaves them out, in subfolder search too. They are saved in <code>%APPDATA%\Jolt\tags.txt</code>, which can be edited by hand (<code>name = RRGGBB</code> under <code>[tags]</code> sets a color), and they follow renames done from Jolt.</p>
+<p>Right click → <strong>Folder color</strong>, or <kbd>Ctrl</kbd>+<kbd>K</kbd> → "folder color", paints the icon of the selected folders: red, orange, green, teal, blue, purple, pink or gray, keeping its shading, in the list, the grid and the sidebar. It is Jolt's own: Windows and the folder's <code>desktop.ini</code> aren't touched. The colors are saved in <code>tags.txt</code> under <code>[folder_colors]</code> (<code>folder = RRGGBB</code>, any color by hand) and follow renames. A folder icon set in Windows (Properties → Customize, which writes <code>desktop.ini</code>) shows as it is.</p>
 <p>Names can also take a color by rule, in <code>config.txt</code>:</p>
 <pre><code><span class="k">[file_colors]</span>
 .jpg .png .gif .webp = 7FB3FF
@@ -294,7 +295,7 @@ open in vs code = Ctrl+Alt+V</code></pre>
 <tr><td><code>favorites.txt</code></td><td><code>Name|Path</code>, one per line</td></tr>
 <tr><td><code>views.txt</code></td><td>the <a href="#views">views</a> per folder</td></tr>
 <tr><td><code>menu.txt</code></td><td>the <a href="#menu">context menu</a> order and hidden entries</td></tr>
-<tr><td><code>tags.txt</code></td><td>the <a href="#files">tags</a>: their colors and which items have them</td></tr>
+<tr><td><code>tags.txt</code></td><td>the <a href="#files">tags</a>: their colors and which items have them; and the folder colors</td></tr>
 <tr><td><code>session.txt</code>, <code>recents.txt</code></td><td>tabs and window, and the recent folders with their heat</td></tr>
 <tr><td><code>%LOCALAPPDATA%\Jolt</code></td><td>the installed program, the drive index, the calculated folder sizes (<code>sizes.bin</code>) and the thumbnail cache (<code>thumbs\</code>, safe to delete)</td></tr>
 </table>

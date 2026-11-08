@@ -2240,10 +2240,12 @@ void CreateFormats() {
 void PreviewReleaseBitmap();  // preview.inl
 void ThumbsReleaseBitmaps();  // thumbs.inl
 void MenuEditorReleaseBitmaps();  // menu.inl
+void FolderTintRelease();         // foldercolor.inl
 void ReleaseTarget() {
     PreviewReleaseBitmap();
     ThumbsReleaseBitmaps();
     MenuEditorReleaseBitmaps();
+    FolderTintRelease();
     g_iconBmp.clear();
     g_brushAccent.Reset();
     g_brush.Reset();
@@ -2287,6 +2289,7 @@ void EnsureImageList() {
     SHGetImageList(want, IID_PPV_ARGS(&g_imgList));
     g_imgListSize = want;
     g_iconBmp.clear();
+    FolderTintRelease();
 }
 
 // A system icon as a bitmap of the current render target.
@@ -2312,6 +2315,8 @@ ID2D1Bitmap* IconBitmap(int idx) {
     if (it != g_iconBmp.end()) return it->second.Get();
     return (g_iconBmp[idx] = MakeIconBitmap(idx)).Get();
 }
+
+#include "foldercolor.inl"
 
 void Color(UINT32 rgb, float a = 1.f) { g_brush->SetColor(D2D1::ColorF(rgb, a)); }
 
@@ -2371,6 +2376,12 @@ bool IsHover(HitKind k, int idx) { return g_hover.kind == k && g_hover.idx == id
 // Draws the item's real icon, or a generic one while it's being resolved.
 void DrawIcon(const std::wstring& fullPath, const Entry* e, const wchar_t* name, size_t nameLen, bool drive, float x,
               float y, float alpha) {
+    UINT32 fc;
+    if (!drive && (!e || e->isDir()) && FolderColor(fullPath, fc))
+        if (ID2D1Bitmap* tb = FolderTinted(0, fc)) {
+            g_rt->DrawBitmap(tb, D2D1::RectF(x, y, x + kIcon, y + kIcon), alpha, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
+            return;
+        }
     int idx = -2;
     bool perPath = drive || !e || NeedsPerPathIcon(*e, name);
     if (perPath) {
@@ -3139,7 +3150,15 @@ void DrawGridCell(const Entry& e, const wchar_t* name, const std::wstring& full,
                   float a, const std::wstring& filterPat, int closeness) {
     const float box = static_cast<float>(geo.size), boxL = cell.left + kCellPadX / 2, boxT = y + 6;
     bool drawn = false;
-    if (Thumb* th = ThumbGet(full, geo.size, e.mtime)) {
+    UINT32 fc;
+    if (e.isDir() && FolderColor(full, fc))  // its color instead of the Shell's thumbnail
+        if (ID2D1Bitmap* tb = FolderTinted(box > 48 ? 2 : 1, fc)) {
+            const float s = std::floor(std::min(box, tb->GetSize().width));
+            const float x0 = std::floor(boxL + (box - s) / 2), y0 = std::floor(boxT + (box - s) / 2);
+            g_rt->DrawBitmap(tb, D2D1::RectF(x0, y0, x0 + s, y0 + s), a, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
+            drawn = true;
+        }
+    if (Thumb* th = drawn ? nullptr : ThumbGet(full, geo.size, e.mtime)) {
         if (ID2D1Bitmap* bmp = ThumbBitmap(*th); bmp && th->w && th->h) {
             const float sc = std::min(1.f, std::min(box / th->w, box / th->h));  // never enlarged: it would blur
             const float w = std::floor(th->w * sc), h = std::floor(th->h * sc);
@@ -4364,6 +4383,7 @@ void RunCommand(Cmd cmd) {
             Invalidate();
             break;
         case Cmd::Tag: TagPaletteOpen(); break;
+        case Cmd::FolderColor: FolderColorMenu(); break;
         case Cmd::ViewList: SetLayout(0); break;
         case Cmd::ViewGrid: if (!LayoutOf(t)) SetLayout(144); break;
         case Cmd::ViewBigger: StepLayout(1); break;
