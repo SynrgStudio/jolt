@@ -2866,6 +2866,85 @@ Columns Cols(int pane) {
 float RowIndent(const Tab& t, int row) { return FlatView(t) ? 0.f : t.rows[row].depth * kIndent; }
 float RowTextX(const Columns& c, const Tab& t, int row) { return c.nameL + kChev + RowIndent(t, row) + 28; }
 
+// --- checkbox animation. The box fades and grows in, the check pops in a moment later with a little overshoot,
+// and shrinks away when unchecked. Keyed by path, so it survives the list being rebuilt; entries not drawn for a
+// while go away.
+struct CheckAnim {
+    bool on = false;
+    double shownAt = 0, onAt = 0;  // 0: it was like that from the start, nothing to animate
+    unsigned frame = 0;            // the last frame it was drawn in
+};
+std::unordered_map<std::wstring, CheckAnim> g_checkAnim;
+unsigned g_checkFrame = 0;
+double g_checkPruneAt = 0;
+constexpr double kCheckBoxMs = 110, kCheckDelayMs = 50, kCheckPopMs = 170, kCheckOffMs = 90, kCheckBumpMs = 160;
+
+float EaseOut(float p) {
+    p = std::clamp(p, 0.f, 1.f);
+    return 1 - (1 - p) * (1 - p) * (1 - p);
+}
+// 0 -> past 1 -> back to 1: the check lands with a bounce.
+float PopScale(float p) {
+    p = std::clamp(p, 0.f, 1.f);
+    const float c1 = 1.70158f, c3 = c1 + 1, q = p - 1;
+    return 1 + c3 * q * q * q + c1 * q * q;
+}
+
+// Once per frame: what was not drawn last frame has disappeared, and old entries go.
+void CheckAnimFrame() {
+    ++g_checkFrame;
+    const double now = NowMs();
+    if (now - g_checkPruneAt < 1000) return;
+    g_checkPruneAt = now;
+    for (auto it = g_checkAnim.begin(); it != g_checkAnim.end();)
+        it = it->second.frame + 2 < g_checkFrame ? g_checkAnim.erase(it) : std::next(it);
+}
+
+// A glyph scaled around its center.
+void GlyphScaled(wchar_t g, IDWriteTextFormat* f, const D2D1_RECT_F& r, float scale) {
+    if (scale <= 0.02f) return;
+    g_rt->SetTransform(D2D1::Matrix3x2F::Scale(scale, scale, D2D1::Point2F((r.left + r.right) / 2, (r.top + r.bottom) / 2)));
+    Glyph(g, f, r.left, r.top, r.right, r.bottom);
+    g_rt->SetTransform(D2D1::Matrix3x2F::Identity());
+}
+
+// A selection checkbox. mark: the glyph inside when on (a check, or the header's dash). appear: it animates in
+// (the hover mode); otherwise it is just there. Over a thumbnail it gets a dark backing, so it reads on any picture.
+void DrawCheckbox(const std::wstring& key, const D2D1_RECT_F& r, bool on, wchar_t mark, bool appear, bool backed, UINT32 boxOff, UINT32 boxOn, UINT32 markColor) {
+    const double now = NowMs();
+    auto it = g_checkAnim.find(key);
+    if (it == g_checkAnim.end()) {
+        it = g_checkAnim.emplace(key, CheckAnim{on, appear ? now : 0, appear && on ? now : 0, g_checkFrame}).first;
+    } else {
+        CheckAnim& a = it->second;
+        if (a.frame + 1 < g_checkFrame) {  // it was gone: it comes back (animated, if that is the mode)
+            a.shownAt = appear ? now : 0;
+            a.onAt = appear && on ? now : 0;
+            a.on = on;
+        }
+        if (a.on != on) {
+            a.on = on;
+            a.onAt = now;
+        }
+        a.frame = g_checkFrame;
+    }
+    const CheckAnim& a = it->second;
+    const float pBox = a.shownAt ? static_cast<float>((now - a.shownAt) / kCheckBoxMs) : 1.f;
+    const float pBump = a.onAt ? static_cast<float>((now - a.onAt) / kCheckBumpMs) : 1.f;
+    const float alpha = EaseOut(pBox);
+    float boxScale = 0.7f + 0.3f * EaseOut(pBox);
+    if (pBump < 1) boxScale *= 1 + 0.1f * std::sin(3.14159f * std::clamp(pBump, 0.f, 1.f));
+    const float q = !a.onAt ? 1.f : on ? static_cast<float>((now - a.onAt - kCheckDelayMs) / kCheckPopMs) : static_cast<float>((now - a.onAt) / kCheckOffMs);
+    const float markScale = on ? (q <= 0 ? 0.f : PopScale(q)) : 1 - EaseOut(q);
+    const bool busy = pBox < 1 || pBump < 1 || q < 1;
+    if (busy) SetTimer(g_hwnd, kTimerTabSlide, 15, nullptr);
+    if (backed) Round(r, 5, 0x000000, 0.55f * alpha);
+    Color(on || markScale > 0 ? boxOn : boxOff, alpha);
+    GlyphScaled(0xE739, g_fmtIcon.Get(), r, boxScale);
+    Color(markColor, alpha);
+    GlyphScaled(mark, g_fmtIcon.Get(), r, boxScale * 0.6f * markScale);
+}
+
 void DrawHeader(int pane) {
     const float y0 = kTabH + kToolH, y1 = y0 + kHeadH;
     Columns c = Cols(pane);
@@ -2887,9 +2966,7 @@ void DrawHeader(int pane) {
         const D2D1_RECT_F cb = D2D1::RectF(c.checkL - 2, y0 + 3, c.checkL + kCheckW - 4, y1 - 4);
         const bool hov = IsHover(HitKind::HeadCheck, pane);
         if (hov) Round(cb, 5, 0xFFFFFF, 0.08f);
-        Color(on ? cAccent : hov ? cText : cDim);
-        if (on && on < can) Glyph(0xE739, g_fmtIcon.Get(), cb.left, cb.top, cb.right, cb.bottom);  // the dash glyph has no box of its own
-        Glyph(!on ? 0xE739 : on >= can ? 0xE73A : 0xE73C, g_fmtIcon.Get(), cb.left, cb.top, cb.right, cb.bottom);
+        DrawCheckbox(L"\x01header" + std::to_wstring(pane), cb, on > 0, on >= can ? 0xE73E : 0xE738, false, false, hov ? cText : cDim, cAccent, cAccent);
         g_hits.push_back({cb, HitKind::HeadCheck, pane});
     }
     // view button (filter): highlighted if the folder has its own (or inherited) view
@@ -3068,11 +3145,8 @@ void DrawGridCell(const Entry& e, const wchar_t* name, const std::wstring& full,
     }
 }
 
-// A selection checkbox. Over a thumbnail it gets a dark backing, so it reads on any picture.
-void DrawRowCheck(const D2D1_RECT_F& r, bool on, bool backed, bool onSel) {
-    if (backed) Round(r, 5, 0x000000, 0.55f);
-    Color(on ? (onSel ? 0xFFFFFF : cAccent) : (onSel ? 0xC6D4EE : cDim));
-    Glyph(on ? 0xE73A : 0xE739, g_fmtIcon.Get(), r.left, r.top, r.right, r.bottom);
+void DrawRowCheck(const std::wstring& key, const D2D1_RECT_F& r, bool on, bool backed, bool onSel) {
+    DrawCheckbox(key, r, on, 0xE73E, g_cfg.checkboxes == 1, backed, onSel ? 0xC6D4EE : cDim, onSel ? 0xFFFFFF : cAccent, onSel ? 0xFFFFFF : cAccent);
 }
 
 void DrawList(int pane, float H) {
@@ -3157,10 +3231,10 @@ void DrawList(int pane, float H) {
             const bool showCheck = g_cfg.checkboxes == 2 || (g_cfg.checkboxes == 1 && (hover || selected));
             if (geo.grid) {
                 DrawGridCell(e, name, full, cell, y, geo, a, filterPat, row.closeness);
-                if (showCheck) DrawRowCheck(D2D1::RectF(cell.left + 6, y + 6, cell.left + 28, y + 28), selected, true, false);
+                if (showCheck) DrawRowCheck(std::to_wstring(pane) + Key(full), D2D1::RectF(cell.left + 6, y + 6, cell.left + 28, y + 28), selected, true, false);
                 continue;
             }
-            if (showCheck) DrawRowCheck(D2D1::RectF(c.checkL - 2, y, c.checkL + kCheckW - 4, y + kRow), selected, false, selected && focused);
+            if (showCheck) DrawRowCheck(std::to_wstring(pane) + Key(full), D2D1::RectF(c.checkL - 2, y, c.checkL + kCheckW - 4, y + kRow), selected, false, selected && focused);
             const float indent = flat ? 0.f : row.depth * kIndent;
             const float chevX = c.nameL + indent;
             // tree guides: one faint line per level
@@ -3407,6 +3481,7 @@ void Render() {
     if (g_iconFile < 0) g_iconFile = IconByAttrs(L"file", FILE_ATTRIBUTE_NORMAL);
     g_hits.clear();
     g_crumbPaths.clear();
+    CheckAnimFrame();
     g_notePaths.clear();
     D2D1_SIZE_F sz = g_rt->GetSize();
     const float W = sz.width, H = sz.height;
