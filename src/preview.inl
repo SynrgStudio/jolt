@@ -9,6 +9,13 @@
 
 constexpr UINT WM_APP_PREVIEW = WM_APP + 6;
 constexpr UINT_PTR kTimerPreview = 6;
+constexpr UINT_PTR kTimerHold = 18;  // the preview's key held long enough: the floating preview
+
+// The floating preview: the preview's key (Space) held shows a big preview over the list and letting go hides it;
+// a tap still opens or closes the panel. Which one it was is known on letting go, or once the key is held 260 ms.
+bool g_pvFloat = false;
+decltype(NowMs()) g_pvFloatAt = 0;  // when it came up: it grows in
+UINT g_pvHoldKey = 0;               // the preview's key, while it is down
 
 // A font loaded from memory gets a loader of its own, unregistered once the preview moves on: the file is never
 // held open (it can be renamed or deleted while it shows) and nothing builds up.
@@ -1231,7 +1238,7 @@ std::wstring PreviewTarget() {
 
 // Called a little while after the cursor stops moving.
 void PreviewLoad() {
-    if (!g_preview || g_pv.want == g_pv.path) return;
+    if (!(g_preview || g_pvFloat) || g_pv.want == g_pv.path) return;
     static std::once_flag started;
     std::call_once(started, [] { std::thread(PreviewThread).detach(); });
     g_pv.path = g_pv.want;
@@ -1355,6 +1362,35 @@ void PreviewToggle() {
     LayoutRename();
     Invalidate();
     TouchSession();
+}
+
+void PreviewHoldStart(UINT vk) {
+    g_pvHoldKey = vk;
+    SetTimer(g_hwnd, kTimerHold, 260, nullptr);
+}
+void PreviewFloatShow() {  // still held: up it comes
+    if (!g_pvHoldKey || g_pvFloat) return;
+    g_pvFloat = true;
+    g_pvFloatAt = NowMs();
+    if (!g_preview) {  // what is under the cursor, now
+        g_pv.want.clear();
+        g_pv.path = L"\x01";
+    }
+    Invalidate();
+}
+// Letting go: the floating one goes, or it was a tap and the panel opens or closes. cancel: the keyboard went
+// elsewhere (no letting go will come), nothing is toggled.
+void PreviewHoldEnd(bool cancel) {
+    if (!g_pvHoldKey) return;
+    KillTimer(g_hwnd, kTimerHold);
+    g_pvHoldKey = 0;
+    if (g_pvFloat) {
+        g_pvFloat = false;
+        if (!g_preview) MediaClose();
+        Invalidate();
+    } else if (!cancel) {
+        PreviewToggle();
+    }
 }
 
 // Play or pause what the preview shows (a song or a video).
@@ -1649,13 +1685,9 @@ void PvInfoLine(const wchar_t* label, const std::wstring& value, float x0, float
     y += 20;
 }
 
-void DrawPreview(float W, float H) {
-    if (!g_preview) return;
-    const float pw = PreviewW(), x0 = W - pw, y0 = kTabH + ToolH(), y1 = H - kStatus;
-    Fill(D2D1::RectF(x0, y0, W, y1), cSide);
-    // left edge: drag to change the width (double click: back to the default)
-    Fill(D2D1::RectF(x0, y0, x0 + 1, y1), g_pvDrag || IsHover(HitKind::PreviewEdge, 0) ? cDim : cBorder);
-    g_hits.push_back({D2D1::RectF(x0 - 3, y0, x0 + 4, y1), HitKind::PreviewEdge, 0});
+// What the preview shows, in [x0, W] x [y0, y1]: the content above, the info below. The panel and the floating
+// card both draw through here (one of them per frame).
+void DrawPreviewBody(float x0, float y0, float W, float y1) {
     // Markdown rendered or as source changed (palette, settings): the same item again
     static bool mdShown = g_cfg.previewMarkdown;
     if (mdShown != g_cfg.previewMarkdown) {
@@ -2145,5 +2177,45 @@ void DrawPreview(float W, float H) {
         } else {
             PvInfoLine(label, value, L, R, y);
         }
+    }
+}
+
+void DrawPreview(float W, float H) {
+    if (!g_preview) return;
+    const float pw = PreviewW(), x0 = W - pw, y0 = kTabH + ToolH(), y1 = H - kStatus;
+    Fill(D2D1::RectF(x0, y0, W, y1), cSide);
+    // left edge: drag to change the width (double click: back to the default)
+    Fill(D2D1::RectF(x0, y0, x0 + 1, y1), g_pvDrag || IsHover(HitKind::PreviewEdge, 0) ? cDim : cBorder);
+    g_hits.push_back({D2D1::RectF(x0 - 3, y0, x0 + 4, y1), HitKind::PreviewEdge, 0});
+    if (!g_pvFloat) DrawPreviewBody(x0, y0, W, y1);  // while it floats, the content is up there
+}
+
+// The floating preview: a big card over the list, the rest dimmed. It comes in growing a little and fading in.
+void DrawPreviewFloat(float W, float H) {
+    if (!g_pvFloat) return;
+    const float t = std::clamp(static_cast<float>(NowMs() - g_pvFloatAt) / 140.f, 0.f, 1.f), e = 1 - (1 - t) * (1 - t) * (1 - t);
+    if (t < 1) SetTimer(g_hwnd, kTimerTabSlide, 15, nullptr);
+    const float top = kTabH, room = H - top;
+    const float cw = std::clamp(W * 0.72f, std::min(W - 32, 480.f), std::max(200.f, W - 48));
+    const float ch = std::clamp(room * 0.86f, std::min(room - 24, 360.f), std::max(160.f, room - 32));
+    const float cx = W / 2, cy = top + room / 2;
+    const D2D1_RECT_F card = D2D1::RectF(std::round(cx - cw / 2), std::round(cy - ch / 2), std::round(cx + cw / 2), std::round(cy + ch / 2));
+    Fill(D2D1::RectF(0, 0, W, H), 0x000000, 0.42f * e);
+    D2D1_MATRIX_3X2_F old;
+    g_rt->GetTransform(&old);
+    const float s = 0.96f + 0.04f * e;
+    if (e < 1) {
+        g_rt->SetTransform(D2D1::Matrix3x2F::Scale(s, s, D2D1::Point2F(cx, cy)) * old);
+        g_rt->PushLayer(D2D1::LayerParameters(D2D1::InfiniteRect(), nullptr, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE, D2D1::IdentityMatrix(), e), nullptr);
+    }
+    for (int i = 1; i <= 4; ++i)  // a soft shadow
+        Round(D2D1::RectF(card.left - i * 3, card.top - i * 2, card.right + i * 3, card.bottom + i * 4), 12.f + i * 3, 0x000000, 0.07f);
+    Round(card, 12, cSide);
+    Color(cBorder);
+    g_rt->DrawRoundedRectangle(D2D1::RoundedRect(D2D1::RectF(card.left + 0.5f, card.top + 0.5f, card.right - 0.5f, card.bottom - 0.5f), 12, 12), g_brush.Get(), 1);
+    DrawPreviewBody(card.left + 6, card.top + 6, card.right - 6, card.bottom - 4);
+    if (e < 1) {
+        g_rt->PopLayer();
+        g_rt->SetTransform(old);
     }
 }
