@@ -235,7 +235,9 @@ save** (so do `favorites.txt` and `menu.txt`). Sections:
 - `[columns]`: which columns to show, left to right, and their widths. Besides `modified` and `size`:
   `dimensions` (images and videos), `duration` (songs and videos), `items` (how many a folder has) and
   `attributes` (R H S A C E, and L for links). They can also be picked with a right click on the column titles,
-  or in Settings (Ctrl+,), and moved by dragging their title.
+  or in Settings (Ctrl+,), and moved by dragging their title. `size_bars = yes` draws a bar behind each size, as
+  long as the item is next to the largest in the folder (folders once their size is calculated, Alt+R); also in
+  that right-click menu and Ctrl+K → "size bars".
 - `[colors]`: all interface colors in RRGGBB.
 - `[shortcuts]`: one command per line with its keys (`up = Backspace, Left, Alt+Up`). By default, as
   in a commander: **→ enters the highlighted folder and ← goes up one level**. The up/down arrows, PageUp/PageDown,

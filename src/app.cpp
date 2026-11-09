@@ -3345,6 +3345,15 @@ void DrawList(int pane, float H) {
         GetSystemTimeAsFileTime(&nowFt);
         const int64_t now = (static_cast<int64_t>(nowFt.dwHighDateTime) << 32) | nowFt.dwLowDateTime, since = RecentSince(now);
         const Geo geo = GeoFor(t);
+        uint64_t barMax = 0;  // size bars: the largest item in the list
+        if (g_cfg.sizeBars && !geo.grid && !geo.miller && std::find(c.kind, c.kind + c.n, ColSize) != c.kind + c.n)
+            for (int i = 0; i < n; ++i) {
+                if (IsHeader(t, i)) continue;
+                const Row& r = t.rows[i];
+                const Entry& e = r.l->entries[r.e];
+                if (!e.isDir()) barMax = std::max(barMax, e.size);
+                else if (g_dsAny && !r.l->path.empty()) barMax = std::max(barMax, ItemBytes(e, Join(r.l->path, r.l->name(e)), false));
+            }
         int first = std::max(0, static_cast<int>(t.scroll / kRow));
         if (geo.grid) {
             EnsureGeo(t);
@@ -3505,6 +3514,13 @@ void DrawList(int pane, float H) {
             for (int j = 0; j < c.n; ++j) {
                 bool faint = false;
                 const std::wstring s = CellText(c.kind[j], e, full, drives, faint);
+                if (c.kind[j] == ColSize && barMax)
+                    if (const uint64_t b = ItemBytes(e, full, drives)) {  // right-aligned, like the size
+                        const float r = c.r[j] + c.dx[j] + 4, full_w = c.r[j] - c.l[j] + 8;
+                        const float w = std::round(full_w * static_cast<float>(static_cast<double>(b) / static_cast<double>(barMax)));
+                        const bool onSel = selected && focused;
+                        if (w >= 1) Round(D2D1::RectF(r - w, y + 5, r, y + kRow - 5), 3, onSel ? 0xFFFFFF : cAccent, (onSel ? 0.16f : 0.22f) * a);
+                    }
                 if (s.empty()) continue;
                 Color(faint ? cFaint : selected && focused ? 0xC6D4EE : cDim, a);
                 Text(s, g_fmtRight.Get(), c.l[j] + c.dx[j], y, c.r[j] + c.dx[j], y + kRow);
@@ -4588,6 +4604,7 @@ void RunCommand(Cmd cmd) {
             if (LayoutOf(t) <= 0) SetLayout(144);
             break;
         case Cmd::ViewColumns: ToggleMiller(); break;
+        case Cmd::SizeBars: SetSizeBars(!g_cfg.sizeBars); break;
         case Cmd::ViewBigger: StepLayout(1); break;
         case Cmd::ViewSmaller: StepLayout(-1); break;
         case Cmd::EmptyRecycleBin: EmptyRecycleBin(); break;
@@ -4823,9 +4840,17 @@ void OpenColumnMenu(POINT screenPt) {
         m.checked = ColShown(k);
         items.push_back(std::move(m));
     }
+    MenuItem sep, bars;
+    sep.sep = true;
+    bars.text = L"Size bars";
+    bars.id = 100;
+    bars.checked = g_cfg.sizeBars;
+    items.push_back(std::move(sep));
+    items.push_back(std::move(bars));
     const RECT anchor{screenPt.x, screenPt.y, screenPt.x, screenPt.y};
     PopupOpen(std::move(items), anchor, [](UINT id) {
         if (id >= 1 && id <= ColKinds) ColShow(static_cast<int>(id) - 1, !ColShown(static_cast<int>(id) - 1));
+        if (id == 100) SetSizeBars(!g_cfg.sizeBars);
     });
 }
 

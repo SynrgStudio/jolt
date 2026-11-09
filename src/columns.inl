@@ -263,6 +263,23 @@ struct ColMove {
     std::vector<int> before;        // the order it started with, for Esc
 } g_colMove;
 
+// --- size bars ([columns] size_bars): a bar behind each size, as long as the item is next to the largest in the list.
+// What an item weighs: a file's size; a folder's once it is being counted (Alt+R), as far as it got.
+uint64_t ItemBytes(const Entry& e, const std::wstring& full, bool drives) {
+    if (!e.isDir()) return e.size;
+    DirSize ds;
+    if (drives || !g_dsAny || !DirSizeOf(Key(Normalize(full)), ds)) return 0;
+    return ds.bytes;
+}
+
+void SetSizeBars(bool on) {
+    g_cfg.sizeBars = on;
+    ConfigSetValue(L"columns", L"size_bars", on ? L"yes" : L"no");
+    RefreshConfigSig();
+    S.message = on ? L"Size bars: each item next to the largest here (folders once their size is calculated, Alt+R)" : L"Size bars off";
+    Invalidate();
+}
+
 // A column's title: in the Recycle Bin, the date is when it was deleted.
 std::wstring ColLabel(int kind, int pane) {
     return kind == ColDate && IsBin(PT(pane).path) ? L"Deleted" : kColDefs[kind].label;
