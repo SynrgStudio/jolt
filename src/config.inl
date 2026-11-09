@@ -10,7 +10,7 @@ enum class Cmd {
     Terminal, OpenExplorer, RealLocation, CollapseGroups, ExpandGroups, GroupByDay, GroupByType, NoGroups,
     SortByType, ZoomIn, ZoomOut, ZoomReset, RowsTaller, RowsShorter, EmptyRecycleBin,
     Undo, Redo, OpenAsAdmin, PinTab, Restore,
-    Install, Quit, RenameMany, FolderSiblings, ViewList, ViewGrid, ViewColumns, ViewBigger, ViewSmaller, Tag, FolderColor, Zen, PreviewWrap,
+    Install, Quit, RenameMany, FolderSiblings, ViewList, ViewGrid, ViewColumns, ViewBigger, ViewSmaller, Tag, FolderColor, Zen, SizeBars, PreviewWrap,
     FindDuplicates, SelectExtraCopies, SelectPattern, SelectSameExtension, InvertSelection, Settings, Checkboxes, NewFromTemplate, CopyTo, MoveTo, Attributes, InUse, Unblock,
     CustomFirst = 1000  // + index into g_cfg.custom: the user's own commands
 };
@@ -44,6 +44,7 @@ struct Config {
     int hotCount = 10;  // folders in Recents (0: no section)
     std::wstring globalKey = L"Win+J";
     std::vector<int> cols = {ColDate, ColSize};  // [columns] show: ColKinds, left to right
+    bool sizeBars = false;                       // [columns] size_bars
     std::vector<KeyBind> keys;
     std::vector<FileColorRule> fileColors;  // [file_colors]
     struct Custom {
@@ -124,6 +125,7 @@ const CmdDef kCommands[] = {
     {L"show_files", Cmd::ShowFiles, L"", L"show or hide files (toggle files)"},
     {L"show_hidden", Cmd::ShowHidden, L"Ctrl+H", L"show or hide hidden files (toggle hidden files)"},
     {L"show_extensions", Cmd::ShowExtensions, L"", L"show or hide extensions (toggle file extensions)"},
+    {L"size_bars", Cmd::SizeBars, L"", L"show or hide a bar behind each size, next to the largest in the folder"},
     {L"reopen_tab", Cmd::ReopenTab, L"Ctrl+Shift+T", L"reopen the last closed tab"},
     {L"close_others", Cmd::CloseOthers, L"Ctrl+Alt+W", L"close the other tabs"},
     {L"pin_tab", Cmd::PinTab, L"Ctrl+Alt+P", L"pin the tab, or unpin it: it stays at the left, small, and doesn't close"},
@@ -346,6 +348,8 @@ void WriteDefaultConfig() {
         "# dimensions: of images and videos. duration: of songs and videos. items: how many a folder has.\n"
         "# attributes: R read-only, H hidden, S system, A archive, C compressed, E encrypted, L link.\n"
         "show = modified, size\n"
+        "# A bar behind each size, as long as the item is next to the largest in the folder: yes / no\n"
+        "size_bars = no\n"
         "modified_width = 118\n"
         "size_width = 72\n"
         "\n[colors]\n"
@@ -472,6 +476,8 @@ void LoadConfig() {
                     for (int k = 0; k < ColKinds; ++k)
                         if (c == kColDefs[k].key && std::find(g_cfg.cols.begin(), g_cfg.cols.end(), k) == g_cfg.cols.end())
                             g_cfg.cols.push_back(k);
+            } else if (key == L"size_bars") {
+                g_cfg.sizeBars = ParseBool(val);
             } else {
                 for (int k = 0; k < ColKinds; ++k)
                     if (key == std::wstring(kColDefs[k].key) + L"_width")

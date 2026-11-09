@@ -2,7 +2,7 @@
 
 Every planned feature, one line per GitHub issue. A line is checked and struck through when its PR is merged.
 
-**39 of 89 done.**
+**40 of 89 done.**
 
 ## Navigation
 
@@ -48,7 +48,7 @@ Every planned feature, one line per GitHub issue. A line is checked and struck t
 
 ## View
 
-9 of 10 done.
+10 of 10 done.
 
 - [x] ~~[#21](https://github.com/SynrgStudio/jolt/issues/21) Icon and thumbnail view with adjustable size, and compact list~~
 - [x] ~~[#22](https://github.com/SynrgStudio/jolt/issues/22) Extra columns: dimensions, duration, item count, attributes~~
@@ -58,7 +58,7 @@ Every planned feature, one line per GitHub issue. A line is checked and struck t
 - [x] ~~[#26](https://github.com/SynrgStudio/jolt/issues/26) Status bar with the count and size of the selection~~
 - [x] ~~[#27](https://github.com/SynrgStudio/jolt/issues/27) Zen mode: hide the sidebar and the header~~
 - [x] ~~[#28](https://github.com/SynrgStudio/jolt/issues/28) Miller columns (cascading panes)~~
-- [ ] [#29](https://github.com/SynrgStudio/jolt/issues/29) Proportional size bar per file
+- [x] ~~[#29](https://github.com/SynrgStudio/jolt/issues/29) Proportional size bar per file~~
 - [x] ~~[#128](https://github.com/SynrgStudio/jolt/issues/128) Column titles: right-click menu to show or hide columns, and drag to reorder~~
 
 ## Preview

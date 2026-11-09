@@ -248,6 +248,11 @@ std::vector<SetRow> SettingsRows(int section) {
                                                  L"How many items each folder has.", L""};
                 for (int k = 0; k < ColKinds; ++k)
                     toggle(kColDefs[k].label, help[k], [=] { return has(k); }, [=](bool b) { set(k, b); });
+                toggle(L"Size bars", L"A bar behind each size, next to the largest in the folder. Folders count once their size is calculated (Alt+R).",
+                       [] { return g_cfg.sizeBars; }, [](bool b) {
+                           SetSizeBars(b);
+                           SettingsSaved(std::wstring(L"Saved: size_bars = ") + (b ? L"yes" : L"no"));
+                       });
             }
             head(L"Always ready");
             toggle(L"Keep running when the window closes", L"Closing hides it, and it comes back at once. ☰ → Quit really closes.",
