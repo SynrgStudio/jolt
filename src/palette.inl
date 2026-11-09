@@ -130,6 +130,8 @@ void PickForget(const std::wstring& path) {
     if (std::erase_if(g_picks, [&](const Pick& p) { return Key(p.path) == k; })) TouchSession();
 }
 
+// Seek reads this file too (the same text typed in its find puts the pick first): a change to its columns or its name has
+// to be told to Seek's side.
 void PickSave() {
     const std::wstring f = PickFile();
     if (f.empty()) return;

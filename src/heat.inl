@@ -110,6 +110,8 @@ void HeatUseFile(const std::wstring& path) {
     TouchSession();
 }
 
+// Seek (the search for AI agents) reads this file too: a change to its columns, the "file" value or its name has to be
+// told to Seek's side, or its ranking breaks.
 void HeatSave() {
     const std::wstring f = HeatFile();
     if (f.empty()) return;
