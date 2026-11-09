@@ -1,17 +1,28 @@
 // Preview (Space): right-hand column showing what's under the cursor.
-// Images via WIC (scaled and rotated per EXIF, with the camera's data under photos), text/code (minified JSON
-// indented), CSV as a table, folder contents (from the listing's memory), the Shell thumbnail (PDF, videos,
-// Office...) and, for binaries Windows has nothing to show for, their bytes in hex. It all loads on a separate
-// thread and only once the cursor stops: moving through the list doesn't slow down.
+// Images via WIC (scaled and rotated per EXIF, with the camera's data under photos), SVG (Direct2D), fonts (a sample
+// in the typeface itself), Markdown rendered (markdown.inl), text/code (minified JSON indented), CSV as a table,
+// folder contents (from the listing's memory), the Shell thumbnail (PDF, videos, Office...) and, for binaries
+// Windows has nothing to show for, their bytes in hex. It all loads on a separate thread and only once the cursor
+// stops: moving through the list doesn't slow down.
 // Included from app.cpp after palette.inl.
 
 constexpr UINT WM_APP_PREVIEW = WM_APP + 6;
 constexpr UINT_PTR kTimerPreview = 6;
 
+// A font loaded from memory gets a loader of its own, unregistered once the preview moves on: the file is never
+// held open (it can be renamed or deleted while it shows) and nothing builds up.
+struct PvFontHold {
+    ComPtr<IDWriteFactory5> f5;
+    ComPtr<IDWriteInMemoryFontFileLoader> loader;
+    ~PvFontHold() {
+        if (f5 && loader) f5->UnregisterFontFileLoader(loader.Get());
+    }
+};
+
 struct PreviewResult {
     uint64_t gen = 0;
     std::wstring path;
-    int kind = 0;  // 0 nothing, 1 image, 2 text, 3 not on this PC, 4 hex (a binary), 5 table (CSV)
+    int kind = 0;  // 0 nothing, 1 image, 2 text, 3 not on this PC, 4 hex (a binary), 5 table (CSV), 6 Markdown, 7 font, 8 SVG
     ComPtr<IWICBitmap> bmp;
     UINT imgW = 0, imgH = 0;  // original size (already rotated)
     bool thumb = false;       // Shell thumbnail or icon (not enlarged)
@@ -24,6 +35,12 @@ struct PreviewResult {
     uint64_t fileSize = 0;
     std::vector<std::vector<std::wstring>> rows;  // table: the first one is the header
     int cols = 0;
+    std::unique_ptr<MdDoc> md;  // Markdown, in blocks
+    std::string svg;            // SVG, in UTF-8, its CSS made attributes (Direct2D reads only those)
+    std::shared_ptr<PvFontHold> fontHold;               // declared before the formats: it goes after them
+    std::vector<ComPtr<IDWriteTextFormat>> fontFmt;     // fonts: the name, the alphabet, then the sample sizes
+    std::wstring fontName, fontFace;
+    int fontFaces = 0;
 };
 
 struct PreviewState {
@@ -38,6 +55,10 @@ struct PreviewState {
     float scrollX = 0;  // tables: sideways (Shift+wheel)
     std::vector<float> colW;  // tables: each column's width
     std::vector<char> colNum;  // tables: columns of numbers, aligned to the right
+    ComPtr<ID2D1SvgDocument> svg;  // made on the first draw, for this render target
+    float svgW = 0, svgH = 0;      // its own size
+    D2D1_SIZE_F svgVp{};
+    bool svgTried = false;
     bool loading = false;
     bool isDir = false;  // the shown item is a folder
     D2D1_RECT_F box{};
@@ -51,6 +72,7 @@ std::mutex g_pvm;
 std::condition_variable g_pvcv;
 std::wstring g_pvReq;
 uint64_t g_pvReqGen = 0;
+bool g_pvReqMd = true;  // Markdown rendered ([general] preview_markdown), as it was when asked
 
 bool PvIsImage(const std::wstring& ext) {
     static const wchar_t* k[] = {L".jpg", L".jpeg", L".jpe", L".jfif", L".png", L".bmp", L".gif", L".tif", L".tiff",
@@ -70,6 +92,338 @@ bool PvIsBinary(const std::wstring& ext) {
 }
 
 bool PvIsTable(const std::wstring& ext) { return ext == L".csv" || ext == L".tsv"; }
+bool PvIsMarkdown(const std::wstring& ext) { return ext == L".md" || ext == L".markdown" || ext == L".mdx" || ext == L".mkd"; }
+bool PvIsFont(const std::wstring& ext) {
+    return ext == L".ttf" || ext == L".otf" || ext == L".ttc" || ext == L".otc" || ext == L".woff" || ext == L".woff2";
+}
+
+// The whole of a file, up to max bytes (empty: it can't be read, or it is bigger).
+std::vector<uint8_t> PvReadAll(const std::wstring& path, uint64_t max) {
+    std::vector<uint8_t> data;
+    HANDLE h = CreateFileW(ToExtendedPath(path).c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                           nullptr, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return data;
+    LARGE_INTEGER size{};
+    if (GetFileSizeEx(h, &size) && size.QuadPart > 0 && static_cast<uint64_t>(size.QuadPart) <= max) {
+        data.resize(static_cast<size_t>(size.QuadPart));
+        DWORD got = 0;
+        if (!ReadFile(h, data.data(), static_cast<DWORD>(data.size()), &got, nullptr) || got != data.size()) data.clear();
+    }
+    CloseHandle(h);
+    return data;
+}
+
+// --- fonts: the typeface's name in itself, its alphabet and a sentence at several sizes.
+bool PvFont(const std::wstring& path, const std::wstring& ext, PreviewResult& r) {
+    auto hold = std::make_shared<PvFontHold>();
+    if (FAILED(g_dw.As(&hold->f5))) return false;
+    std::vector<uint8_t> data = PvReadAll(path, 64ull << 20);
+    if (data.empty()) return false;
+    if (ext == L".woff" || ext == L".woff2") {  // packed for the web: unpacked in memory
+        ComPtr<IDWriteFontFileStream> st;
+        if (FAILED(hold->f5->UnpackFontFile(ext == L".woff" ? DWRITE_CONTAINER_TYPE_WOFF : DWRITE_CONTAINER_TYPE_WOFF2, data.data(),
+                                            static_cast<UINT32>(data.size()), &st)))
+            return false;
+        UINT64 size = 0;
+        const void* frag = nullptr;
+        void* ctx = nullptr;
+        if (FAILED(st->GetFileSize(&size)) || !size || size > (64ull << 20) || FAILED(st->ReadFileFragment(&frag, 0, size, &ctx))) return false;
+        std::vector<uint8_t> raw(static_cast<const uint8_t*>(frag), static_cast<const uint8_t*>(frag) + size);
+        st->ReleaseFileFragment(ctx);
+        data = std::move(raw);
+    }
+    if (FAILED(hold->f5->CreateInMemoryFontFileLoader(&hold->loader))) return false;
+    if (FAILED(hold->f5->RegisterFontFileLoader(hold->loader.Get()))) {
+        hold->loader.Reset();
+        return false;
+    }
+    ComPtr<IDWriteFontFile> file;
+    ComPtr<IDWriteFontSetBuilder1> sb;
+    ComPtr<IDWriteFontSet> set;
+    ComPtr<IDWriteFontCollection1> coll;
+    ComPtr<IDWriteFontFamily> fam;
+    ComPtr<IDWriteFont> font;
+    if (FAILED(hold->loader->CreateInMemoryFontFileReference(hold->f5.Get(), data.data(), static_cast<UINT32>(data.size()), nullptr, &file)) ||
+        FAILED(hold->f5->CreateFontSetBuilder(&sb)) || FAILED(sb->AddFontFile(file.Get())) || FAILED(sb->CreateFontSet(&set)) ||
+        FAILED(hold->f5->CreateFontCollectionFromFontSet(set.Get(), &coll)) || !coll->GetFontFamilyCount() ||
+        FAILED(coll->GetFontFamily(0, &fam)) ||
+        FAILED(fam->GetFirstMatchingFont(DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL, &font)))  // Regular, if it has one
+        return false;
+    auto name = [](IDWriteLocalizedStrings* s) {
+        std::wstring out;
+        UINT32 i = 0, len = 0;
+        BOOL found = FALSE;
+        if (!s) return out;
+        if (FAILED(s->FindLocaleName(L"en-us", &i, &found)) || !found) i = 0;
+        if (SUCCEEDED(s->GetStringLength(i, &len))) {
+            out.resize(len + 1);
+            s->GetString(i, out.data(), len + 1);
+            out.resize(len);
+        }
+        return out;
+    };
+    ComPtr<IDWriteLocalizedStrings> family, face;
+    fam->GetFamilyNames(&family);
+    font->GetFaceNames(&face);
+    r.fontName = name(family.Get());
+    r.fontFace = name(face.Get());
+    r.fontFaces = static_cast<int>(set->GetFontCount());
+    for (float size : {28.f, 18.f, 12.f, 16.f, 22.f, 30.f, 40.f}) {
+        ComPtr<IDWriteTextFormat> f;
+        if (FAILED(g_dw->CreateTextFormat(r.fontName.c_str(), coll.Get(), font->GetWeight(), font->GetStyle(), font->GetStretch(), size, L"en-us", &f))) {
+            r.fontFmt.clear();
+            return false;
+        }
+        f->SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP);
+        r.fontFmt.push_back(std::move(f));
+    }
+    r.fontHold = std::move(hold);
+    r.kind = 7;
+    return true;
+}
+
+// --- SVG. Direct2D draws its presentation attributes (fill="red") but no CSS, so style="..." and the <style> rules
+// for tags, classes and ids become attributes, as a browser would apply them. No <text>: Direct2D leaves it out.
+using SvgDecls = std::vector<std::pair<std::wstring, std::wstring>>;
+SvgDecls SvgParseDecls(const std::wstring& d) {
+    SvgDecls out;
+    size_t p = 0;
+    while (p < d.size()) {
+        size_t e = d.find(L';', p);
+        if (e == std::wstring::npos) e = d.size();
+        const std::wstring one = d.substr(p, e - p);
+        p = e + 1;
+        const size_t colon = one.find(L':');
+        if (colon == std::wstring::npos) continue;
+        const std::wstring k = Lower(Trim(one.substr(0, colon)));
+        std::wstring v = Trim(one.substr(colon + 1));
+        const size_t imp = Lower(v).find(L"!important");
+        if (imp != std::wstring::npos) v = Trim(v.substr(0, imp));
+        if (!k.empty() && !v.empty()) out.push_back({k, v});
+    }
+    return out;
+}
+bool SvgPresentation(const std::wstring& k) {
+    static const wchar_t* list[] = {L"fill", L"fill-opacity", L"fill-rule", L"stroke", L"stroke-width", L"stroke-opacity",
+                                    L"stroke-linecap", L"stroke-linejoin", L"stroke-miterlimit", L"stroke-dasharray",
+                                    L"stroke-dashoffset", L"opacity", L"display", L"visibility", L"stop-color", L"stop-opacity",
+                                    L"clip-rule", L"clip-path", L"color", L"overflow"};
+    for (const wchar_t* x : list)
+        if (k == x) return true;
+    return false;
+}
+std::wstring SvgInlineCss(const std::wstring& src) {
+    const size_t npos = std::wstring::npos;
+    if (src.find(L"style") == npos) return src;
+    struct Rule {
+        std::wstring tag, id;
+        std::vector<std::wstring> classes;
+        int spec = 0;
+        SvgDecls decls;
+    };
+    std::vector<Rule> rules;
+    for (size_t p = src.find(L"<style"); p != npos; p = src.find(L"<style", p + 1)) {
+        const size_t gt = src.find(L'>', p);
+        const size_t end = gt == npos ? npos : src.find(L"</style", gt);
+        if (end == npos) break;
+        std::wstring css = src.substr(gt + 1, end - gt - 1);
+        for (const wchar_t* cut : {L"<![CDATA[", L"]]>"})
+            for (size_t c = css.find(cut); c != npos; c = css.find(cut)) css.erase(c, wcslen(cut));
+        for (size_t c = css.find(L"/*"); c != npos; c = css.find(L"/*", c)) {
+            const size_t ce = css.find(L"*/", c + 2);
+            css.erase(c, ce == npos ? npos : ce + 2 - c);
+        }
+        size_t a = 0;
+        while (a < css.size()) {
+            const size_t lb = css.find(L'{', a);
+            if (lb == npos) break;
+            const std::wstring sel = Trim(css.substr(a, lb - a));
+            size_t rb = lb;
+            int depth = 0;
+            for (; rb < css.size(); ++rb) {  // braces inside counted: @media { a { } }
+                if (css[rb] == L'{') ++depth;
+                else if (css[rb] == L'}' && --depth == 0) break;
+            }
+            const SvgDecls decls = SvgParseDecls(css.substr(lb + 1, std::min(rb, css.size()) - lb - 1));
+            a = rb + 1;
+            if (sel.empty() || sel[0] == L'@') continue;
+            for (size_t s0 = 0; s0 <= sel.size();) {
+                size_t s1 = sel.find(L',', s0);
+                if (s1 == npos) s1 = sel.size();
+                const std::wstring one = Trim(sel.substr(s0, s1 - s0));
+                s0 = s1 + 1;
+                if (one.empty() || one.find_first_of(L" >+~:[*") != npos) continue;  // only tag, .class and #id
+                Rule r;
+                r.decls = decls;
+                size_t k = 0;
+                while (k < one.size() && one[k] != L'.' && one[k] != L'#') ++k;
+                r.tag = one.substr(0, k);
+                while (k < one.size()) {
+                    size_t e = k + 1;
+                    while (e < one.size() && one[e] != L'.' && one[e] != L'#') ++e;
+                    if (one[k] == L'.') r.classes.push_back(one.substr(k + 1, e - k - 1));
+                    else r.id = one.substr(k + 1, e - k - 1);
+                    k = e;
+                }
+                r.spec = (r.id.empty() ? 0 : 100) + static_cast<int>(r.classes.size()) * 10 + (r.tag.empty() ? 0 : 1);
+                rules.push_back(std::move(r));
+            }
+        }
+    }
+    std::stable_sort(rules.begin(), rules.end(), [](const Rule& x, const Rule& y) { return x.spec < y.spec; });
+    std::wstring out;
+    out.reserve(src.size() + src.size() / 4);
+    const size_t n = src.size();
+    size_t i = 0;
+    while (i < n) {
+        const size_t lt = src.find(L'<', i);
+        if (lt == npos) {
+            out.append(src, i, npos);
+            break;
+        }
+        out.append(src, i, lt - i);
+        auto copyThrough = [&](const wchar_t* mark) {
+            const size_t e = src.find(mark, lt);
+            const size_t stop = e == npos ? n : e + wcslen(mark);
+            out.append(src, lt, stop - lt);
+            i = stop;
+        };
+        if (src.compare(lt, 4, L"<!--") == 0) {
+            copyThrough(L"-->");
+            continue;
+        }
+        if (src.compare(lt, 9, L"<![CDATA[") == 0) {
+            copyThrough(L"]]>");
+            continue;
+        }
+        if (src.compare(lt, 6, L"<style") == 0) {  // its rules are applied below: it goes
+            const size_t e = src.find(L"</style>", lt);
+            i = e == npos ? n : e + 8;
+            continue;
+        }
+        if (lt + 1 >= n || !iswalpha(src[lt + 1])) {
+            out += L'<';
+            i = lt + 1;
+            continue;
+        }
+        // a start tag: its name and attributes, quotes respected
+        size_t j = lt + 1;
+        while (j < n && !iswspace(src[j]) && src[j] != L'/' && src[j] != L'>') ++j;
+        const std::wstring name = src.substr(lt + 1, j - lt - 1);
+        SvgDecls attrs;
+        bool selfClose = false;
+        while (j < n) {
+            while (j < n && iswspace(src[j])) ++j;
+            if (j >= n) break;
+            if (src[j] == L'>') {
+                ++j;
+                break;
+            }
+            if (src[j] == L'/') {
+                selfClose = true;
+                ++j;
+                continue;
+            }
+            size_t k = j;
+            while (k < n && !iswspace(src[k]) && src[k] != L'=' && src[k] != L'>' && src[k] != L'/') ++k;
+            if (k == j) {
+                ++j;
+                continue;
+            }
+            std::wstring an = src.substr(j, k - j), av;
+            j = k;
+            while (j < n && iswspace(src[j])) ++j;
+            if (j < n && src[j] == L'=') {
+                ++j;
+                while (j < n && iswspace(src[j])) ++j;
+                if (j < n && (src[j] == L'"' || src[j] == L'\'')) {
+                    const size_t e = src.find(src[j], j + 1);
+                    av = src.substr(j + 1, (e == npos ? n : e) - j - 1);
+                    j = e == npos ? n : e + 1;
+                } else {
+                    size_t e = j;
+                    while (e < n && !iswspace(src[e]) && src[e] != L'>') ++e;
+                    av = src.substr(j, e - j);
+                    j = e;
+                }
+            }
+            selfClose = false;
+            attrs.push_back({std::move(an), std::move(av)});
+        }
+        std::wstring cls = L" ", id;
+        for (const auto& [k, v] : attrs) {
+            if (k == L"class") cls = L" " + v + L" ";
+            else if (k == L"id") id = v;
+        }
+        for (wchar_t& c : cls)
+            if (iswspace(c)) c = L' ';
+        const size_t colon = name.find(L':');
+        const std::wstring local = colon == npos ? name : name.substr(colon + 1);
+        SvgDecls decls;
+        for (const Rule& r : rules) {
+            if ((!r.tag.empty() && r.tag != local) || (!r.id.empty() && r.id != id)) continue;
+            bool all = true;
+            for (const std::wstring& c : r.classes)
+                if (cls.find(L" " + c + L" ") == npos) all = false;
+            if (all) decls.insert(decls.end(), r.decls.begin(), r.decls.end());
+        }
+        for (const auto& [k, v] : attrs)
+            if (k == L"style") {
+                const SvgDecls st = SvgParseDecls(v);
+                decls.insert(decls.end(), st.begin(), st.end());
+            }
+        if (decls.empty()) {
+            out.append(src, lt, j - lt);
+            i = j;
+            continue;
+        }
+        attrs.erase(std::remove_if(attrs.begin(), attrs.end(), [](const auto& a) { return a.first == L"style"; }), attrs.end());
+        for (const auto& [k, v] : decls) {
+            if (!SvgPresentation(k)) continue;
+            auto it = std::find_if(attrs.begin(), attrs.end(), [&](const auto& a) { return a.first == k; });
+            if (it != attrs.end()) it->second = v;
+            else attrs.push_back({k, v});
+        }
+        out += L'<' + name;
+        for (const auto& [k, v] : attrs) {
+            std::wstring val = v;
+            for (size_t q = val.find(L'"'); q != npos; q = val.find(L'"', q)) val.replace(q, 1, L"&quot;");
+            out += L' ' + k + L"=\"" + val + L'"';
+        }
+        out += selfClose ? L"/>" : L">";
+        i = j;
+    }
+    return out;
+}
+
+bool PvSvg(const std::wstring& path, PreviewResult& r) {
+    const std::vector<uint8_t> data = PvReadAll(path, 16ull << 20);
+    if (data.empty()) return false;
+    std::wstring w;
+    const bool utf16 = data.size() >= 2 && data[0] == 0xFF && data[1] == 0xFE;
+    if (utf16) {
+        w.assign(reinterpret_cast<const wchar_t*>(data.data() + 2), (data.size() - 2) / 2);
+    } else {
+        const size_t s = data.size() >= 3 && data[0] == 0xEF && data[1] == 0xBB && data[2] == 0xBF ? 3 : 0;
+        const char* p = reinterpret_cast<const char*>(data.data() + s);
+        const int n = MultiByteToWideChar(CP_UTF8, 0, p, static_cast<int>(data.size() - s), nullptr, 0);
+        w.resize(std::max(0, n));
+        if (n > 0) MultiByteToWideChar(CP_UTF8, 0, p, static_cast<int>(data.size() - s), w.data(), n);
+    }
+    if (w.find(L"<svg") == std::wstring::npos) return false;
+    std::wstring css = SvgInlineCss(w);
+    if (utf16 && css.rfind(L"<?xml", 0) == 0) css.erase(0, css.find(L"?>") + 2);  // it said UTF-16; it goes as UTF-8
+    const int m = WideCharToMultiByte(CP_UTF8, 0, css.data(), static_cast<int>(css.size()), nullptr, 0, nullptr, nullptr);
+    r.svg.resize(std::max(0, m));
+    if (m > 0) WideCharToMultiByte(CP_UTF8, 0, css.data(), static_cast<int>(css.size()), r.svg.data(), m, nullptr, nullptr);
+    // the source, shown as text when Direct2D can't draw it
+    const size_t keep = std::min<size_t>(w.size(), 256 * 1024);
+    r.truncated = keep < w.size();
+    for (size_t i = 0; i < keep; ++i)
+        if (w[i] != L'\r') r.text += w[i];
+    r.kind = 8;
+    return true;
+}
 bool PvIsJson(const std::wstring& ext) { return ext == L".json" || ext == L".geojson" || ext == L".har" || ext == L".webmanifest"; }
 
 // --- EXIF: what the camera wrote into a photo, for the lines under it. Tags by number, in JPEG (/app1/ifd) or in
@@ -490,11 +844,13 @@ void PreviewThread() {
     for (;;) {
         std::wstring path;
         uint64_t gen;
+        bool md;
         {
             std::unique_lock lk(g_pvm);
             g_pvcv.wait(lk, [&] { return g_pvReqGen != seen; });
             path = g_pvReq;
             gen = seen = g_pvReqGen;
+            md = g_pvReqMd;
         }
         auto r = std::make_unique<PreviewResult>();
         r->gen = gen;
@@ -508,13 +864,23 @@ void PreviewThread() {
             if (!wic || !PvThumb(wic.Get(), path, *r)) r->kind = 3;
         } else {
             bool done = wic && PvIsImage(ext) && PvImage(wic.Get(), path, *r);
+            if (!done && PvIsFont(ext)) done = PvFont(path, ext, *r);
+            if (!done && ext == L".svg") done = PvSvg(path, *r);
             int text = 0;
             if (!done && !PvIsBinary(ext)) {
                 const bool table = PvIsTable(ext);
                 text = PvText(path, *r, table);
                 done = text == 1;
-                if (done && table) PvTable(ext, *r);
-                else if (done && PvIsJson(ext)) r->indented = JsonIndent(r->text);
+                if (done && table) {
+                    PvTable(ext, *r);
+                } else if (done && PvIsJson(ext)) {
+                    r->indented = JsonIndent(r->text);
+                } else if (done && md && PvIsMarkdown(ext)) {
+                    r->md = std::make_unique<MdDoc>();
+                    r->md->blocks = MdParse(r->text);
+                    r->text.clear();
+                    r->kind = 6;
+                }
             }
             bool icon = false;
             if (!done && wic) done = PvThumb(wic.Get(), path, *r, &icon);
@@ -548,6 +914,8 @@ void PreviewLoad() {
     g_pv.lines.clear();
     g_pv.scroll = 0;
     g_pv.scrollX = 0;
+    g_pv.svg.Reset();
+    g_pv.svgTried = false;
     g_pv.loading = false;
     if (g_pv.path.empty()) {
         Invalidate();
@@ -564,10 +932,29 @@ void PreviewLoad() {
     {
         std::lock_guard lk(g_pvm);
         g_pvReq = g_pv.path;
+        g_pvReqMd = g_cfg.previewMarkdown;
         g_pv.gen = ++g_pvReqGen;
     }
     g_pvcv.notify_one();
     Invalidate();
+}
+
+// A text result's lines and highlighting, for drawing.
+void PvTextLines(PreviewResult& r) {
+    g_pv.lines.clear();
+    g_pv.spans.clear();
+    // tabs become four spaces: the mono layout and the wrap arithmetic then agree
+    for (size_t p = r.text.find(L'\t'); p != std::wstring::npos; p = r.text.find(L'\t', p + 4)) r.text.replace(p, 1, L"    ");
+    if (const Lang* l = LangFor(r.path)) g_pv.spans = Highlight(r.text, *l);
+    size_t start = 0;
+    const std::wstring& s = r.text;
+    while (start <= s.size() && g_pv.lines.size() < 20000) {
+        size_t nl = s.find(L'\n', start);
+        size_t end = nl == std::wstring::npos ? s.size() : nl;
+        g_pv.lines.push_back({start, end - start});
+        if (nl == std::wstring::npos) break;
+        start = nl + 1;
+    }
 }
 
 void PreviewApply(PreviewResult* raw) {
@@ -605,20 +992,9 @@ void PreviewApply(PreviewResult* raw) {
             g_pv.colW.push_back(std::clamp(std::ceil(w) + 18, 44.f, 280.f));
         }
     }
-    if (r->kind == 2) {
-        // tabs become four spaces: the mono layout and the wrap arithmetic then agree
-        for (size_t p = r->text.find(L'\t'); p != std::wstring::npos; p = r->text.find(L'\t', p + 4)) r->text.replace(p, 1, L"    ");
-        if (const Lang* l = LangFor(r->path)) g_pv.spans = Highlight(r->text, *l);
-        size_t start = 0;
-        const std::wstring& s = r->text;
-        while (start <= s.size() && g_pv.lines.size() < 20000) {
-            size_t nl = s.find(L'\n', start);
-            size_t end = nl == std::wstring::npos ? s.size() : nl;
-            g_pv.lines.push_back({start, end - start});
-            if (nl == std::wstring::npos) break;
-            start = nl + 1;
-        }
-    }
+    g_pv.svg.Reset();
+    g_pv.svgTried = false;
+    if (r->kind == 2) PvTextLines(*r);
     if (!r->typeName.empty()) g_pvTypes[PvExtKey(r->path)] = r->typeName;
     g_pv.res = std::move(r);
     Invalidate();
@@ -654,12 +1030,58 @@ float MonoCharW() {
     return w;
 }
 
-// Brushes for colored runs inside one text layout, for this render target (released with it).
-std::unordered_map<UINT32, ComPtr<ID2D1SolidColorBrush>> g_pvBrushes;
-ID2D1SolidColorBrush* PvBrush(UINT32 rgb) {
-    auto& b = g_pvBrushes[rgb];
-    if (!b) g_rt->CreateSolidColorBrush(D2D1::ColorF(rgb), &b);
-    return b.Get();
+// A light checkerboard, behind what can be transparent (SVG), for this render target (released with it).
+ComPtr<ID2D1BitmapBrush> g_pvChecker;
+ID2D1BitmapBrush* CheckerBrush() {
+    if (!g_pvChecker) {
+        uint32_t px[16 * 16];
+        for (int y = 0; y < 16; ++y)
+            for (int x = 0; x < 16; ++x) px[y * 16 + x] = (x / 8 + y / 8) % 2 ? 0xFFE4E4E8 : 0xFFFFFFFF;
+        ComPtr<ID2D1Bitmap> bmp;
+        const D2D1_BITMAP_PROPERTIES props = D2D1::BitmapProperties(D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED), 96.f, 96.f);
+        if (SUCCEEDED(g_rt->CreateBitmap(D2D1::SizeU(16, 16), px, 16 * 4, props, &bmp)))
+            g_rt->CreateBitmapBrush(bmp.Get(), D2D1::BitmapBrushProperties(D2D1_EXTEND_MODE_WRAP, D2D1_EXTEND_MODE_WRAP), &g_pvChecker);
+    }
+    return g_pvChecker.Get();
+}
+
+// The SVG made a Direct2D document, on its first draw. False: Direct2D can't draw it (old Windows, or not valid).
+bool PvSvgOpen() {
+    g_pv.svgTried = true;
+    ComPtr<ID2D1DeviceContext5> dc;
+    if (!g_pv.res || g_pv.res->svg.empty() || FAILED(g_rt.As(&dc))) return false;
+    ComPtr<IStream> st;
+    st.Attach(SHCreateMemStream(reinterpret_cast<const BYTE*>(g_pv.res->svg.data()), static_cast<UINT>(g_pv.res->svg.size())));
+    ComPtr<ID2D1SvgDocument> doc;
+    if (!st || FAILED(dc->CreateSvgDocument(st.Get(), D2D1::SizeF(100, 100), &doc)) || !doc) return false;
+    ComPtr<ID2D1SvgElement> root;
+    doc->GetRoot(&root);
+    if (!root) return false;
+    // its size: width and height, or the viewBox's; then it is made to fill whatever it is given
+    float w = 0, h = 0;
+    D2D1_SVG_LENGTH len{};
+    if (SUCCEEDED(root->GetAttributeValue(L"width", D2D1_SVG_ATTRIBUTE_POD_TYPE_LENGTH, &len, sizeof(len))) && len.units == D2D1_SVG_LENGTH_UNITS_NUMBER) w = len.value;
+    if (SUCCEEDED(root->GetAttributeValue(L"height", D2D1_SVG_ATTRIBUTE_POD_TYPE_LENGTH, &len, sizeof(len))) && len.units == D2D1_SVG_LENGTH_UNITS_NUMBER) h = len.value;
+    D2D1_SVG_VIEWBOX vb{};
+    const bool hasVb = SUCCEEDED(root->GetAttributeValue(L"viewBox", D2D1_SVG_ATTRIBUTE_POD_TYPE_VIEWBOX, &vb, sizeof(vb))) && vb.width > 0 && vb.height > 0;
+    if (!hasVb) {
+        vb = {0, 0, w > 0 ? w : 300.f, h > 0 ? h : 150.f};
+        root->SetAttributeValue(L"viewBox", D2D1_SVG_ATTRIBUTE_POD_TYPE_VIEWBOX, &vb, sizeof(vb));
+    }
+    if (w <= 0 && h > 0) w = h * vb.width / vb.height;
+    else if (h <= 0 && w > 0) h = w * vb.height / vb.width;
+    else if (w <= 0) {
+        w = vb.width;
+        h = vb.height;
+    }
+    const D2D1_SVG_LENGTH full{100.f, D2D1_SVG_LENGTH_UNITS_PERCENTAGE};
+    root->SetAttributeValue(L"width", D2D1_SVG_ATTRIBUTE_POD_TYPE_LENGTH, &full, sizeof(full));
+    root->SetAttributeValue(L"height", D2D1_SVG_ATTRIBUTE_POD_TYPE_LENGTH, &full, sizeof(full));
+    g_pv.svg = doc;
+    g_pv.svgW = w;
+    g_pv.svgH = h;
+    g_pv.svgVp = {};
+    return true;
 }
 
 // A "label ...... value" line in the info block.
@@ -678,6 +1100,13 @@ void DrawPreview(float W, float H) {
     // left edge: drag to change the width (double click: back to the default)
     Fill(D2D1::RectF(x0, y0, x0 + 1, y1), g_pvDrag || IsHover(HitKind::PreviewEdge, 0) ? cDim : cBorder);
     g_hits.push_back({D2D1::RectF(x0 - 3, y0, x0 + 4, y1), HitKind::PreviewEdge, 0});
+    // Markdown rendered or as source changed (palette, settings): the same item again
+    static bool mdShown = g_cfg.previewMarkdown;
+    if (mdShown != g_cfg.previewMarkdown) {
+        mdShown = g_cfg.previewMarkdown;
+        g_pv.want.clear();
+        g_pv.path = L"\x01";
+    }
     // request the new item once the cursor stops
     std::wstring want = PreviewTarget();
     if (want != g_pv.want) {
@@ -736,6 +1165,13 @@ void DrawPreview(float W, float H) {
                                      Thousands(g_pv.res->cols) + L" columns"};
         else if (rowMatches && g_pv.res && g_pv.res->indented)
             info[3] = {L"Shown", L"Indented for reading"};
+        else if (rowMatches && g_pv.res && g_pv.res->kind == 6)
+            info[3] = {L"Shown", L"Rendered"};
+        else if (rowMatches && g_pv.res && g_pv.res->kind == 7)
+            info[3] = {L"Font", g_pv.res->fontName + L"  ·  " + g_pv.res->fontFace +
+                                    (g_pv.res->fontFaces > 1 ? L"  ·  " + Thousands(g_pv.res->fontFaces) + L" faces" : L"")};
+        else if (rowMatches && g_pv.res && g_pv.res->kind == 8 && g_pv.svg)
+            info[3] = {L"Dimensions", ExifNum(g_pv.svgW, 1) + L" × " + ExifNum(g_pv.svgH, 1)};
         else if (OnlineOnly(e.attrs)) info[3] = {L"Storage", L"Online only"};
         else if (e.attrs & FILE_ATTRIBUTE_PINNED) info[3] = {L"Storage", L"Always on this PC"};
     }
@@ -807,6 +1243,88 @@ void DrawPreview(float W, float H) {
         Text(L"Online only", g_fmtCenter.Get(), L, mid - 18, R, mid + 2);
         Color(cFaint);
         Text(L"Open it to download it", g_fmtCenter.Get(), L, mid + 2, R, mid + 22);
+    } else if (g_pv.res && g_pv.res->kind == 6 && g_pv.res->md) {
+        MdDoc& d = *g_pv.res->md;
+        const float mr = R - 4;  // room for the text's last letter in italics
+        if (d.width != mr - L || d.fonts != g_fmtName.Get()) MdLayout(d, mr - L);
+        g_pv.scroll = std::min(g_pv.scroll, std::max(0.f, d.height - (bot - top)));
+        if (d.blocks.empty()) {
+            Color(cFaint);
+            Text(L"Empty file", g_fmtCenter.Get(), L, top, R, top + 60);
+        }
+        MdDraw(d, L, mr, top - g_pv.scroll, top, bot);
+    } else if (g_pv.res && g_pv.res->kind == 7 && g_pv.res->fontFmt.size() >= 7) {
+        // a font: its name in itself, the alphabet, then a sentence from small to big
+        struct FontLine {
+            int fmt;
+            const wchar_t* text;
+            const wchar_t* size;
+        };
+        static const FontLine lines[] = {
+            {0, nullptr, nullptr},
+            {1, L"ABCDEFGHIJKLMNOPQRSTUVWXYZ", nullptr},
+            {1, L"abcdefghijklmnopqrstuvwxyz", nullptr},
+            {1, L"0123456789 .,:;!?&@#%$€()", nullptr},
+            {2, L"The quick brown fox jumps over the lazy dog", L"12"},
+            {3, L"The quick brown fox jumps over the lazy dog", L"16"},
+            {4, L"The quick brown fox jumps over the lazy dog", L"22"},
+            {5, L"The quick brown fox jumps over the lazy dog", L"30"},
+            {6, L"The quick brown fox jumps over the lazy dog", L"40"},
+        };
+        float y = top + 2 - g_pv.scroll;
+        for (size_t li = 0; li < std::size(lines); ++li) {
+            const FontLine& fl = lines[li];
+            const std::wstring text = fl.text ? fl.text : g_pv.res->fontName;
+            const float x = L + (fl.size ? 24.f : 0.f);
+            ComPtr<IDWriteTextLayout> lay;
+            if (FAILED(g_dw->CreateTextLayout(text.c_str(), static_cast<UINT32>(text.size()), g_pv.res->fontFmt[fl.fmt].Get(),
+                                              std::max(20.f, R - x), 10000.f, &lay)))
+                continue;
+            DWRITE_TEXT_METRICS m{};
+            lay->GetMetrics(&m);
+            if (y + m.height >= top && y <= bot) {
+                if (fl.size) {
+                    const float first = m.height / std::max<UINT32>(1, m.lineCount);
+                    Color(cFaint);
+                    Text(fl.size, wcslen(fl.size), g_fmtName.Get(), L, y, x, y + first);
+                }
+                Color(li == 0 ? cText : 0xD4D4DA);
+                g_rt->DrawTextLayout(D2D1::Point2F(x, y), lay.Get(), g_brush.Get(), D2D1_DRAW_TEXT_OPTIONS_CLIP);
+            }
+            y += m.height + (li == 0 ? 6.f : 4.f);
+            if (li == 0 || li == 3) {
+                HLine(L, R, y + 4);
+                y += 14;
+            }
+        }
+        g_pv.scroll = std::min(g_pv.scroll, std::max(0.f, y + g_pv.scroll - bot));
+    } else if (g_pv.res && g_pv.res->kind == 8) {
+        // SVG: fit to the box (it is vector: as big as it fits), on a light checkerboard
+        if (!g_pv.svg && !g_pv.svgTried && !PvSvgOpen()) {  // Direct2D can't draw it: its source, as text
+            g_pv.res->kind = 2;
+            PvTextLines(*g_pv.res);
+            Invalidate();
+        }
+        ComPtr<ID2D1DeviceContext5> dc;
+        if (g_pv.svg && g_pv.svgW > 0 && g_pv.svgH > 0 && SUCCEEDED(g_rt.As(&dc))) {
+            const float bw = box.right - box.left, bh = box.bottom - box.top;
+            const float k = std::min(bw / g_pv.svgW, bh / g_pv.svgH);
+            const float dw = std::max(1.f, std::floor(g_pv.svgW * k)), dh = std::max(1.f, std::floor(g_pv.svgH * k));
+            const float dx = std::round(box.left + (bw - dw) / 2), dy = std::round(box.top + (bh - dh) / 2);
+            if (g_pv.svgVp.width != dw || g_pv.svgVp.height != dh) {
+                g_pv.svgVp = D2D1::SizeF(dw, dh);
+                g_pv.svg->SetViewportSize(g_pv.svgVp);
+            }
+            if (ID2D1BitmapBrush* chk = CheckerBrush()) {
+                chk->SetTransform(D2D1::Matrix3x2F::Translation(dx, dy));
+                g_rt->FillRectangle(D2D1::RectF(dx, dy, dx + dw, dy + dh), chk);
+            }
+            D2D1_MATRIX_3X2_F old;
+            g_rt->GetTransform(&old);
+            g_rt->SetTransform(D2D1::Matrix3x2F::Translation(dx, dy) * old);
+            dc->DrawSvgDocument(g_pv.svg.Get());
+            g_rt->SetTransform(old);
+        }
     } else if (g_pv.res && g_pv.res->kind == 4) {
         // hex: offset, the bytes (zeros faint) and the same as characters; 16, 8 or 4 a line, whatever fits
         const std::vector<uint8_t>& b = g_pv.res->bytes;
@@ -853,9 +1371,9 @@ void DrawPreview(float W, float H) {
             }
             ComPtr<IDWriteTextLayout> lay;
             if (SUCCEEDED(g_dw->CreateTextLayout(line, static_cast<UINT32>(k), g_fmtMono.Get(), 4000, lh, &lay))) {
-                lay->SetDrawingEffect(PvBrush(cDim), DWRITE_TEXT_RANGE{static_cast<UINT32>(textAt), static_cast<UINT32>(k - textAt)});
-                lay->SetDrawingEffect(PvBrush(cFaint), DWRITE_TEXT_RANGE{0, static_cast<UINT32>(od)});
-                for (auto [at, len] : faint) lay->SetDrawingEffect(PvBrush(cFaint), DWRITE_TEXT_RANGE{at, len});
+                lay->SetDrawingEffect(RunBrush(cDim), DWRITE_TEXT_RANGE{static_cast<UINT32>(textAt), static_cast<UINT32>(k - textAt)});
+                lay->SetDrawingEffect(RunBrush(cFaint), DWRITE_TEXT_RANGE{0, static_cast<UINT32>(od)});
+                for (auto [at, len] : faint) lay->SetDrawingEffect(RunBrush(cFaint), DWRITE_TEXT_RANGE{at, len});
                 Color(0xD4D4DA);
                 g_rt->DrawTextLayout(D2D1::Point2F(L, y), lay.Get(), g_brush.Get(), D2D1_DRAW_TEXT_OPTIONS_CLIP);
             }

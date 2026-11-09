@@ -234,6 +234,8 @@ std::vector<SetRow> SettingsRows(int section) {
             toggle(L"Cloud status", L"A cloud next to what is online only, a check next to what is always on this PC. Jolt never downloads them to list or preview.",
                    [] { return g_cfg.cloudStatus; }, [=](bool b) { SetGeneral(L"cloud_status", yesNo(b)); });
             toggle(L"Wrap long lines in the text preview", L"", [] { return g_cfg.previewWrap; }, [=](bool b) { SetGeneral(L"preview_wrap", yesNo(b)); });
+            toggle(L"Render Markdown in the preview", L"Off: its source, highlighted.", [] { return g_cfg.previewMarkdown; },
+                   [=](bool b) { SetGeneral(L"preview_markdown", yesNo(b)); });
             toggle(L"Open drives as they are connected", L"USB sticks and drives open in a tab.", [] { return g_cfg.openDrives; },
                    [=](bool b) { SetGeneral(L"open_drives", yesNo(b)); });
             head(L"Columns");

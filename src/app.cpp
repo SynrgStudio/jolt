@@ -21,8 +21,8 @@
 #include <commctrl.h>
 #include <commoncontrols.h>
 #include <dwmapi.h>
-#include <d2d1.h>
-#include <dwrite.h>
+#include <d2d1_3.h>  // and d2d1.h: SVG documents (Windows 10 1703+) for the preview
+#include <dwrite_3.h>  // and dwrite.h: fonts from memory for the preview
 #include <wincodec.h>
 #include <wrl/client.h>
 
@@ -4104,10 +4104,14 @@ void ViewEditorOpen(int pane);
 #include "dups.inl"
 #include "syntax.inl"
 #include "grep.inl"
+#include "markdown.inl"
 #include "preview.inl"
 void PreviewReleaseBitmap() {
     g_pv.d2d.Reset();
-    g_pvBrushes.clear();
+    g_pv.svg.Reset();
+    g_pv.svgTried = false;
+    g_pvChecker.Reset();
+    g_runBrushes.clear();
 }
 #include "background.inl"
 #include "install.inl"
@@ -4585,6 +4589,13 @@ void RunCommand(Cmd cmd) {
         case Cmd::FolderSiblings: CrumbMenu(CrumbSiblingsDir(t.path), g_crumbLast[g_act]); break;
         case Cmd::OpenAsAdmin:
             FolderNoteAct(t.sel >= 0 && t.sel < Count() && EntryAt(t, t.sel).isDir() ? RowPath(t, t.sel) : t.path);
+            break;
+        case Cmd::PreviewMarkdown:
+            g_cfg.previewMarkdown = !g_cfg.previewMarkdown;
+            ConfigSetValue(L"general", L"preview_markdown", g_cfg.previewMarkdown ? L"yes" : L"no");
+            RefreshConfigSig();
+            S.message = g_cfg.previewMarkdown ? L"Preview: Markdown rendered" : L"Preview: Markdown as its source";
+            Invalidate();
             break;
         case Cmd::PreviewWrap:
             g_cfg.previewWrap = !g_cfg.previewWrap;

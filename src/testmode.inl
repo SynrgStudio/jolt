@@ -580,7 +580,18 @@ void TestRunStep() {
             else if (r->kind == 2) out += L"text, " + std::to_wstring(g_pv.lines.size()) + L" lines" + (r->indented ? L", indented" : L"");
             else if (r->kind == 3) out += L"online only";
             else if (r->kind == 4) out += L"hex, " + std::to_wstring(r->bytes.size()) + L" bytes of " + std::to_wstring(r->fileSize);
-            else if (r->kind == 5) {
+            else if (r->kind == 6 && r->md) {
+                int count[7] = {};
+                for (const MdBlock& b : r->md->blocks) ++count[static_cast<int>(b.kind)];
+                out += L"markdown, " + std::to_wstring(r->md->blocks.size()) + L" blocks: " + std::to_wstring(count[0]) + L" paragraphs, " +
+                       std::to_wstring(count[1]) + L" headings, " + std::to_wstring(count[2]) + L" items, " + std::to_wstring(count[3]) +
+                       L" quotes, " + std::to_wstring(count[4]) + L" code, " + std::to_wstring(count[5]) + L" rules, " +
+                       std::to_wstring(count[6]) + L" tables";
+            } else if (r->kind == 7) {
+                out += L"font " + r->fontName + L" / " + r->fontFace + L", " + std::to_wstring(r->fontFaces) + L" faces";
+            } else if (r->kind == 8) {
+                out += g_pv.svg ? L"svg " + ExifNum(g_pv.svgW, 1) + L"x" + ExifNum(g_pv.svgH, 1) : std::wstring(L"svg, not drawn yet");
+            } else if (r->kind == 5) {
                 out += L"table, " + std::to_wstring(r->rows.size()) + L" rows x " + std::to_wstring(r->cols) + L" columns, numbers in";
                 for (size_t c = 0; c < g_pv.colNum.size(); ++c)
                     if (g_pv.colNum[c]) out += L" " + std::to_wstring(c + 1);
