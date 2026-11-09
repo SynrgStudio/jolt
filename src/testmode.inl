@@ -45,6 +45,33 @@ POINTL g_testDragPt{};
 DWORD g_testDragKeys = 0;
 double g_testWaitUntil = 0;
 
+void TestLog(const std::wstring& s);
+
+// The picture the preview would copy, as files next to the captures (the real clipboard is left alone):
+// clip.bmp (the DIB as it goes) and clip.png when there is one.
+void TestClipImage(const ClipImage& c) {
+    std::wstring what = L"clipboard (test): " + std::wstring(c.v5 ? L"DIBV5 32-bit" : L"DIB 24-bit") + L" " + std::to_wstring(c.w) + L"x" + std::to_wstring(c.h);
+    if (const void* p = GlobalLock(c.dib)) {
+        const SIZE_T n = GlobalSize(c.dib);
+        BITMAPFILEHEADER fh{};
+        fh.bfType = 0x4D42;
+        fh.bfSize = static_cast<DWORD>(sizeof(fh) + n);
+        fh.bfOffBits = static_cast<DWORD>(sizeof(fh) + (c.v5 ? sizeof(BITMAPV5HEADER) : sizeof(BITMAPINFOHEADER)));
+        std::ofstream f(g_testOut + L"\\clip.bmp", std::ios::binary);
+        f.write(reinterpret_cast<const char*>(&fh), sizeof(fh));
+        f.write(static_cast<const char*>(p), static_cast<std::streamsize>(n));
+        GlobalUnlock(c.dib);
+    }
+    if (c.png)
+        if (const void* p = GlobalLock(c.png)) {
+            std::ofstream f(g_testOut + L"\\clip.png", std::ios::binary);
+            f.write(static_cast<const char*>(p), static_cast<std::streamsize>(GlobalSize(c.png)));
+            GlobalUnlock(c.png);
+            what += L" + PNG";
+        }
+    TestLog(what);
+}
+
 void TestLog(const std::wstring& s) {
     std::wstring f = g_testOut + L"\\log.txt";
     std::ofstream out(f, std::ios::binary | std::ios::app);

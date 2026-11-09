@@ -4602,6 +4602,7 @@ void RunCommand(Cmd cmd) {
             if (g_preview) PreviewPlay();
             break;
         case Cmd::PreviewRotate: PreviewRotate(1); break;
+        case Cmd::PreviewCopyImage: PreviewCopyImage(); break;
         case Cmd::PreviewRotateLeft: PreviewRotate(-1); break;
         case Cmd::PreviewZoom: PreviewToolClick(2); break;
         case Cmd::PreviewZoomIn: PreviewZoomStep(1); break;
@@ -5434,6 +5435,9 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             g_thumbDirty = false;
             Invalidate();
             return 0;
+        case WM_APP_CLIPIMG:
+            PreviewClipDone(reinterpret_cast<ClipImage*>(lp));
+            return 0;
         case WM_APP_MEDIA:
             MediaEvent(static_cast<DWORD>(wp), static_cast<uint64_t>(lp));
             return 0;
@@ -5759,7 +5763,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             POINT pt{GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
             ClientToScreen(hwnd, &pt);
             const Hit side = HitAt(x, y);
-            if (side.kind == HitKind::Side) OpenSideMenu(side.idx, pt);
+            if (PreviewMenuAt(x, y, pt)) {
+            } else if (side.kind == HitKind::Side) OpenSideMenu(side.idx, pt);
             else if (side.kind == HitKind::Tab || side.kind == HitKind::TabClose) OpenTabMenu(side.idx, pt);
             else if (side.kind == HitKind::Crumb) CrumbMenu(CrumbSiblingsDir(g_crumbPaths[side.idx]), side.r);
             else if (side.kind == HitKind::CrumbChev) CrumbMenu(g_crumbPaths[side.idx], side.r);
