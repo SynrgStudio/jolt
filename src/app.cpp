@@ -4113,6 +4113,7 @@ void ViewEditorOpen(int pane);
 #include "markdown.inl"
 #include "media.inl"
 #include "preview.inl"
+#include "archive.inl"
 void PreviewReleaseBitmap() {
     g_pv.d2d.Reset();
     g_media.d2d.Reset();
@@ -4603,6 +4604,11 @@ void RunCommand(Cmd cmd) {
             break;
         case Cmd::PreviewRotate: PreviewRotate(1); break;
         case Cmd::PreviewCopyImage: PreviewCopyImage(); break;
+        case Cmd::Compress: ArchiveCompress(false); break;
+        case Cmd::Compress7z: ArchiveCompress(true); break;
+        case Cmd::Extract: ArchiveExtract(false); break;
+        case Cmd::ExtractTo: ArchiveExtract(true); break;
+        case Cmd::ArchiveStop: ArchiveStop(); break;
         case Cmd::PreviewRotateLeft: PreviewRotate(-1); break;
         case Cmd::PreviewZoom: PreviewToolClick(2); break;
         case Cmd::PreviewZoomIn: PreviewZoomStep(1); break;
@@ -5434,6 +5440,9 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case WM_APP_THUMB:
             g_thumbDirty = false;
             Invalidate();
+            return 0;
+        case WM_APP_ARC:
+            ArcMessage(wp, lp);
             return 0;
         case WM_APP_CLIPIMG:
             PreviewClipDone(reinterpret_cast<ClipImage*>(lp));

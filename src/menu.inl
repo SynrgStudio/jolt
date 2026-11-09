@@ -606,6 +606,9 @@ void RegisterPopupClass(HINSTANCE inst) {
 constexpr UINT kCmdFirst = 1, kCmdLast = 0x6FFF, kCmdFav = 0x7000, kCmdCustom = 0x7100;  // kCmdCustom + index: the user's commands
 constexpr UINT kCmdTemplate = 0x7200, kCmdTemplatesFolder = 0x72FF;                   // kCmdTemplate + index into Templates()
 constexpr UINT kCmdFolderColor = 0x7300;  // + 0: none; + 1 + index into kFolderColors
+constexpr UINT kCmdArchive = 0x7400;      // + 0 zip, 1 7z, 2 extract here, 3 extract to a folder (archive.inl)
+std::vector<MenuItem> ArchiveMenuItems(UINT firstId);  // archive.inl
+void ArchiveMenuPick(UINT what);                       // archive.inl
 constexpr UINT kCmdTagNew = 0x7FFF, kCmdTag = 0x8000;                                   // kCmdTag + index into AllTags()
 void TagPaletteOpen();  // palette.inl
 void RunCustomCommand(int i);  // ops.inl
@@ -1275,6 +1278,10 @@ void OpenShellMenu(POINT screenPt, int row) {
             fc.sub = FolderColorItems(dirs);
             items.insert(items.begin() + 1, fc);
         }
+        // compress, and extract when archives are selected: after Tags and Folder color, before the separator
+        const auto sep1 = std::find_if(items.begin(), items.end(), [](const MenuItem& m) { return m.sep; });
+        const std::vector<MenuItem> arc = ArchiveMenuItems(kCmdArchive);
+        items.insert(sep1, arc.begin(), arc.end());
     }
     std::wstring favPath;  // on a single folder, it can be added to favorites without entering it
     if (ctx == L"folder" && SelCount(t) == 1) {
@@ -1303,6 +1310,10 @@ void OpenShellMenu(POINT screenPt, int row) {
                 return;
             }
             if (FolderColorPick(id, SelectedFolders(T()))) return;
+            if (id >= kCmdArchive && id < kCmdArchive + 4) {
+                ArchiveMenuPick(id - kCmdArchive);
+                return;
+            }
             if (id == kCmdTemplatesFolder) {
                 OpenTemplatesFolder();
                 return;

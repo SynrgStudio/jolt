@@ -139,6 +139,8 @@ works too). Options in `config.txt`: `run_in_background`, `global_hotkey`, `tray
 | Ctrl+N / Ctrl+Shift+N | new file / new folder, ready to rename |
 | New → template | **templates**: every file or folder in `%APPDATA%\Jolt\Templates` is an entry at the top of the right-click "New" submenu, and in Ctrl+K as "New: name" (the `new_from_template` command lists just them). A copy lands in the folder, named like the template, ready to rename. "Templates folder…" at the end of the submenu (and Settings → More) opens it |
 | Ctrl+Shift+D | duplicate ("name - Copy.ext") |
+| Right click → Compress to ZIP / 7z | **compress** the selection next to it, named after the item (or the folder, for several). Zip works with what Windows has; with 7-Zip installed it is faster and 7z works too. Progress in the status bar, Ctrl+K → "archive stop" stops it, Ctrl+Z sends the archive to the Recycle Bin |
+| Right click → Extract here / Extract to "name\" | **extract** zip, 7z, rar, tar.gz and the like. "Here" puts an archive holding one folder (or one file) right in the folder, and anything else in a folder named after it, so nothing spills out; "to" always makes that folder. 7-Zip is used when installed; without it, zip goes through Windows and the rest through Windows' tar.exe (which can't write some non-Latin names). Also Ctrl+K → "compress", "extract" |
 | Ctrl+Shift+G | **group in a new folder**: moves the selection into a new folder next to it (named after the item if there is one) and starts renaming it. Ctrl+Z undoes it in two steps |
 | Ctrl+Shift+C | copy the path of the selection (or of the folder), with quotes only if needed |
 | Ctrl+Alt+C | copy the name of the selection (or of the folder). Ctrl+K → "copy the path with forward slashes" gives `C:/Users/...` |
