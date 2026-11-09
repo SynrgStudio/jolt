@@ -37,6 +37,7 @@ struct Config {
     bool showHidden = true;
     bool previewWrap = true;  // long lines wrap in the text preview
     bool previewMarkdown = true;  // Markdown rendered in the preview (no: its source, highlighted)
+    bool browseArchives = true;   // Enter goes into zip, 7z, rar, tar and cab like a folder (no: they open with their program)
     bool checkerDark = false;     // the checkerboard behind see-through images and SVG: light, or dark
     int previewHold = 150;        // ms the preview's key is held before the floating preview shows (50 to 1000)
     bool cloudStatus = true;  // marks the files of cloud folders that are online only, or always on this PC
@@ -337,6 +338,8 @@ void WriteDefaultConfig() {
         "preview_wrap = yes\n"
         "# Show Markdown rendered in the preview (headings, lists, tables...), or as its source: yes / no\n"
         "preview_markdown = yes\n"
+        "# Enter goes into zip, 7z, rar, tar and cab archives like a folder: yes / no (no: they open with their program)\n"
+        "browse_archives = yes\n"
         "# The checkerboard behind see-through images and SVG in the preview: light / dark\n"
         "preview_checker = light\n"
         "# How long Space is held before the big floating preview shows, in milliseconds (50 to 1000). Shorter is\n"
@@ -474,6 +477,7 @@ void LoadConfig() {
             else if (key == L"show_hidden") g_cfg.showHidden = ParseBool(val);
             else if (key == L"preview_wrap") g_cfg.previewWrap = ParseBool(val);
             else if (key == L"preview_markdown") g_cfg.previewMarkdown = ParseBool(val);
+            else if (key == L"browse_archives") g_cfg.browseArchives = ParseBool(val);
             else if (key == L"preview_checker") g_cfg.checkerDark = Lower(Trim(val)) == L"dark";
             else if (key == L"preview_hold") g_cfg.previewHold = std::clamp(_wtoi(val.c_str()), 50, 1000);
             else if (key == L"cloud_status") g_cfg.cloudStatus = ParseBool(val);

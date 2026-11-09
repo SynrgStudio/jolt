@@ -630,7 +630,7 @@ void TestRunStep() {
                 out += std::wstring(r->media == 2 ? L"video" : L"song") + (r->bmp ? L" with a picture" : L"") + L", " + FormatDuration(r->mDur);
                 if (!r->mTitle.empty()) out += L", " + r->mTitle;
                 if (!r->mArtist.empty()) out += L" by " + r->mArtist;
-                if (MediaFor(r->path)) {
+                if (MediaFor(r->file)) {
                     out += MediaPlaying() ? L" | playing at " : L" | paused at ";
                     out += g_media.engine ? ExifNum(g_media.engine->GetCurrentTime(), 1) + L" s" : L"-";
                     if (g_media.video) out += L", video " + std::to_wstring(g_media.w) + L"x" + std::to_wstring(g_media.h) + (g_media.shown ? L", frames shown" : L", no frame yet");

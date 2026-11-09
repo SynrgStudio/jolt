@@ -38,8 +38,12 @@ struct DropTarget : IDropTarget {
         return r;
     }
 
-    // Target folder under the screen point; "" = none.
+    // Target folder under the screen point; "" = none (inside an archive nothing lands).
     std::wstring TargetAt(POINTL ptl, int& row, int& side, int& tab) {
+        const std::wstring t = TargetAtAny(ptl, row, side, tab);
+        return InArchive(t) ? std::wstring() : t;
+    }
+    std::wstring TargetAtAny(POINTL ptl, int& row, int& side, int& tab) {
         POINT pt{ptl.x, ptl.y};
         ScreenToClient(g_hwnd, &pt);
         float x = pt.x * 96.f / g_dpi, y = pt.y * 96.f / g_dpi;
@@ -223,6 +227,11 @@ void RunPendingDrop() {
 
 // Drags the current selection.
 void StartDrag() {
+    if (InArchive(T().path)) {
+        S.message = L"To take something out of an archive: Ctrl+C here and Ctrl+V there, or right click → Extract";
+        Invalidate();
+        return;
+    }
     ComPtr<IDataObject> pdo = SelectionDataObject();
     if (!pdo) return;
     ReleaseCapture();

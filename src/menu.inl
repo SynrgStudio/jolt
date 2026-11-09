@@ -606,9 +606,10 @@ void RegisterPopupClass(HINSTANCE inst) {
 constexpr UINT kCmdFirst = 1, kCmdLast = 0x6FFF, kCmdFav = 0x7000, kCmdCustom = 0x7100;  // kCmdCustom + index: the user's commands
 constexpr UINT kCmdTemplate = 0x7200, kCmdTemplatesFolder = 0x72FF;                   // kCmdTemplate + index into Templates()
 constexpr UINT kCmdFolderColor = 0x7300;  // + 0: none; + 1 + index into kFolderColors
-constexpr UINT kCmdArchive = 0x7400;      // + 0 zip, 1 7z, 2 extract here, 3 extract to a folder (archive.inl)
+constexpr UINT kCmdArchive = 0x7400;      // + 0 zip, 1 7z, 2 extract here, 3 extract to a folder, 4 browse inside (archive.inl)
 std::vector<MenuItem> ArchiveMenuItems(UINT firstId);  // archive.inl
 void ArchiveMenuPick(UINT what);                       // archive.inl
+void ArcItemMenu(POINT screenPt, int row);             // archive.inl: inside an archive
 constexpr UINT kCmdTagNew = 0x7FFF, kCmdTag = 0x8000;                                   // kCmdTag + index into AllTags()
 void TagPaletteOpen();  // palette.inl
 void RunCustomCommand(int i);  // ops.inl
@@ -1234,6 +1235,10 @@ void OpenShellMenu(POINT screenPt, int row) {
         return;
     }
     if (IsVirtual(t.path)) return;
+    if (InArchive(t.path)) {
+        ArcItemMenu(screenPt, row);
+        return;
+    }
     std::vector<std::wstring> names;
     std::wstring ctx = L"background", folder = t.path;
     if (row >= 0 && row < Count()) {
@@ -1310,7 +1315,7 @@ void OpenShellMenu(POINT screenPt, int row) {
                 return;
             }
             if (FolderColorPick(id, SelectedFolders(T()))) return;
-            if (id >= kCmdArchive && id < kCmdArchive + 4) {
+            if (id >= kCmdArchive && id < kCmdArchive + 5) {
                 ArchiveMenuPick(id - kCmdArchive);
                 return;
             }
