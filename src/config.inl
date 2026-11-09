@@ -10,7 +10,7 @@ enum class Cmd {
     Terminal, OpenExplorer, RealLocation, CollapseGroups, ExpandGroups, GroupByDay, GroupByType, NoGroups,
     SortByType, ZoomIn, ZoomOut, ZoomReset, RowsTaller, RowsShorter, EmptyRecycleBin,
     Undo, Redo, OpenAsAdmin, PinTab, Restore,
-    Install, Quit, RenameMany, FolderSiblings, ViewList, ViewGrid, ViewColumns, ViewBigger, ViewSmaller, Tag, FolderColor, Zen, SizeBars, PreviewWrap,
+    Install, Quit, RenameMany, FolderSiblings, ViewList, ViewGrid, ViewColumns, ViewBigger, ViewSmaller, Tag, FolderColor, Zen, SizeBars, PreviewWrap, PreviewMarkdown,
     FindDuplicates, SelectExtraCopies, SelectPattern, SelectSameExtension, InvertSelection, Settings, Checkboxes, NewFromTemplate, CopyTo, MoveTo, Attributes, InUse, Unblock,
     CustomFirst = 1000  // + index into g_cfg.custom: the user's own commands
 };
@@ -35,6 +35,7 @@ struct Config {
     float fontSize = 12;
     bool showHidden = true;
     bool previewWrap = true;  // long lines wrap in the text preview
+    bool previewMarkdown = true;  // Markdown rendered in the preview (no: its source, highlighted)
     bool cloudStatus = true;  // marks the files of cloud folders that are online only, or always on this PC
     int typoMin = 75;         // searches also show names this close to what was typed, in percent; 0: only real matches
     bool background = true, tray = true, openDrives = false;
@@ -103,6 +104,7 @@ const CmdDef kCommands[] = {
     {L"go_to_location", Cmd::GoToLocation, L"Ctrl+Shift+E", L"open the folder containing the highlighted item"},
     {L"preview", Cmd::Preview, L"Space", L"show or hide the preview"},
     {L"preview_wrap", Cmd::PreviewWrap, L"", L"wrap long lines in the text preview (toggle)"},
+    {L"preview_markdown", Cmd::PreviewMarkdown, L"", L"show Markdown rendered in the preview, or as its source (toggle)"},
     {L"split", Cmd::Split, L"Ctrl+S", L"split view with two panes"},
     {L"other_pane", Cmd::OtherPane, L"Tab", L"switch to the other pane"},
     {L"copy_to_other", Cmd::CopyToOther, L"F5", L"copy the selection to the other pane"},
@@ -317,6 +319,8 @@ void WriteDefaultConfig() {
         "preview_width = 360\n"
         "# Wrap long lines in the text preview: yes / no\n"
         "preview_wrap = yes\n"
+        "# Show Markdown rendered in the preview (headings, lists, tables...), or as its source: yes / no\n"
+        "preview_markdown = yes\n"
         "# Cloud folders (OneDrive and the like): a cloud next to what is online only, a check next to what is always\n"
         "# on this PC: yes / no. Jolt never downloads them to list or preview them, whatever this says.\n"
         "cloud_status = yes\n"
@@ -448,6 +452,7 @@ void LoadConfig() {
             else if (key == L"recents") g_cfg.hotCount = std::clamp(_wtoi(val.c_str()), 0, kHotCountMax);
             else if (key == L"show_hidden") g_cfg.showHidden = ParseBool(val);
             else if (key == L"preview_wrap") g_cfg.previewWrap = ParseBool(val);
+            else if (key == L"preview_markdown") g_cfg.previewMarkdown = ParseBool(val);
             else if (key == L"cloud_status") g_cfg.cloudStatus = ParseBool(val);
             else if (key == L"filter_typos") g_cfg.typoMin = _wtoi(val.c_str()) > 0 ? std::clamp(_wtoi(val.c_str()), 50, 100) : ParseBool(val) ? 75 : 0;
             else if (key == L"run_in_background") g_cfg.background = ParseBool(val);
