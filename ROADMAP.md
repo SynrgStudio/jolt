@@ -2,7 +2,7 @@
 
 Every planned feature, one line per GitHub issue. A line is checked and struck through when its PR is merged.
 
-**45 of 89 done.**
+**46 of 89 done.**
 
 ## Navigation
 
@@ -130,12 +130,12 @@ Every planned feature, one line per GitHub issue. A line is checked and struck t
 
 ## Internals
 
-2 of 12 done.
+3 of 12 done.
 
 - [ ] [#67](https://github.com/SynrgStudio/jolt/issues/67) Incremental listing of huge folders
 - [x] ~~[#68](https://github.com/SynrgStudio/jolt/issues/68) Persistent thumbnail cache~~
 - [ ] [#69](https://github.com/SynrgStudio/jolt/issues/69) Portable mode and config export/import
-- [ ] [#70](https://github.com/SynrgStudio/jolt/issues/70) Opt-in update notice
+- [x] ~~[#70](https://github.com/SynrgStudio/jolt/issues/70) Opt-in update notice~~
 - [ ] [#71](https://github.com/SynrgStudio/jolt/issues/71) Diagnostic log that can be turned on
 - [ ] [#72](https://github.com/SynrgStudio/jolt/issues/72) Accessibility: UI Automation and high contrast
 - [ ] [#73](https://github.com/SynrgStudio/jolt/issues/73) Strings in a file for translation

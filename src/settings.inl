@@ -238,6 +238,8 @@ std::vector<SetRow> SettingsRows(int section) {
                    [=](bool b) { SetGeneral(L"preview_markdown", yesNo(b)); });
             toggle(L"Dark checkerboard behind see-through images", L"Off: a light one, which shows dark drawings best.", [] { return g_cfg.checkerDark; },
                    [=](bool b) { SetGeneral(L"preview_checker", b ? L"dark" : L"light"); });
+            toggle(L"Tell me when there's a new version", L"Asks GitHub once a day; nothing else is sent. Ctrl+K → check for updates asks now.",
+                   [] { return g_cfg.checkUpdates; }, [=](bool b) { SetGeneral(L"check_updates", yesNo(b)); });
             toggle(L"Enter goes into archives", L"Zip, 7z, rar, tar and cab open like folders. Off: with their program.", [] { return g_cfg.browseArchives; },
                    [=](bool b) { SetGeneral(L"browse_archives", yesNo(b)); });
             toggle(L"Open drives as they are connected", L"USB sticks and drives open in a tab.", [] { return g_cfg.openDrives; },

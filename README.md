@@ -48,7 +48,7 @@ Folders open instantly. One small file, no dependencies, no telemetry.
 <tr>
 <td valign="top"><b>🎨 Yours to customize</b><br>Colors, font, sizes and columns in one plain text file that reloads on save.</td>
 <td valign="top"><b>🧩 The real context menu</b><br>Windows' own menu with your extensions, which you can trim and reorder.</td>
-<td valign="top"><b>🔒 Private</b><br>Jolt doesn't connect to the network. Your files stay yours.</td>
+<td valign="top"><b>🔒 Private</b><br>Jolt doesn't connect to the network, unless you turn on update checks. Your files stay yours.</td>
 </tr>
 </table>
 
@@ -139,6 +139,7 @@ works too). Options in `config.txt`: `run_in_background`, `global_hotkey`, `tray
 | Ctrl+N / Ctrl+Shift+N | new file / new folder, ready to rename |
 | New → template | **templates**: every file or folder in `%APPDATA%\Jolt\Templates` is an entry at the top of the right-click "New" submenu, and in Ctrl+K as "New: name" (the `new_from_template` command lists just them). A copy lands in the folder, named like the template, ready to rename. "Templates folder…" at the end of the submenu (and Settings → More) opens it |
 | Ctrl+Shift+D | duplicate ("name - Copy.ext") |
+| Updates | **off by default**: Jolt doesn't touch the network by itself. Turned on (`check_updates = yes`, Settings, or the offer the installed copy makes once in the status bar), it asks GitHub once a day for the latest release and says so in the status bar. A click downloads that release's `jolt.exe`, checks its size, SHA-256 and version, puts it in place of the running one and offers to restart (the tabs come back). Ctrl+K → "check for updates" asks right away, whatever the setting. Nothing is installed without a click, and never an older version |
 | Right click → Compress to ZIP / 7z | **compress** the selection next to it, named after the item (or the folder, for several). Zip works with what Windows has; with 7-Zip installed it is faster and 7z works too. Progress in the status bar, Ctrl+K → "archive stop" stops it, Ctrl+Z sends the archive to the Recycle Bin |
 | Right click → Extract here / Extract to "name\" | **extract** zip, 7z, rar, tar.gz and the like. "Here" puts an archive holding one folder (or one file) right in the folder, and anything else in a folder named after it, so nothing spills out; "to" always makes that folder. 7-Zip is used when installed; without it, zip goes through Windows and the rest through Windows' tar.exe (which can't write some non-Latin names). Also Ctrl+K → "compress", "extract" |
 | Enter on a zip, 7z, rar, tar or cab | **goes into it like a folder** (`browse_archives = no` opens it with its program instead; jar, apk, epub, iso... have "Browse inside" in their right-click menu). Folders, sizes, dates, the preview and the path bar work as anywhere; Enter opens a file (a copy taken out), Ctrl+C copies things out to paste anywhere, dragging takes copies out to drop on a tab, the other pane or another program, F5 extracts into the other pane, right click → Extract next to the archive. Nothing inside can be changed, renamed or deleted |
@@ -425,7 +426,10 @@ Team roles:
 - Approvers: [SynrgStudio](https://github.com/SynrgStudio)
 
 Privacy policy: this program will not transfer any information to other networked systems unless specifically requested
-by the user or the person installing or operating it.
+by the user or the person installing or operating it. The only request it can make by itself is the update check, and only
+when it is turned on (`check_updates = yes`, Settings, or the offer the installed copy makes once): at most once a day it
+asks GitHub's public API which is the latest release of Jolt. Nothing about you or your files is sent; GitHub sees the
+request and your IP address, as with any web page.
 
 ## License
 

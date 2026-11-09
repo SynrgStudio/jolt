@@ -24,6 +24,7 @@
 #include <d2d1_3.h>  // and d2d1.h: SVG documents (Windows 10 1703+) for the preview
 #include <dwrite_3.h>  // and dwrite.h: fonts from memory for the preview
 #include <wincodec.h>
+#include <winhttp.h>        // asking GitHub for a new version, when that is on (update.inl)
 #include <mfapi.h>          // songs and videos in the preview (media.inl)
 #include <mfmediaengine.h>
 #include <wrl/client.h>
@@ -52,6 +53,8 @@
 #pragma comment(lib, "mpr.lib")
 #pragma comment(lib, "bcrypt.lib")  // SHA-256 to compare duplicates
 #pragma comment(lib, "oleaut32.lib")  // UI Automation for test mode (SysFreeString)
+#pragma comment(lib, "winhttp.lib")   // update.inl
+#pragma comment(lib, "version.lib")   // a downloaded update's version resource
 #pragma comment(lib, "mfplat.lib")    // Media Foundation: playing in the preview
 #pragma comment(lib, "mfuuid.lib")
 
@@ -617,7 +620,9 @@ struct Stats {
     double navStart = 0, navMs = -1, enumMs = 0, sortMs = 0;
     bool navPending = false, fromCache = false, show = true;
     std::wstring message;
+    std::wstring link;  // while message is this, it is a link: a click on it runs g_statusLink
 } S;
+std::function<void()> g_statusLink;
 
 std::unordered_map<std::wstring, std::shared_ptr<const Listing>> g_cache;
 bool g_elevated = false;     // this process runs as administrator
@@ -633,7 +638,7 @@ bool g_ignoreClipUpdate = false;
 int g_dropRow = -1, g_dropPane = 0, g_dropSide = -1, g_dropTab = -1;  // target highlighted during a drag
 
 // Clickable areas, recomputed on every draw.
-enum class HitKind { None, Tab, TabClose, TabNew, SideToggle, AppMenu, Back, Fwd, Up, Crumb, CrumbChev, PathEmpty, Side, Header, Divider, ViewBtn, FoldBtn, ColEdge, PreviewEdge, FolderNote, HeadCheck, HeadCol, Miller, PreviewPlay, PreviewSeek, PreviewImage, PreviewTool };
+enum class HitKind { None, Tab, TabClose, TabNew, SideToggle, AppMenu, Back, Fwd, Up, Crumb, CrumbChev, PathEmpty, Side, Header, Divider, ViewBtn, FoldBtn, ColEdge, PreviewEdge, FolderNote, HeadCheck, HeadCol, Miller, PreviewPlay, PreviewSeek, PreviewImage, PreviewTool, StatusLink };
 struct Hit {
     D2D1_RECT_F r;
     HitKind kind;
@@ -3699,6 +3704,11 @@ void DrawStatus(int pane, float H) {
     }
     Color(S.message.empty() || !activePane ? cDim : cAccent);
     Text(left, g_fmtStatus.Get(), lx, y0, right.empty() ? g.TR - kPad : g.TR - kPad - rw - 24, H);
+    if (activePane && !S.message.empty() && S.message == S.link && left == S.message) {  // a note that does something: underlined
+        const float tw = std::min(MeasureW(left, g_fmtStatus.Get()), (right.empty() ? g.TR - kPad : g.TR - kPad - rw - 24) - lx);
+        HLine(lx, lx + tw, H - 6, IsHover(HitKind::StatusLink, 0) ? cText : cAccent);
+        g_hits.push_back({D2D1::RectF(lx, y0, lx + tw, H), HitKind::StatusLink, 0});
+    }
     if (!right.empty()) {
         Color(cFaint);
         Text(right, g_fmtStatusR.Get(), g.TR - kPad - rw - 4, y0, g.TR - kPad - 2, H);
@@ -4180,6 +4190,7 @@ void PreviewReleaseBitmap() {
 }
 #include "background.inl"
 #include "install.inl"
+#include "update.inl"
 #include "rename.inl"
 #include "testmode.inl"
 
@@ -4661,6 +4672,8 @@ void RunCommand(Cmd cmd) {
             break;
         case Cmd::PreviewRotate: PreviewRotate(1); break;
         case Cmd::PreviewCopyImage: PreviewCopyImage(); break;
+        case Cmd::CheckUpdates: UpdCheckNow(true); break;
+        case Cmd::UpdateJolt: UpdDownload(); break;
         case Cmd::Compress: ArchiveCompress(false); break;
         case Cmd::Compress7z: ArchiveCompress(true); break;
         case Cmd::Extract: ArchiveExtract(false); break;
@@ -5501,6 +5514,9 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case WM_APP_ARC:
             ArcMessage(wp, lp);
             return 0;
+        case WM_APP_UPDATE:
+            UpdMessage(reinterpret_cast<UpdMsg*>(lp));
+            return 0;
         case WM_APP_ARCOUT:
             ArcOutDone(reinterpret_cast<ArcOut*>(lp));
             return 0;
@@ -5555,6 +5571,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (wp == kTimerMedia) MediaTick();
             if (wp == kTimerHold) PreviewFloatShow();
             if (wp == kTimerSpring) SpringFire();
+            if (wp == kTimerUpdate) UpdTimer();
             if (wp == kTimerTest) {
                 if (g_testBlocking) SetTimer(hwnd, kTimerTest, 30, nullptr);  // a step is still waiting
                 else TestRunStep();
@@ -5702,6 +5719,13 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             }
             if (HitAt(x, y).kind == HitKind::PreviewPlay) {
                 PreviewPlay();
+                return 0;
+            }
+            if (HitAt(x, y).kind == HitKind::StatusLink) {
+                const std::function<void()> act = g_statusLink;
+                S.link.clear();
+                if (act) act();
+                Invalidate();
                 return 0;
             }
             if (HitAt(x, y).kind == HitKind::PreviewTool) {
@@ -6242,6 +6266,17 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdLine, int show) {
             return 1;
         }
     }
+    {  // "--after-update=PID": the Jolt that updated itself is closing; wait for it, then take over
+        int argc = 0;
+        wchar_t** argv = CommandLineToArgvW(GetCommandLineW(), &argc);
+        for (int i = 1; argv && i < argc; ++i)
+            if (wcsncmp(argv[i], L"--after-update=", 15) == 0)
+                if (HANDLE p = OpenProcess(SYNCHRONIZE, FALSE, static_cast<DWORD>(_wtoi(argv[i] + 15)))) {
+                    WaitForSingleObject(p, 15000);
+                    CloseHandle(p);
+                }
+        if (argv) LocalFree(argv);
+    }
     const bool hidden = !g_test && (HasArg(L"--hidden") || HasArg(L"--oculto"));
     const std::wstring selectItem = SelectArg();
     g_adminWindow = !g_test && HasArg(L"--elevated");
@@ -6357,6 +6392,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdLine, int show) {
         ShowWindow(g_hwnd, show);
     }
     BootMark(L"views and position");
+    UpdStartup();  // what an update left behind goes; the first check (if it is on) a few seconds from now
     // tabs: folders that no longer exist are skipped (and the saved indexes corrected)
     std::vector<int> newIdx(ses.tabs.size(), -1);
     bool both[2] = {false, false};
