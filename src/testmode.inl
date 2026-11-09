@@ -576,7 +576,11 @@ void TestRunStep() {
             std::wstring out = L"preview: " + LeafOf(g_pv.path) + L" | ";
             const PreviewResult* r = g_pv.res.get();
             if (!r) out += g_pv.loading ? L"loading" : L"none";
-            else if (r->kind == 1) out += std::wstring(r->thumb ? L"thumbnail " : L"image ") + std::to_wstring(r->imgW) + L"x" + std::to_wstring(r->imgH);
+            else if (r->kind == 1) {
+                out += std::wstring(r->thumb ? L"thumbnail " : L"image ") + std::to_wstring(r->imgW) + L"x" + std::to_wstring(r->imgH) +
+                       (r->alpha ? L", see-through" : L"") + (r->full ? L", whole size" : L"");
+                if (g_pv.d2d) out += L", bitmap " + std::to_wstring(g_pv.d2d->GetPixelSize().width) + L" wide";
+            }
             else if (r->kind == 2) out += L"text, " + std::to_wstring(g_pv.lines.size()) + L" lines" + (r->indented ? L", indented" : L"");
             else if (r->kind == 3) out += L"online only";
             else if (r->kind == 4) out += L"hex, " + std::to_wstring(r->bytes.size()) + L" bytes of " + std::to_wstring(r->fileSize);
@@ -611,6 +615,11 @@ void TestRunStep() {
                 for (size_t c = 0; c < g_pv.colNum.size(); ++c)
                     if (g_pv.colNum[c]) out += L" " + std::to_wstring(c + 1);
             } else out += L"nothing";
+            if (r && PvZoomable()) {
+                const PvView v = PvViewOf(g_pv.imgBox);
+                out += L" | view " + ExifNum(v.k * 100, 0) + L"%" + (g_pv.zoom > 0 ? L"" : L" (fit)") + L", turned " + std::to_wstring(g_pv.rot) +
+                       L", moved " + ExifNum(g_pv.panX, 0) + L"," + ExifNum(g_pv.panY, 0);
+            }
             if (r)
                 for (const auto& [k, v] : r->facts) out += L" | " + k + L": " + v;
             TestLog(out);

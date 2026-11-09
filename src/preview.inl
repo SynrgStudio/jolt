@@ -37,6 +37,8 @@ struct PreviewResult {
     ComPtr<IWICBitmap> bmp;
     UINT imgW = 0, imgH = 0;  // original size (already rotated)
     bool thumb = false;       // Shell thumbnail or icon (not enlarged)
+    bool alpha = false;       // some of it is see-through: a checkerboard goes behind
+    bool full = false;        // decoded at its whole size (asked for when zooming in past the first decode)
     std::wstring text;
     bool truncated = false;
     bool indented = false;  // JSON that was all on one line, shown indented
@@ -77,6 +79,14 @@ struct PreviewState {
     float svgW = 0, svgH = 0;      // its own size
     D2D1_SIZE_F svgVp{};
     bool svgTried = false;
+    // zooming, panning and turning the picture (an image or the SVG); back to fitting with each new item
+    float zoom = 0;            // screen DIPs per picture DIP; 0: as it fits
+    float panX = 0, panY = 0;  // the picture's center, from the box's
+    int rot = 0;               // quarter turns to the right
+    bool fullAsked = false;
+    bool panning = false;
+    float panFromX = 0, panFromY = 0, panX0 = 0, panY0 = 0;
+    D2D1_RECT_F imgBox{};      // where the picture goes (under it, a photo's EXIF lines)
     bool loading = false;
     bool isDir = false;  // the shown item is a folder
     D2D1_RECT_F box{};
@@ -91,6 +101,7 @@ std::condition_variable g_pvcv;
 std::wstring g_pvReq;
 uint64_t g_pvReqGen = 0;
 bool g_pvReqMd = true;  // Markdown rendered ([general] preview_markdown), as it was when asked
+UINT g_pvReqFull = 0;   // an image again, at this many pixels a side at most (0: the usual 2048)
 
 bool PvIsImage(const std::wstring& ext) {
     static const wchar_t* k[] = {L".jpg", L".jpeg", L".jpe", L".jfif", L".png", L".bmp", L".gif", L".tif", L".tiff",
@@ -826,7 +837,7 @@ void PvExif(IWICMetadataQueryReader* q, PreviewResult& r) {
     }
 }
 
-bool PvImage(IWICImagingFactory* wic, const std::wstring& path, PreviewResult& r) {
+bool PvImage(IWICImagingFactory* wic, const std::wstring& path, PreviewResult& r, UINT maxSide = 2048) {
     ComPtr<IWICBitmapDecoder> dec;
     if (FAILED(wic->CreateDecoderFromFilename(path.c_str(), nullptr, GENERIC_READ, WICDecodeMetadataCacheOnDemand, &dec)))
         return false;
@@ -863,9 +874,9 @@ bool PvImage(IWICImagingFactory* wic, const std::wstring& path, PreviewResult& r
         PvExif(q.Get(), r);
     }
     ComPtr<IWICBitmapSource> src = frame;
-    const UINT maxSide = 2048;
-    if (w > maxSide || h > maxSide) {
-        double s = static_cast<double>(maxSide) / std::max(w, h);
+    const double kMaxPixels = 48e6;  // the whole of a huge one is still too much memory
+    if (w > maxSide || h > maxSide || static_cast<double>(w) * h > kMaxPixels) {
+        const double s = std::min(static_cast<double>(maxSide) / std::max(w, h), std::sqrt(kMaxPixels / (static_cast<double>(w) * h)));
         ComPtr<IWICBitmapScaler> sc;
         if (SUCCEEDED(wic->CreateBitmapScaler(&sc)) &&
             SUCCEEDED(sc->Initialize(src.Get(), std::max(1u, static_cast<UINT>(w * s)), std::max(1u, static_cast<UINT>(h * s)),
@@ -897,6 +908,26 @@ bool PvImage(IWICImagingFactory* wic, const std::wstring& path, PreviewResult& r
                                 WICBitmapPaletteTypeMedianCut)))
         return false;
     if (FAILED(wic->CreateBitmapFromSource(conv.Get(), WICBitmapCacheOnLoad, &r.bmp))) return false;
+    // see-through: only in formats that can be, and only if some pixel is
+    WICPixelFormatGUID pf{};
+    ComPtr<IWICComponentInfo> ci;
+    ComPtr<IWICPixelFormatInfo2> pfi;
+    BOOL canBe = FALSE;
+    if (SUCCEEDED(frame->GetPixelFormat(&pf)) && SUCCEEDED(wic->CreateComponentInfo(pf, &ci)) && SUCCEEDED(ci.As(&pfi))) pfi->SupportsTransparency(&canBe);
+    if (canBe) {
+        UINT bw = 0, bh = 0, size = 0, stride = 0;
+        r.bmp->GetSize(&bw, &bh);
+        const WICRect all{0, 0, static_cast<INT>(bw), static_cast<INT>(bh)};
+        ComPtr<IWICBitmapLock> lock;
+        BYTE* data = nullptr;
+        if (SUCCEEDED(r.bmp->Lock(&all, WICBitmapLockRead, &lock)) && SUCCEEDED(lock->GetDataPointer(&size, &data)) && SUCCEEDED(lock->GetStride(&stride)))
+            for (UINT y = 0; y < bh && !r.alpha; ++y)
+                for (UINT x = 0; x < bw; ++x)
+                    if (data[y * stride + x * 4 + 3] != 255) {
+                        r.alpha = true;
+                        break;
+                    }
+    }
     r.kind = 1;
     r.imgW = w;
     r.imgH = h;
@@ -1134,12 +1165,14 @@ void PreviewThread() {
         std::wstring path;
         uint64_t gen;
         bool md;
+        UINT full;
         {
             std::unique_lock lk(g_pvm);
             g_pvcv.wait(lk, [&] { return g_pvReqGen != seen; });
             path = g_pvReq;
             gen = seen = g_pvReqGen;
             md = g_pvReqMd;
+            full = g_pvReqFull;
         }
         auto r = std::make_unique<PreviewResult>();
         r->gen = gen;
@@ -1152,7 +1185,9 @@ void PreviewThread() {
         if (online) {  // a thumbnail Windows already has, at most: reading it would download it
             if (!wic || !PvThumb(wic.Get(), path, *r)) r->kind = 3;
         } else {
-            bool done = wic && PvIsImage(ext) && PvImage(wic.Get(), path, *r);
+            bool done = wic && PvIsImage(ext) && PvImage(wic.Get(), path, *r, full ? full : 2048);
+            r->full = full != 0;
+            if (full) done = true;  // only the image: if it fails, what shows stays
             if (!done && PvIsFont(ext)) done = PvFont(path, ext, *r);
             if (!done && ext == L".svg") done = PvSvg(path, *r);
             if (const int arc = done ? 0 : PvArchiveKind(path, ext)) done = PvArchive(path, arc, *r);
@@ -1208,6 +1243,9 @@ void PreviewLoad() {
     g_pv.scrollX = 0;
     g_pv.svg.Reset();
     g_pv.svgTried = false;
+    g_pv.zoom = g_pv.panX = g_pv.panY = 0;
+    g_pv.rot = 0;
+    g_pv.fullAsked = g_pv.panning = false;
     g_pv.loading = false;
     if (g_pv.path.empty()) {
         Invalidate();
@@ -1225,6 +1263,7 @@ void PreviewLoad() {
         std::lock_guard lk(g_pvm);
         g_pvReq = g_pv.path;
         g_pvReqMd = g_cfg.previewMarkdown;
+        g_pvReqFull = 0;
         g_pv.gen = ++g_pvReqGen;
     }
     g_pvcv.notify_one();
@@ -1249,9 +1288,23 @@ void PvTextLines(PreviewResult& r) {
     }
 }
 
+// Zoomed in past what was decoded: the same image again at its whole size (what shows stays meanwhile).
+void PreviewLoadFull() {
+    if (g_pv.fullAsked || !g_pv.res || g_pv.res->kind != 1 || g_pv.res->thumb || g_pv.res->full) return;
+    g_pv.fullAsked = true;
+    {
+        std::lock_guard lk(g_pvm);
+        g_pvReq = g_pv.path;
+        g_pvReqFull = std::min<UINT>(8192, g_rt->GetMaximumBitmapSize());
+        g_pv.gen = ++g_pvReqGen;
+    }
+    g_pvcv.notify_one();
+}
+
 void PreviewApply(PreviewResult* raw) {
     std::unique_ptr<PreviewResult> r(raw);
     if (r->gen != g_pv.gen || r->path != g_pv.path) return;
+    if (r->full && r->kind != 1) return;  // the whole size failed: the first decode stays
     g_pv.loading = false;
     g_pv.d2d.Reset();
     g_pv.lines.clear();
@@ -1331,7 +1384,13 @@ void PvDrawFit(const D2D1_RECT_F& r, bool enlarge) {
 }
 
 // steps: notches of the wheel, up or left positive. Sideways only moves tables.
+bool PvZoomable();
 void PreviewWheel(float steps, bool sideways = false) {
+    if (PvZoomable() && g_pv.zoom > 0) {  // a zoomed picture: the wheel moves it
+        (sideways ? g_pv.panX : g_pv.panY) += steps * 48;
+        Invalidate();
+        return;
+    }
     if (sideways && !(g_pv.res && g_pv.res->kind == 5)) return;
     float& s = sideways ? g_pv.scrollX : g_pv.scroll;
     s = std::max(0.f, s - steps * 3 * 16.f);
@@ -1351,11 +1410,15 @@ float MonoCharW() {
 
 // A light checkerboard, behind what can be transparent (SVG), for this render target (released with it).
 ComPtr<ID2D1BitmapBrush> g_pvChecker;
+bool g_pvCheckerDark = false;  // what the brush was made for ([general] preview_checker)
 ID2D1BitmapBrush* CheckerBrush() {
+    if (g_pvChecker && g_pvCheckerDark != g_cfg.checkerDark) g_pvChecker.Reset();
     if (!g_pvChecker) {
+        g_pvCheckerDark = g_cfg.checkerDark;
+        const uint32_t a = g_cfg.checkerDark ? 0xFF2C2C32 : 0xFFFFFFFF, b = g_cfg.checkerDark ? 0xFF3A3A41 : 0xFFE4E4E8;
         uint32_t px[16 * 16];
         for (int y = 0; y < 16; ++y)
-            for (int x = 0; x < 16; ++x) px[y * 16 + x] = (x / 8 + y / 8) % 2 ? 0xFFE4E4E8 : 0xFFFFFFFF;
+            for (int x = 0; x < 16; ++x) px[y * 16 + x] = (x / 8 + y / 8) % 2 ? b : a;
         ComPtr<ID2D1Bitmap> bmp;
         const D2D1_BITMAP_PROPERTIES props = D2D1::BitmapProperties(D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED), 96.f, 96.f);
         if (SUCCEEDED(g_rt->CreateBitmap(D2D1::SizeU(16, 16), px, 16 * 4, props, &bmp)))
@@ -1401,6 +1464,180 @@ bool PvSvgOpen() {
     g_pv.svgH = h;
     g_pv.svgVp = {};
     return true;
+}
+
+// --- the picture (an image, or the SVG): zoomed with Ctrl+wheel around the mouse, moved by dragging or with the
+// wheel once zoomed, a double click between fitting and its real size, turned a quarter at a time. All of it only
+// in the preview: the file isn't touched.
+bool PvZoomable() {
+    return g_pv.res && ((g_pv.res->kind == 1 && !g_pv.res->thumb && g_pv.res->bmp && g_pv.res->imgW && g_pv.res->imgH) ||
+                        (g_pv.res->kind == 8 && g_pv.svg && g_pv.svgW > 0 && g_pv.svgH > 0));
+}
+struct PvView {
+    float baseW, baseH;  // unturned, at scale 1: an image's pixels at 1:1, an SVG's own units
+    float k, fitK;       // the scale now, and the one that fits
+    float cx, cy;        // its center on screen
+    float w, h;          // on screen, turned
+};
+PvView PvViewOf(const D2D1_RECT_F& box) {
+    PvView v{};
+    const bool svg = g_pv.res->kind == 8;
+    v.baseW = svg ? g_pv.svgW : g_pv.res->imgW * 96.f / g_dpi;
+    v.baseH = svg ? g_pv.svgH : g_pv.res->imgH * 96.f / g_dpi;
+    const bool turned = g_pv.rot % 2 != 0;
+    const float tw = turned ? v.baseH : v.baseW, th = turned ? v.baseW : v.baseH;
+    const float bw = box.right - box.left, bh = box.bottom - box.top;
+    v.fitK = std::max(0.0001f, std::min(bw / tw, bh / th));
+    if (!svg) v.fitK = std::min(v.fitK, 1.f);  // an image isn't enlarged to fit; an SVG is
+    v.k = g_pv.zoom > 0 ? g_pv.zoom : v.fitK;
+    v.w = tw * v.k;
+    v.h = th * v.k;
+    const float mx = std::max(0.f, (v.w - bw) / 2), my = std::max(0.f, (v.h - bh) / 2);  // it doesn't leave the box
+    g_pv.panX = std::clamp(g_pv.panX, -mx, mx);
+    g_pv.panY = std::clamp(g_pv.panY, -my, my);
+    const float s = g_dpi / 96.f;  // its corner on a whole pixel: at 1:1 nothing is resampled
+    const float left = std::round(((box.left + box.right) / 2 + g_pv.panX - v.w / 2) * s) / s;
+    const float top = std::round(((box.top + box.bottom) / 2 + g_pv.panY - v.h / 2) * s) / s;
+    v.cx = left + v.w / 2;
+    v.cy = top + v.h / 2;
+    return v;
+}
+
+// Zooms by f around (x, y); back to fitting when it gets there.
+void PreviewZoomBy(float f, float x, float y) {
+    if (!PvZoomable()) return;
+    const D2D1_RECT_F box = g_pv.imgBox;
+    const PvView v = PvViewOf(box);
+    float most = 40;
+    if (g_pv.res->kind == 8) most = std::max(v.fitK, std::min(most, 16384 / std::max(v.baseW, v.baseH)));  // an SVG's canvas has a limit
+    const float k1 = std::clamp(v.k * f, v.fitK, std::max(v.fitK, most));
+    if (k1 <= v.fitK * 1.0001f) {
+        g_pv.zoom = g_pv.panX = g_pv.panY = 0;
+    } else {
+        const float ux = (x - v.cx) / v.k, uy = (y - v.cy) / v.k;  // the point under the mouse stays under it
+        g_pv.panX = x - ux * k1 - (box.left + box.right) / 2;
+        g_pv.panY = y - uy * k1 - (box.top + box.bottom) / 2;
+        g_pv.zoom = k1;
+    }
+    Invalidate();
+}
+// Ctrl+wheel: true when it was over the picture.
+bool PreviewZoomAt(float x, float y, float steps) {
+    const D2D1_RECT_F& b = g_pv.imgBox;
+    if (!g_preview || !PvZoomable() || x < b.left || x > b.right || y < b.top || y > b.bottom) return false;
+    PreviewZoomBy(std::pow(1.25f, steps), x, y);
+    return true;
+}
+// Fitting, or its real size there (twice the size if it already fits at its real size).
+void PreviewZoomToggle(float x, float y) {
+    if (!PvZoomable()) return;
+    if (g_pv.zoom > 0) {
+        g_pv.zoom = g_pv.panX = g_pv.panY = 0;
+        Invalidate();
+        return;
+    }
+    const PvView v = PvViewOf(g_pv.imgBox);
+    PreviewZoomBy((v.fitK < 0.999f ? 1.f : v.k * 2) / v.k, x, y);
+}
+void PreviewZoomStep(float steps) {  // the palette: around the middle
+    PreviewZoomBy(std::pow(1.25f, steps), (g_pv.imgBox.left + g_pv.imgBox.right) / 2, (g_pv.imgBox.top + g_pv.imgBox.bottom) / 2);
+}
+void PreviewRotate(int quarters) {
+    if (!PvZoomable()) return;
+    g_pv.rot = (g_pv.rot + quarters + 4) % 4;
+    g_pv.zoom = g_pv.panX = g_pv.panY = 0;
+    Invalidate();
+}
+bool PreviewPannable() {
+    if (!PvZoomable()) return false;
+    const PvView v = PvViewOf(g_pv.imgBox);
+    return v.w > g_pv.imgBox.right - g_pv.imgBox.left + 0.5f || v.h > g_pv.imgBox.bottom - g_pv.imgBox.top + 0.5f;
+}
+void PreviewPanStart(float x, float y) {
+    g_pv.panning = true;
+    g_pv.panFromX = x;
+    g_pv.panFromY = y;
+    g_pv.panX0 = g_pv.panX;
+    g_pv.panY0 = g_pv.panY;
+}
+void PreviewPanMove(float x, float y) {
+    g_pv.panX = g_pv.panX0 + x - g_pv.panFromX;
+    g_pv.panY = g_pv.panY0 + y - g_pv.panFromY;
+    Invalidate();
+}
+void PreviewToolClick(int idx) {
+    if (idx == 0) PreviewRotate(-1);
+    else if (idx == 1) PreviewRotate(1);
+    else PreviewZoomToggle((g_pv.imgBox.left + g_pv.imgBox.right) / 2, (g_pv.imgBox.top + g_pv.imgBox.bottom) / 2);
+}
+
+// The picture as zoomed, moved and turned, clipped to box; on a checkerboard if it can be see-through.
+void PvDrawPicture(const D2D1_RECT_F& box) {
+    g_pv.imgBox = box;
+    const PvView v = PvViewOf(box);
+    const bool svg = g_pv.res->kind == 8;
+    g_rt->PushAxisAlignedClip(box, D2D1_ANTIALIAS_MODE_ALIASED);
+    if (svg || g_pv.res->alpha)
+        if (ID2D1BitmapBrush* chk = CheckerBrush()) {
+            const D2D1_RECT_F r = D2D1::RectF(v.cx - v.w / 2, v.cy - v.h / 2, v.cx + v.w / 2, v.cy + v.h / 2);
+            chk->SetTransform(D2D1::Matrix3x2F::Translation(r.left, r.top));  // the squares move with it
+            g_rt->FillRectangle(r, chk);
+        }
+    D2D1_MATRIX_3X2_F old;
+    g_rt->GetTransform(&old);
+    const D2D1_MATRIX_3X2_F turn = D2D1::Matrix3x2F::Rotation(90.f * g_pv.rot) * D2D1::Matrix3x2F::Translation(v.cx, v.cy) * old;
+    const float hw = v.baseW * v.k / 2, hh = v.baseH * v.k / 2;
+    if (svg) {
+        ComPtr<ID2D1DeviceContext5> dc;
+        if (SUCCEEDED(g_rt.As(&dc))) {
+            const D2D1_SIZE_F vp = D2D1::SizeF(std::max(1.f, hw * 2), std::max(1.f, hh * 2));
+            if (g_pv.svgVp.width != vp.width || g_pv.svgVp.height != vp.height) {
+                g_pv.svgVp = vp;
+                g_pv.svg->SetViewportSize(vp);
+            }
+            g_rt->SetTransform(D2D1::Matrix3x2F::Translation(-hw, -hh) * turn);
+            dc->DrawSvgDocument(g_pv.svg.Get());
+        }
+    } else if (g_pv.d2d) {
+        const D2D1_SIZE_U px = g_pv.d2d->GetPixelSize();
+        const float perPx = v.k * g_pv.res->imgW / std::max(1u, px.width);  // screen pixels per pixel of the bitmap
+        g_rt->SetTransform(turn);
+        const D2D1_RECT_F dst = D2D1::RectF(-hw, -hh, hw, hh);
+        ComPtr<ID2D1DeviceContext> dc;
+        if (perPx < 1 && SUCCEEDED(g_rt.As(&dc)))  // made smaller: high-quality cubic, no shimmering lines
+            dc->DrawBitmap(g_pv.d2d.Get(), &dst, 1.f, D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC, nullptr, nullptr);
+        else
+            g_rt->DrawBitmap(g_pv.d2d.Get(), dst, 1.f,
+                             perPx >= 3 ? D2D1_BITMAP_INTERPOLATION_MODE_NEAREST_NEIGHBOR : D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);  // close up: the pixels
+        if (perPx > 1.2f && px.width < g_pv.res->imgW) PreviewLoadFull();  // closer than it was decoded
+    }
+    g_rt->SetTransform(old);
+    g_rt->PopAxisAlignedClip();
+    g_hits.push_back({box, HitKind::PreviewImage, 0});
+    // over it, while the mouse is: turn left, turn right, and the zoom (a click: fit / real size)
+    if (!(IsHover(HitKind::PreviewImage, 0) || g_hover.kind == HitKind::PreviewTool || g_pv.panning)) return;
+    wchar_t pct[16];
+    swprintf(pct, 16, L"%.0f%%", v.k * 100);
+    const float bw = 28, lw = std::max(48.f, MeasureW(pct, g_fmtName.Get()) + 18), top = box.top + 8, right = box.right - 8;
+    const D2D1_RECT_F bar = D2D1::RectF(right - bw * 2 - lw - 8, top, right, top + 30);
+    Round(bar, 8, 0x101014, 0.85f);
+    for (int i = 0; i < 3; ++i) {
+        const float l = bar.left + 4 + i * bw;
+        const D2D1_RECT_F b = D2D1::RectF(l, top + 3, i < 2 ? l + bw : right - 4, top + 27);
+        if (IsHover(HitKind::PreviewTool, i)) Round(b, 6, 0xFFFFFF, 0.12f);
+        Color(cText);
+        if (i == 2) {
+            Text(pct, wcslen(pct), g_fmtCenter.Get(), b.left, b.top, b.right, b.bottom);
+        } else {
+            D2D1_MATRIX_3X2_F was;
+            g_rt->GetTransform(&was);
+            if (i == 0)  // to the left: the same arrow, mirrored
+                g_rt->SetTransform(D2D1::Matrix3x2F::Scale(-1, 1, D2D1::Point2F((b.left + b.right) / 2, 0)) * was);
+            Glyph(L'\xE7AD', g_fmtIcon.Get(), b.left, b.top, b.right, b.bottom);  // Rotate
+            g_rt->SetTransform(was);
+        }
+        g_hits.push_back({b, HitKind::PreviewTool, i});
+    }
 }
 
 // A "label ...... value" line in the info block.
@@ -1547,7 +1784,9 @@ void DrawPreview(float W, float H) {
         const float factsH = facts.empty() ? 0.f : facts.size() * 20.f + 12;
         const D2D1_RECT_F ibox = D2D1::RectF(box.left, box.top, box.right, std::max(box.top + 40, box.bottom - factsH));
         if (!g_pv.d2d) g_rt->CreateBitmapFromWicBitmap(g_pv.res->bmp.Get(), nullptr, &g_pv.d2d);
-        if (g_pv.d2d) {
+        if (g_pv.d2d && PvZoomable()) {
+            PvDrawPicture(ibox);
+        } else if (g_pv.d2d) {  // a thumbnail or an icon: as it is, not enlarged
             D2D1_SIZE_U px = g_pv.d2d->GetPixelSize();
             float scale = 96.f / g_dpi;  // pixels -> DIP
             float iw = px.width * scale, ih = px.height * scale;
@@ -1707,26 +1946,7 @@ void DrawPreview(float W, float H) {
             PvTextLines(*g_pv.res);
             Invalidate();
         }
-        ComPtr<ID2D1DeviceContext5> dc;
-        if (g_pv.svg && g_pv.svgW > 0 && g_pv.svgH > 0 && SUCCEEDED(g_rt.As(&dc))) {
-            const float bw = box.right - box.left, bh = box.bottom - box.top;
-            const float k = std::min(bw / g_pv.svgW, bh / g_pv.svgH);
-            const float dw = std::max(1.f, std::floor(g_pv.svgW * k)), dh = std::max(1.f, std::floor(g_pv.svgH * k));
-            const float dx = std::round(box.left + (bw - dw) / 2), dy = std::round(box.top + (bh - dh) / 2);
-            if (g_pv.svgVp.width != dw || g_pv.svgVp.height != dh) {
-                g_pv.svgVp = D2D1::SizeF(dw, dh);
-                g_pv.svg->SetViewportSize(g_pv.svgVp);
-            }
-            if (ID2D1BitmapBrush* chk = CheckerBrush()) {
-                chk->SetTransform(D2D1::Matrix3x2F::Translation(dx, dy));
-                g_rt->FillRectangle(D2D1::RectF(dx, dy, dx + dw, dy + dh), chk);
-            }
-            D2D1_MATRIX_3X2_F old;
-            g_rt->GetTransform(&old);
-            g_rt->SetTransform(D2D1::Matrix3x2F::Translation(dx, dy) * old);
-            dc->DrawSvgDocument(g_pv.svg.Get());
-            g_rt->SetTransform(old);
-        }
+        if (PvZoomable()) PvDrawPicture(box);
     } else if (g_pv.res && g_pv.res->kind == 4) {
         // hex: offset, the bytes (zeros faint) and the same as characters; 16, 8 or 4 a line, whatever fits
         const std::vector<uint8_t>& b = g_pv.res->bytes;

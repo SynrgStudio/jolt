@@ -10,7 +10,8 @@ enum class Cmd {
     Terminal, OpenExplorer, RealLocation, CollapseGroups, ExpandGroups, GroupByDay, GroupByType, NoGroups,
     SortByType, ZoomIn, ZoomOut, ZoomReset, RowsTaller, RowsShorter, EmptyRecycleBin,
     Undo, Redo, OpenAsAdmin, PinTab, Restore,
-    Install, Quit, RenameMany, FolderSiblings, ViewList, ViewGrid, ViewColumns, ViewBigger, ViewSmaller, Tag, FolderColor, Zen, SizeBars, PreviewWrap, PreviewMarkdown, PreviewPlay,
+    Install, Quit, RenameMany, FolderSiblings, ViewList, ViewGrid, ViewColumns, ViewBigger, ViewSmaller, Tag, FolderColor, Zen, SizeBars, PreviewWrap, PreviewMarkdown, PreviewPlay, PreviewRotate, PreviewRotateLeft, PreviewZoom, PreviewZoomIn,
+    PreviewZoomOut, PreviewChecker,
     FindDuplicates, SelectExtraCopies, SelectPattern, SelectSameExtension, InvertSelection, Settings, Checkboxes, NewFromTemplate, CopyTo, MoveTo, Attributes, InUse, Unblock,
     CustomFirst = 1000  // + index into g_cfg.custom: the user's own commands
 };
@@ -36,6 +37,7 @@ struct Config {
     bool showHidden = true;
     bool previewWrap = true;  // long lines wrap in the text preview
     bool previewMarkdown = true;  // Markdown rendered in the preview (no: its source, highlighted)
+    bool checkerDark = false;     // the checkerboard behind see-through images and SVG: light, or dark
     bool cloudStatus = true;  // marks the files of cloud folders that are online only, or always on this PC
     int typoMin = 75;         // searches also show names this close to what was typed, in percent; 0: only real matches
     bool background = true, tray = true, openDrives = false;
@@ -105,6 +107,12 @@ const CmdDef kCommands[] = {
     {L"preview", Cmd::Preview, L"Space", L"show or hide the preview"},
     {L"preview_wrap", Cmd::PreviewWrap, L"", L"wrap long lines in the text preview (toggle)"},
     {L"preview_play", Cmd::PreviewPlay, L"", L"play or pause the song or video in the preview"},
+    {L"preview_rotate", Cmd::PreviewRotate, L"", L"turn the image in the preview a quarter to the right (only the view)"},
+    {L"preview_rotate_left", Cmd::PreviewRotateLeft, L"", L"turn the image in the preview a quarter to the left (only the view)"},
+    {L"preview_zoom", Cmd::PreviewZoom, L"", L"the image in the preview at its real size, or fitting (toggle)"},
+    {L"preview_zoom_in", Cmd::PreviewZoomIn, L"", L"zoom in on the image in the preview (also Ctrl+wheel over it)"},
+    {L"preview_zoom_out", Cmd::PreviewZoomOut, L"", L"zoom out of the image in the preview"},
+    {L"preview_checker", Cmd::PreviewChecker, L"", L"light or dark checkerboard behind see-through images (toggle)"},
     {L"preview_markdown", Cmd::PreviewMarkdown, L"", L"show Markdown rendered in the preview, or as its source (toggle)"},
     {L"split", Cmd::Split, L"Ctrl+S", L"split view with two panes"},
     {L"other_pane", Cmd::OtherPane, L"Tab", L"switch to the other pane"},
@@ -322,6 +330,8 @@ void WriteDefaultConfig() {
         "preview_wrap = yes\n"
         "# Show Markdown rendered in the preview (headings, lists, tables...), or as its source: yes / no\n"
         "preview_markdown = yes\n"
+        "# The checkerboard behind see-through images and SVG in the preview: light / dark\n"
+        "preview_checker = light\n"
         "# Cloud folders (OneDrive and the like): a cloud next to what is online only, a check next to what is always\n"
         "# on this PC: yes / no. Jolt never downloads them to list or preview them, whatever this says.\n"
         "cloud_status = yes\n"
@@ -454,6 +464,7 @@ void LoadConfig() {
             else if (key == L"show_hidden") g_cfg.showHidden = ParseBool(val);
             else if (key == L"preview_wrap") g_cfg.previewWrap = ParseBool(val);
             else if (key == L"preview_markdown") g_cfg.previewMarkdown = ParseBool(val);
+            else if (key == L"preview_checker") g_cfg.checkerDark = Lower(Trim(val)) == L"dark";
             else if (key == L"cloud_status") g_cfg.cloudStatus = ParseBool(val);
             else if (key == L"filter_typos") g_cfg.typoMin = _wtoi(val.c_str()) > 0 ? std::clamp(_wtoi(val.c_str()), 50, 100) : ParseBool(val) ? 75 : 0;
             else if (key == L"run_in_background") g_cfg.background = ParseBool(val);

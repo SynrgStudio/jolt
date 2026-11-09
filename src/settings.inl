@@ -236,6 +236,8 @@ std::vector<SetRow> SettingsRows(int section) {
             toggle(L"Wrap long lines in the text preview", L"", [] { return g_cfg.previewWrap; }, [=](bool b) { SetGeneral(L"preview_wrap", yesNo(b)); });
             toggle(L"Render Markdown in the preview", L"Off: its source, highlighted.", [] { return g_cfg.previewMarkdown; },
                    [=](bool b) { SetGeneral(L"preview_markdown", yesNo(b)); });
+            toggle(L"Dark checkerboard behind see-through images", L"Off: a light one, which shows dark drawings best.", [] { return g_cfg.checkerDark; },
+                   [=](bool b) { SetGeneral(L"preview_checker", b ? L"dark" : L"light"); });
             toggle(L"Open drives as they are connected", L"USB sticks and drives open in a tab.", [] { return g_cfg.openDrives; },
                    [=](bool b) { SetGeneral(L"open_drives", yesNo(b)); });
             head(L"Columns");
