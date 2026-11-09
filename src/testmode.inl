@@ -572,6 +572,22 @@ void TestRunStep() {
             std::wstring all;
             for (const Favorite& v : g_favs) all += L" | " + v.name;
             TestLog(L"favorites:" + all);
+        } else if (s.cmd == L"preview") {  // what the preview shows: its kind and what it found
+            std::wstring out = L"preview: " + LeafOf(g_pv.path) + L" | ";
+            const PreviewResult* r = g_pv.res.get();
+            if (!r) out += g_pv.loading ? L"loading" : L"none";
+            else if (r->kind == 1) out += std::wstring(r->thumb ? L"thumbnail " : L"image ") + std::to_wstring(r->imgW) + L"x" + std::to_wstring(r->imgH);
+            else if (r->kind == 2) out += L"text, " + std::to_wstring(g_pv.lines.size()) + L" lines" + (r->indented ? L", indented" : L"");
+            else if (r->kind == 3) out += L"online only";
+            else if (r->kind == 4) out += L"hex, " + std::to_wstring(r->bytes.size()) + L" bytes of " + std::to_wstring(r->fileSize);
+            else if (r->kind == 5) {
+                out += L"table, " + std::to_wstring(r->rows.size()) + L" rows x " + std::to_wstring(r->cols) + L" columns, numbers in";
+                for (size_t c = 0; c < g_pv.colNum.size(); ++c)
+                    if (g_pv.colNum[c]) out += L" " + std::to_wstring(c + 1);
+            } else out += L"nothing";
+            if (r)
+                for (const auto& [k, v] : r->facts) out += L" | " + k + L": " + v;
+            TestLog(out);
         } else if (s.cmd == L"toggle") {
             COPYDATASTRUCT cd{2, sizeof(wchar_t), const_cast<wchar_t*>(L"")};
             SendMessageW(g_hwnd, WM_COPYDATA, 0, reinterpret_cast<LPARAM>(&cd));
