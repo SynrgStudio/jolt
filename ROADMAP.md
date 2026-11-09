@@ -2,7 +2,7 @@
 
 Every planned feature, one line per GitHub issue. A line is checked and struck through when its PR is merged.
 
-**46 of 89 done.**
+**51 of 89 done.**
 
 ## Navigation
 
@@ -17,7 +17,7 @@ Every planned feature, one line per GitHub issue. A line is checked and struck t
 
 ## Search
 
-6 of 11 done.
+11 of 11 done.
 
 - [x] ~~[#7](https://github.com/SynrgStudio/jolt/issues/7) Filter syntax while typing: *.png, >10mb, ext:pdf, !tmp~~
 - [x] ~~[#8](https://github.com/SynrgStudio/jolt/issues/8) Search by content (grep) with highlighted matches~~
@@ -25,11 +25,11 @@ Every planned feature, one line per GitHub issue. A line is checked and struck t
 - [x] ~~[#10](https://github.com/SynrgStudio/jolt/issues/10) Find duplicate files (size + hash)~~
 - [x] ~~[#95](https://github.com/SynrgStudio/jolt/issues/95) Typo-tolerant search: close names under the real matches, with their percentage~~
 - [x] ~~[#97](https://github.com/SynrgStudio/jolt/issues/97) Ctrl+P: results at once, more of them, exact names and programs first~~
-- [ ] [#109](https://github.com/SynrgStudio/jolt/issues/109) Ctrl+P remembers what you picked for each query
-- [ ] [#110](https://github.com/SynrgStudio/jolt/issues/110) Ctrl+P ranks by use that fades over time, files included
-- [ ] [#111](https://github.com/SynrgStudio/jolt/issues/111) Ctrl+P ranks results near the current folder higher
-- [ ] [#112](https://github.com/SynrgStudio/jolt/issues/112) When a filter finds nothing, hint at matches elsewhere
-- [ ] [#113](https://github.com/SynrgStudio/jolt/issues/113) Long paths in Ctrl+P shortened in the middle
+- [x] ~~[#109](https://github.com/SynrgStudio/jolt/issues/109) Ctrl+P remembers what you picked for each query~~
+- [x] ~~[#110](https://github.com/SynrgStudio/jolt/issues/110) Ctrl+P ranks by use that fades over time, files included~~
+- [x] ~~[#111](https://github.com/SynrgStudio/jolt/issues/111) Ctrl+P ranks results near the current folder higher~~
+- [x] ~~[#112](https://github.com/SynrgStudio/jolt/issues/112) When a filter finds nothing, hint at matches elsewhere~~
+- [x] ~~[#113](https://github.com/SynrgStudio/jolt/issues/113) Long paths in Ctrl+P shortened in the middle~~
 
 ## Editing
 

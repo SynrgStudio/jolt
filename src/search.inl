@@ -222,3 +222,156 @@ void RecRevalidateShown() {
             if (IsSel(t, i)) add(i);
     }
 }
+
+// ---- When the filter finds nothing in a folder, a dim note under "No matches" says where there is something: how many in
+// the subfolders (Ctrl+Shift+F shows them) and how many on the drives (Ctrl+P). Looked for in the background a moment
+// after typing stops: the drives' index answers at once; the subfolders are walked up to a limit, on local drives only.
+constexpr UINT WM_APP_HINT = WM_APP + 21;
+constexpr UINT_PTR kTimerHint = 21;
+constexpr int kHintDirs = 4000;       // folders walked at most for the subfolder count
+constexpr double kHintWalkMs = 1500;  // or for this long
+
+struct FilterHint {
+    uint64_t gen = 0;
+    std::wstring folder, filter;  // what it's about
+    bool started = false;
+    bool sub = false, drives = false;  // whether each can be told
+    bool subDone = false, drivesDone = false;
+    bool capped = false;  // too many subfolders to walk them all: "at least"
+    uint64_t inSub = 0, onDrives = 0;
+};
+FilterHint g_hint;
+std::atomic<uint64_t> g_hintGen{0};
+struct HintMsg {
+    uint64_t gen;
+    bool drives;  // or the subfolders
+    uint64_t count;
+    bool capped;
+};
+
+// The filter is only words, which is what Ctrl+P searches for (no .ext, size, date…).
+bool HintPlainWords(const FilterSpec& s) {
+    return !s.fuzzy.empty() && s.content.empty() && s.exts.empty() && s.notExts.empty() && s.notNames.empty() && s.globs.empty() &&
+           s.notGlobs.empty() && s.tags.empty() && s.notTags.empty() && !s.sized && !s.newerThan && !s.olderThan && s.kind == 0;
+}
+
+// Is the tab showing "No matches" for its filter (in the folder, or after a subfolder search that has ended)?
+bool HintApplies(const Tab& t) {
+    return t.list && !t.list->error && !t.loading && !t.filter.empty() && RowCount(t) == 0 && !t.dups && (!t.recursive || t.recDone);
+}
+
+void HintPost(uint64_t gen, bool drives, uint64_t count, bool capped) {
+    auto* m = new HintMsg{gen, drives, count, capped};
+    if (!PostMessageW(g_hwnd, WM_APP_HINT, 0, reinterpret_cast<LPARAM>(m))) delete m;
+}
+
+// Counts what passes the filter in the folder's subfolders, as the subfolder search would show it.
+void HintWalk(std::wstring root, FilterSpec spec, bool showHidden, uint64_t gen, int typoMin) {
+    SetThreadPriority(GetCurrentThread(), THREAD_MODE_BACKGROUND_BEGIN);
+    const NearPattern close(spec.fuzzy, typoMin);
+    const double t0 = NowMs();
+    std::deque<std::wstring> q{root};
+    uint64_t count = 0;
+    int dirs = 0;
+    Listing l;
+    while (!q.empty()) {
+        if (g_hintGen != gen) return;
+        if (dirs >= kHintDirs || NowMs() - t0 > kHintWalkMs) {
+            HintPost(gen, false, count, true);
+            return;
+        }
+        const std::wstring p = std::move(q.front());
+        q.pop_front();
+        l = Listing{};
+        EnumerateDir(p, EnumMethod::Nt, l);
+        const bool top = dirs++ == 0;  // the folder's own items are the ones the filter already went through
+        if (l.error) continue;
+        for (const Entry& e : l.entries) {
+            if (!showHidden && (e.attrs & (FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM))) continue;
+            int sc, percent = 0;
+            if (!top && FilterPass(spec, e, l.name(e), e.nameLen, sc, nullptr, close, percent)) ++count;
+            if (e.isDir() && !(e.attrs & FILE_ATTRIBUTE_REPARSE_POINT)) q.push_back(Join(p, l.name(e)));
+        }
+    }
+    HintPost(gen, false, count, false);
+}
+
+// Called while "No matches" is drawn: a new filter (or folder) is looked for once typing stops for a moment.
+void HintWant(const Tab& t) {
+    if (g_hint.gen && t.filter == g_hint.filter && Key(t.path) == Key(g_hint.folder)) return;
+    g_hint = FilterHint{};
+    g_hint.gen = ++g_hintGen;  // whatever was being counted for the last one stops
+    g_hint.folder = t.path;
+    g_hint.filter = t.filter;
+    SetTimer(g_hwnd, kTimerHint, 250, nullptr);
+}
+
+void HintStart() {
+    KillTimer(g_hwnd, kTimerHint);
+    const Tab& t = T();
+    if (g_hint.started || !HintApplies(t) || t.filter != g_hint.filter || Key(t.path) != Key(g_hint.folder)) return;
+    const FilterSpec spec = ParseFilter(t.filter);
+    g_hint.started = true;
+    g_hint.drives = g_ixCount > 0 && HintPlainWords(spec);
+    g_hint.sub = !t.recursive && IsLocalFixed(t.path) && !InArchive(t.path) && spec.content.empty() && spec.tags.empty() && spec.notTags.empty();
+    const uint64_t gen = g_hint.gen;
+    if (g_hint.drives)
+        std::thread([pat = spec.fuzzy, gen] {
+            const uint64_t n = IdxCountMatches(pat, g_hintGen, gen);
+            if (g_hintGen == gen) HintPost(gen, true, n, false);
+        }).detach();
+    if (g_hint.sub) std::thread(HintWalk, t.path, spec, g_cfg.showHidden, gen, g_cfg.typoMin).detach();
+    Invalidate();
+}
+
+void HintDone(const HintMsg& m) {
+    if (m.gen != g_hint.gen) return;
+    if (m.drives) {
+        g_hint.drivesDone = true;
+        g_hint.onDrives = m.count;
+    } else {
+        g_hint.subDone = true;
+        g_hint.inSub = m.count;
+        g_hint.capped = m.capped;
+    }
+    Invalidate();
+}
+
+// The words Ctrl+P takes with it: the note says there are matches on the drives for this tab's filter. "" otherwise.
+std::wstring HintWords() {
+    const Tab& t = T();
+    if (!HintApplies(t) || t.filter != g_hint.filter || Key(t.path) != Key(g_hint.folder) || !g_hint.drivesDone || !g_hint.onDrives) return L"";
+    return ParseFilter(t.filter).fuzzy;
+}
+
+void HintGo(int what) { RunCommand(what == 0 ? Cmd::SearchSubfolders : Cmd::GoTo); }
+
+// Under "No matches", the note: each count is a link to what shows them.
+void DrawFilterHint(const Tab& t, float L, float R, float y) {
+    if (&t != &T() || !HintApplies(t)) return;
+    HintWant(t);
+    const FilterHint& h = g_hint;
+    if (!h.started) return;
+    auto key = [](Cmd c) {
+        const std::wstring k = ShortcutFor(c);
+        return k.empty() ? std::wstring() : L"   ·   " + k;
+    };
+    auto count = [](uint64_t n) { return Thousands(static_cast<int>(std::min<uint64_t>(n, INT_MAX))); };
+    std::vector<std::pair<std::wstring, int>> lines;  // text, and what a click does: 0 subfolders, 1 drives, -1 nothing
+    if (h.subDone && h.inSub > 0) lines.push_back({count(h.inSub) + (h.capped ? L"+" : L"") + L" in the subfolders" + key(Cmd::SearchSubfolders), 0});
+    if (h.drivesDone && h.onDrives > 0) lines.push_back({count(h.onDrives) + L" on the drives" + key(Cmd::GoTo), 1});
+    const bool subNone = h.sub && h.subDone && !h.capped, drivesNone = h.drives && h.drivesDone;
+    if (lines.empty() && (h.sub || h.drives) && (!h.sub || subNone) && (!h.drives || drivesNone))
+        lines.push_back({h.sub && h.drives ? L"Not in the subfolders or on the drives either" : h.sub ? L"Not in the subfolders either" : L"Not on the drives either", -1});
+    for (const auto& [text, act] : lines) {
+        const float w = std::min(MeasureW(text, g_fmtCenter.Get()), R - L - 20), x0 = (L + R - w) / 2;
+        const bool hot = act >= 0 && IsHover(HitKind::FilterHint, act);
+        Color(hot ? cAccent : cFaint);
+        Text(text, g_fmtCenter.Get(), L, y, R, y + 22);
+        if (act >= 0) {
+            if (hot) HLine(x0, x0 + w, y + 17, cAccent);
+            g_hits.push_back({D2D1::RectF(x0, y, x0 + w, y + 22), HitKind::FilterHint, act});
+        }
+        y += 22;
+    }
+}

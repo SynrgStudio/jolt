@@ -73,8 +73,11 @@ void IdxStatus(const std::wstring& s) {
     if (!PostMessageW(g_hwnd, WM_APP_IDXMSG, 0, reinterpret_cast<LPARAM>(p))) delete p;
 }
 
+bool g_ixTestOnly = false;  // tests: the index is only the folder they asked for (IdxTestOnly), nothing replaces it
+
 void IdxPublish(std::shared_ptr<const IdxVolume> v) {
     std::lock_guard lk(g_ixm);
+    if (g_ixTestOnly) return;
     bool replaced = false;
     for (auto& x : g_ixVols)
         if (x->letter == v->letter) {
@@ -98,13 +101,9 @@ void IdxAddNode(IdxVolume& v, uint32_t parent, const wchar_t* name, size_t len, 
     v.nodes.push_back(n);
 }
 
-// Normal walk (no special permissions).
-std::shared_ptr<IdxVolume> IdxWalk(wchar_t letter) {
-    auto v = std::make_shared<IdxVolume>();
-    v->letter = letter;
-    wchar_t root[3] = {letter, L':', 0};
-    IdxAddNode(*v, UINT32_MAX, root, 2, true);
-    std::vector<std::pair<uint32_t, std::wstring>> stack{{0, std::wstring(root) + L"\\"}};
+// A folder and everything below it, into the index under the node top.
+void IdxWalkFrom(IdxVolume& v, uint32_t top, const std::wstring& topPath, bool progress) {
+    std::vector<std::pair<uint32_t, std::wstring>> stack{{top, topPath}};
     Listing l;
     uint64_t base = g_ixCount;
     while (!stack.empty()) {
@@ -113,12 +112,21 @@ std::shared_ptr<IdxVolume> IdxWalk(wchar_t letter) {
         l = Listing{};
         EnumerateDir(path, EnumMethod::Nt, l);
         for (const Entry& e : l.entries) {
-            uint32_t me = static_cast<uint32_t>(v->nodes.size());
-            IdxAddNode(*v, idx, l.name(e), e.nameLen, e.isDir());
+            uint32_t me = static_cast<uint32_t>(v.nodes.size());
+            IdxAddNode(v, idx, l.name(e), e.nameLen, e.isDir());
             if (e.isDir() && !(e.attrs & FILE_ATTRIBUTE_REPARSE_POINT)) stack.push_back({me, Join(path, l.name(e))});
         }
-        if ((v->nodes.size() & 0x3FFF) < l.entries.size()) g_ixCount = base + v->nodes.size();
+        if (progress && (v.nodes.size() & 0x3FFF) < l.entries.size()) g_ixCount = base + v.nodes.size();
     }
+}
+
+// Normal walk (no special permissions).
+std::shared_ptr<IdxVolume> IdxWalk(wchar_t letter) {
+    auto v = std::make_shared<IdxVolume>();
+    v->letter = letter;
+    wchar_t root[3] = {letter, L':', 0};
+    IdxAddNode(*v, UINT32_MAX, root, 2, true);
+    IdxWalkFrom(*v, 0, std::wstring(root) + L"\\", true);
     v->Seal();
     return v;
 }
@@ -417,8 +425,75 @@ std::wstring IdxPath(const IdxVolume& v, uint32_t i) {
     return p;
 }
 
-// Searches on a separate thread and notifies the window with the best results.
-void IdxSearch(std::wstring query, uint64_t gen, size_t limit) {
+// The nodes of a folder and of the folders above it in a drive's index (chain[d]: the one at depth d), or nothing if it
+// isn't in it. One pass over the whole drive: the last answer is kept.
+std::vector<uint32_t> IdxChain(const IdxVolume& v, const std::wstring& folder) {
+    std::vector<std::pair<size_t, size_t>> parts;  // "C:\Users\me": where "Users" and "me" start, and how long they are
+    for (size_t i = 3; i < folder.size();) {
+        size_t j = folder.find(L'\\', i);
+        if (j == std::wstring::npos) j = folder.size();
+        if (j > i) parts.push_back({i, j - i});
+        i = j + 1;
+    }
+    if (parts.empty() || parts.size() >= 250) return {};
+    const size_t D = parts.size();
+    std::vector<std::vector<uint32_t>> at(D + 1);
+    for (size_t i = 1; i < v.count; ++i) {
+        const IdxNode& nd = v.node[i];
+        if (nd.depth == 0 || nd.depth > D || !nd.dir) continue;
+        const auto [off, len] = parts[nd.depth - 1];
+        if (nd.nameLen == len &&
+            CompareStringOrdinal(v.name + nd.nameOff, nd.nameLen, folder.c_str() + off, static_cast<int>(len), TRUE) == CSTR_EQUAL)
+            at[nd.depth].push_back(static_cast<uint32_t>(i));
+    }
+    std::vector<uint32_t> chain{0};
+    for (size_t d = 1; d <= D; ++d) {
+        auto it = std::find_if(at[d].begin(), at[d].end(), [&](uint32_t c) { return v.node[c].parent == chain.back(); });
+        if (it == at[d].end()) return {};
+        chain.push_back(*it);
+    }
+    return chain;
+}
+
+std::mutex g_ixChainM;
+struct {
+    std::weak_ptr<const IdxVolume> vol;  // not kept alive by this: a newer index replaces its file
+    std::wstring folder;
+    std::vector<uint32_t> chain;
+} g_ixChain;
+
+std::vector<uint32_t> IdxChainOf(const std::shared_ptr<const IdxVolume>& v, const std::wstring& folder) {
+    {
+        std::lock_guard lk(g_ixChainM);
+        if (!g_ixChain.vol.expired() && !g_ixChain.vol.owner_before(v) && !v.owner_before(g_ixChain.vol) && Key(g_ixChain.folder) == Key(folder))
+            return g_ixChain.chain;
+    }
+    std::vector<uint32_t> chain = IdxChain(*v, folder);
+    std::lock_guard lk(g_ixChainM);
+    g_ixChain.vol = v;
+    g_ixChain.folder = folder;
+    g_ixChain.chain = chain;
+    return chain;
+}
+
+// NearFolderPoints for node i, chain being the folder looked at and the ones above it, on the same drive.
+int IdxNear(const IdxVolume& v, uint32_t i, const std::vector<uint32_t>& chain) {
+    if (chain.size() < 2) return 0;
+    const int D = static_cast<int>(chain.size()) - 1, di = v.node[i].depth;
+    if (di >= 250) return 0;  // depths stop being counted there
+    uint32_t c = i;
+    int dc = di;
+    for (; dc > D; --dc) c = v.node[c].parent;
+    for (; dc > 0 && c != chain[dc]; --dc) {
+        if (dc <= D - 2) return 0;  // they meet more than two levels up: not near
+        c = v.node[c].parent;
+    }
+    return NearFolderPoints(dc, D - dc, di - dc);
+}
+
+// Searches on a separate thread and notifies the window with the best results. here: the folder being looked at, what is
+// near it ranks higher.
+void IdxSearch(std::wstring query, uint64_t gen, size_t limit, std::wstring here) {
     std::vector<std::shared_ptr<const IdxVolume>> vols;
     std::vector<std::wstring> added;
     {
@@ -428,6 +503,13 @@ void IdxSearch(std::wstring query, uint64_t gen, size_t limit) {
     }
     const std::wstring pat = Lower(query);
     const NearPattern close(pat, g_cfg.typoMin);
+    uint32_t hereVol = UINT32_MAX;
+    std::vector<uint32_t> chain;
+    for (uint32_t vi = 0; vi < vols.size() && here.size() >= 3 && here[1] == L':'; ++vi)
+        if (towupper(vols[vi]->letter) == towupper(here[0])) {
+            hereVol = vi;
+            chain = IdxChainOf(vols[vi], here);
+        }
     struct Hit {
         int key;
         uint32_t vol, node;  // vol = UINT32_MAX: from "added"
@@ -450,7 +532,7 @@ void IdxSearch(std::wstring query, uint64_t gen, size_t limit) {
                     for (size_t i = 1 + t; i < n; i += nth) {
                         if ((i & 0xFFFF) < nth && g_ixGen != gen) return;
                         const IdxNode& nd = v.node[i];
-                        if (!keyOf(v.name + nd.nameOff, nd, key)) continue;
+                        if (!keyOf(v.name + nd.nameOff, nd, key, vi, static_cast<uint32_t>(i))) continue;
                         if (heap.size() < kTop) {
                             heap.push_back({key, vi, static_cast<uint32_t>(i)});
                             std::push_heap(heap.begin(), heap.end());
@@ -487,10 +569,11 @@ void IdxSearch(std::wstring query, uint64_t gen, size_t limit) {
         return shown;
     };
     std::vector<Hit> all;
-    scan([&](const wchar_t* name, const IdxNode& nd, int& key) {
+    scan([&](const wchar_t* name, const IdxNode& nd, int& key, uint32_t vi, uint32_t i) {
         int sc;
         if (!FuzzyMatch(name, nd.nameLen, pat, sc, nullptr)) return false;
-        key = (sc + NameRank(name, nd.nameLen, pat)) * 8 - std::min<int>(nd.depth, 40) + (nd.dir ? 4 : 0);
+        const int nearPts = vi == hereVol ? IdxNear(*vols[vi], i, chain) : 0;
+        key = (sc + NameRank(name, nd.nameLen, pat) + nearPts) * 8 - std::min<int>(nd.depth, 40) + (nd.dir ? 4 : 0);
         total.fetch_add(1, std::memory_order_relaxed);
         return true;
     }, all);
@@ -500,7 +583,7 @@ void IdxSearch(std::wstring query, uint64_t gen, size_t limit) {
     for (uint32_t i = 0; i < added.size(); ++i) {
         std::wstring leaf = LeafOf(added[i]);
         if (FuzzyMatch(leaf.c_str(), leaf.size(), pat, sc, nullptr)) {
-            all.push_back({(sc + NameRank(leaf.c_str(), leaf.size(), pat)) * 8, UINT32_MAX, i});
+            all.push_back({(sc + NameRank(leaf.c_str(), leaf.size(), pat) + NearFolderPoints(added[i], here)) * 8, UINT32_MAX, i});
             ++total;
         }
     }
@@ -510,7 +593,7 @@ void IdxSearch(std::wstring query, uint64_t gen, size_t limit) {
     const auto good = std::count_if(all.begin(), all.end(), [](const Hit& h) { return h.key > kNearFloor / 2; });
     if (close.mistakes >= 0 && good < 40) {
         const size_t known = all.size();
-        scan([&](const wchar_t* name, const IdxNode& nd, int& key) {
+        scan([&](const wchar_t* name, const IdxNode& nd, int& key, uint32_t, uint32_t) {
             const int percent = NearMatch(name, nd.nameLen, close);
             if (!percent) return false;
             key = NearScore(percent, nd.nameLen);
@@ -538,13 +621,16 @@ void IdxSearch(std::wstring query, uint64_t gen, size_t limit) {
     }
 }
 
-void IdxRequest(const std::wstring& query) {
+std::wstring g_ixHere;  // the folder being looked at when it was asked
+
+void IdxRequest(const std::wstring& query, const std::wstring& here) {
     if (query == g_ixAsked) return;
     g_ixAsked = query;
+    g_ixHere = here;
     g_ixLimit = kIdxPage;
     uint64_t gen = ++g_ixGen;
     if (query.size() < 2) return;
-    std::thread(IdxSearch, query, gen, g_ixLimit).detach();
+    std::thread(IdxSearch, query, gen, g_ixLimit, here).detach();
 }
 
 // The end of the list is near: the same search, with room for more.
@@ -552,7 +638,68 @@ void IdxMore() {
     if (g_ixRes.query != g_ixAsked || g_ixRes.limit < g_ixLimit || g_ixRes.hits.size() >= g_ixRes.total || g_ixLimit >= kIdxMost) return;
     g_ixLimit *= 2;
     const uint64_t gen = ++g_ixGen;
-    std::thread(IdxSearch, g_ixAsked, gen, g_ixLimit).detach();
+    std::thread(IdxSearch, g_ixAsked, gen, g_ixLimit, g_ixHere).detach();
+}
+
+// How many names in the index are a real match for the pattern (lowercase), on several threads. Stops (with whatever it
+// counted) when current is no longer gen.
+uint64_t IdxCountMatches(const std::wstring& pat, const std::atomic<uint64_t>& current, uint64_t gen) {
+    std::vector<std::shared_ptr<const IdxVolume>> vols;
+    std::vector<std::wstring> added;
+    {
+        std::lock_guard lk(g_ixm);
+        vols = g_ixVols;
+        added = g_ixAdded;
+    }
+    std::atomic<uint64_t> total{0};
+    const unsigned nth = std::max(1u, std::min(8u, std::thread::hardware_concurrency()));
+    std::vector<std::thread> th;
+    for (unsigned t = 0; t < nth; ++t)
+        th.emplace_back([&, t] {
+            uint64_t mine = 0;
+            int sc;
+            for (const auto& vp : vols)
+                for (size_t i = 1 + t; i < vp->count; i += nth) {
+                    if ((i & 0xFFFF) < nth && current != gen) return;
+                    const IdxNode& nd = vp->node[i];
+                    if (FuzzyMatch(vp->name + nd.nameOff, nd.nameLen, pat, sc, nullptr) && sc > kNearFloor / 2) ++mine;
+                }
+            total += mine;
+        });
+    for (auto& x : th) x.join();
+    int sc;
+    for (const std::wstring& p : added) {
+        const std::wstring leaf = LeafOf(p);
+        if (FuzzyMatch(leaf.c_str(), leaf.size(), pat, sc, nullptr) && sc > kNearFloor / 2) ++total;
+    }
+    return total;
+}
+
+// Tests: the index is only this folder (and the folders above it, on its drive), so what they find doesn't depend on the
+// PC. Nothing is saved, and the real index doesn't come back while this Jolt runs.
+void IdxTestOnly(const std::wstring& folder) {
+    if (folder.size() < 3 || folder[1] != L':') return;
+    auto v = std::make_shared<IdxVolume>();
+    v->letter = static_cast<wchar_t>(towupper(folder[0]));
+    wchar_t root[3] = {v->letter, L':', 0};
+    IdxAddNode(*v, UINT32_MAX, root, 2, true);
+    uint32_t at = 0;
+    for (size_t i = 3; i < folder.size();) {
+        size_t j = folder.find(L'\\', i);
+        if (j == std::wstring::npos) j = folder.size();
+        if (j > i) {
+            IdxAddNode(*v, at, folder.c_str() + i, j - i, true);
+            at = static_cast<uint32_t>(v->nodes.size() - 1);
+        }
+        i = j + 1;
+    }
+    IdxWalkFrom(*v, at, folder, false);
+    v->Seal();
+    std::lock_guard lk(g_ixm);
+    g_ixTestOnly = true;
+    g_ixVols.assign(1, v);
+    g_ixAdded.clear();
+    g_ixCount = v->count;
 }
 
 void IdxStart() { std::thread(IdxBuilder).detach(); }

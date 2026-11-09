@@ -97,6 +97,7 @@ void TestPrepareData() {
     CreateDirectoryW(g_dataDir.c_str(), nullptr);
     DeleteFileW((g_dataDir + L"\\session.txt").c_str());
     DeleteFileW((g_dataDir + L"\\usage.txt").c_str());
+    DeleteFileW((g_dataDir + L"\\picks.txt").c_str());
     for (const wchar_t* n : {L"config.txt", L"views.txt", L"favorites.txt", L"menu.txt"})
         CopyFileW((real + L"\\" + n).c_str(), (g_dataDir + L"\\" + n).c_str(), FALSE);
     if (g_testOut.empty()) g_testOut = base + L"\\captures";
@@ -605,10 +606,38 @@ void TestRunStep() {
             std::wstring all;
             for (const HotItem& h : g_hot) all += L" | " + h.name + L" " + std::to_wstring(static_cast<int>(h.heat * 100));
             TestLog(L"usage:" + all);
-        } else if (s.cmd == L"usage_set") {  // path | points | how many days ago
-            const size_t bar = s.arg.find(L'|'), bar2 = s.arg.find(L'|', bar + 1);
-            HeatAdd(Trim(s.arg.substr(0, bar)), _wtof(s.arg.c_str() + bar + 1), time(nullptr) - _wtoi(s.arg.c_str() + bar2 + 1) * 86400LL);
+        } else if (s.cmd == L"usage_set") {  // path | points | how many days ago [| file]
+            const size_t bar = s.arg.find(L'|'), bar2 = s.arg.find(L'|', bar + 1), bar3 = s.arg.find(L'|', bar2 + 1);
+            HeatAdd(Trim(s.arg.substr(0, bar)), _wtof(s.arg.c_str() + bar + 1), time(nullptr) - _wtoi(s.arg.c_str() + bar2 + 1) * 86400LL,
+                    bar3 != std::wstring::npos && Trim(s.arg.substr(bar3 + 1)) == L"file");
             HeatRefresh();
+        } else if (s.cmd == L"index_only") {  // the drive index is only this folder (and the ones above it)
+            IdxTestOnly(Normalize(Trim(s.arg)));
+            TestLog(L"index_only: " + std::to_wstring(g_ixCount.load()) + L" items");
+        } else if (s.cmd == L"palette_paths") {  // Go to's first rows: path, and what the row shows of it (after a capture)
+            std::wstring out = L"palette_paths:";
+            for (size_t i = 0; i < g_pal.hits.size() && i < 8; ++i) {
+                const PalItem& it = g_pal.all[g_pal.hits[i].first];
+                out += L"\n  " + it.path + (it.picked ? L"  [picked]" : L"");
+                const int row = static_cast<int>(i) - g_pal.first;
+                if (row >= 0 && row < static_cast<int>(g_pal.shownDetail.size()) && g_pal.shownDetail[row] != it.path) out += L"  shows: " + g_pal.shownDetail[row];
+            }
+            TestLog(out);
+        } else if (s.cmd == L"palette_pick") {  // runs the first row whose title is this, as Enter would
+            for (size_t i = 0; i < g_pal.hits.size(); ++i)
+                if (g_pal.all[g_pal.hits[i].first].title == Trim(s.arg)) {
+                    TestLog(L"palette_pick: row " + std::to_wstring(i));
+                    PaletteRun(static_cast<int>(i));
+                    break;
+                }
+        } else if (s.cmd == L"picks") {  // what Ctrl+P remembers: text -> path (times)
+            std::wstring out = L"picks:";
+            for (const Pick& p : g_picks) out += L" | " + p.query + L" -> " + LeafOf(p.path) + L" (" + std::to_wstring(p.times) + L")";
+            TestLog(out);
+        } else if (s.cmd == L"hint") {  // the note under "No matches"
+            TestLog(L"hint: filter \"" + g_hint.filter + L"\" started " + std::to_wstring(g_hint.started) + L", subfolders " +
+                    (g_hint.sub ? (g_hint.subDone ? std::to_wstring(g_hint.inSub) + (g_hint.capped ? L"+" : L"") : L"…") : L"-") + L", drives " +
+                    (g_hint.drives ? (g_hint.drivesDone ? std::to_wstring(g_hint.onDrives) : L"…") : L"-"));
         } else if (s.cmd == L"favorites") {
             std::wstring all;
             for (const Favorite& v : g_favs) all += L" | " + v.name;
