@@ -591,6 +591,21 @@ void TestRunStep() {
                 out += L"font " + r->fontName + L" / " + r->fontFace + L", " + std::to_wstring(r->fontFaces) + L" faces";
             } else if (r->kind == 8) {
                 out += g_pv.svg ? L"svg " + ExifNum(g_pv.svgW, 1) + L"x" + ExifNum(g_pv.svgH, 1) : std::wstring(L"svg, not drawn yet");
+            } else if (r->kind == 9) {
+                out += std::wstring(r->media == 2 ? L"video" : L"song") + (r->bmp ? L" with a picture" : L"") + L", " + FormatDuration(r->mDur);
+                if (!r->mTitle.empty()) out += L", " + r->mTitle;
+                if (!r->mArtist.empty()) out += L" by " + r->mArtist;
+                if (MediaFor(r->path)) {
+                    out += MediaPlaying() ? L" | playing at " : L" | paused at ";
+                    out += g_media.engine ? ExifNum(g_media.engine->GetCurrentTime(), 1) + L" s" : L"-";
+                    if (g_media.video) out += L", video " + std::to_wstring(g_media.w) + L"x" + std::to_wstring(g_media.h) + (g_media.shown ? L", frames shown" : L", no frame yet");
+                    if (!g_media.error.empty()) out += L", error: " + g_media.error;
+                }
+            } else if (r->kind == 10) {
+                out += L"archive, " + std::to_wstring(r->arc.size()) + L" items:";
+                for (size_t i = 0; i < r->arc.size() && i < 12; ++i)
+                    out += L" " + std::wstring(r->arc[i].depth * 2, L'.') + r->arc[i].name + (r->arc[i].dir ? L"/" : L"") +
+                           (r->arc[i].dir ? L"" : L"(" + std::to_wstring(r->arc[i].size) + L")");
             } else if (r->kind == 5) {
                 out += L"table, " + std::to_wstring(r->rows.size()) + L" rows x " + std::to_wstring(r->cols) + L" columns, numbers in";
                 for (size_t c = 0; c < g_pv.colNum.size(); ++c)

@@ -185,6 +185,7 @@ void BgHide() {
     if (g_pal.open) PaletteClose();
     InstPanelClose();
     RenameManyClose();
+    MediaClose();  // nothing keeps playing behind a hidden window
     if (g_test) {
         g_testShown = false;
         TestLog(L"window: hidden");

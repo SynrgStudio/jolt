@@ -1,8 +1,9 @@
 // Preview (Space): right-hand column showing what's under the cursor.
 // Images via WIC (scaled and rotated per EXIF, with the camera's data under photos), SVG (Direct2D), fonts (a sample
 // in the typeface itself), Markdown rendered (markdown.inl), text/code (minified JSON indented), CSV as a table,
-// folder contents (from the listing's memory), the Shell thumbnail (PDF, videos, Office...) and, for binaries
-// Windows has nothing to show for, their bytes in hex. It all loads on a separate thread and only once the cursor
+// what an archive holds (zip read here, 7z, rar, tar and the like through Windows' tar.exe), songs and videos that
+// play (media.inl), folder contents (from the listing's memory), the Shell thumbnail (PDF, Office...) and, for
+// binaries Windows has nothing to show for, their bytes in hex. It all loads on a separate thread and only once the cursor
 // stops: moving through the list doesn't slow down.
 // Included from app.cpp after palette.inl.
 
@@ -19,10 +20,20 @@ struct PvFontHold {
     }
 };
 
+// One thing inside an archive, in tree order.
+struct ArcItem {
+    std::wstring path;  // "folder/file.txt", folders without the slash
+    bool dir = false;
+    uint64_t size = 0;
+    std::wstring name;
+    int depth = 0;
+};
+
 struct PreviewResult {
     uint64_t gen = 0;
     std::wstring path;
-    int kind = 0;  // 0 nothing, 1 image, 2 text, 3 not on this PC, 4 hex (a binary), 5 table (CSV), 6 Markdown, 7 font, 8 SVG
+    int kind = 0;  // 0 nothing, 1 image, 2 text, 3 not on this PC, 4 hex (a binary), 5 table (CSV), 6 Markdown, 7 font, 8 SVG,
+                   // 9 a song or a video, 10 an archive's contents
     ComPtr<IWICBitmap> bmp;
     UINT imgW = 0, imgH = 0;  // original size (already rotated)
     bool thumb = false;       // Shell thumbnail or icon (not enlarged)
@@ -41,6 +52,13 @@ struct PreviewResult {
     std::vector<ComPtr<IDWriteTextFormat>> fontFmt;     // fonts: the name, the alphabet, then the sample sizes
     std::wstring fontName, fontFace;
     int fontFaces = 0;
+    int media = 0;  // 1 a song, 2 a video (bmp: its cover or a frame, if Windows has one)
+    std::wstring mTitle, mArtist, mAlbum;
+    uint64_t mDur = 0;  // 100 ns units
+    std::vector<ArcItem> arc;
+    int arcFiles = 0, arcDirs = 0;
+    uint64_t arcBytes = 0;
+    bool arcLocked = false;  // some of it is encrypted
 };
 
 struct PreviewState {
@@ -179,6 +197,277 @@ bool PvFont(const std::wstring& path, const std::wstring& ext, PreviewResult& r)
     }
     r.fontHold = std::move(hold);
     r.kind = 7;
+    return true;
+}
+
+// --- archives: what they hold, as a tree.
+// 1: a zip (read here), 2: something Windows' tar.exe (libarchive) reads; 0: neither.
+int PvArchiveKind(const std::wstring& path, const std::wstring& ext) {
+    static const wchar_t* zips[] = {L".zip", L".jar", L".war", L".ear", L".apk", L".aab", L".ipa", L".nupkg", L".vsix", L".whl",
+                                    L".xpi", L".appx", L".msix", L".appxbundle", L".msixbundle", L".cbz", L".epub", L".kmz"};
+    static const wchar_t* tars[] = {L".7z", L".rar", L".tar", L".tgz", L".tbz", L".tbz2", L".txz", L".tzst", L".cab", L".iso", L".cpio",
+                                    L".xar", L".lha", L".lzh", L".cbr", L".cb7"};
+    for (const wchar_t* z : zips)
+        if (ext == z) return 1;
+    for (const wchar_t* t : tars)
+        if (ext == t) return 2;
+    const std::wstring low = Lower(path);
+    for (const wchar_t* s : {L".tar.gz", L".tar.bz2", L".tar.xz", L".tar.zst", L".tar.lz", L".tar.lzma"})
+        if (low.size() > wcslen(s) && low.compare(low.size() - wcslen(s), wcslen(s), s) == 0) return 2;
+    return 0;
+}
+
+// A zip's central directory: every name and its unpacked size (zip64 too). Data before the zip (self-extractors) is fine.
+bool PvZipList(const std::wstring& path, std::vector<std::pair<std::wstring, uint64_t>>& out, bool& locked) {
+    HANDLE h = CreateFileW(ToExtendedPath(path).c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+                           OPEN_EXISTING, FILE_FLAG_RANDOM_ACCESS, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return false;
+    auto readAt = [&](uint64_t at, void* buf, DWORD n) {
+        OVERLAPPED o{};
+        o.Offset = static_cast<DWORD>(at);
+        o.OffsetHigh = static_cast<DWORD>(at >> 32);
+        DWORD got = 0;
+        return ReadFile(h, buf, n, &got, &o) && got == n;
+    };
+    auto u16 = [](const uint8_t* p) { return static_cast<uint32_t>(p[0]) | static_cast<uint32_t>(p[1]) << 8; };
+    auto u32 = [](const uint8_t* p) { return static_cast<uint32_t>(p[0]) | static_cast<uint32_t>(p[1]) << 8 | static_cast<uint32_t>(p[2]) << 16 | static_cast<uint32_t>(p[3]) << 24; };
+    auto u64 = [&](const uint8_t* p) { return static_cast<uint64_t>(u32(p)) | static_cast<uint64_t>(u32(p + 4)) << 32; };
+    LARGE_INTEGER sz{};
+    GetFileSizeEx(h, &sz);
+    const uint64_t size = static_cast<uint64_t>(sz.QuadPart);
+    bool ok = false;
+    do {
+        if (size < 22) break;
+        const DWORD tail = static_cast<DWORD>(std::min<uint64_t>(size, 65535 + 22));  // the end record and its comment
+        std::vector<uint8_t> t(tail);
+        if (!readAt(size - tail, t.data(), tail)) break;
+        size_t e = std::wstring::npos;
+        for (size_t k = tail - 22 + 1; k-- > 0;)
+            if (u32(&t[k]) == 0x06054b50) {
+                e = k;
+                break;
+            }
+        if (e == std::wstring::npos) break;
+        uint64_t cdSize = u32(&t[e + 12]), end = size - tail + e;
+        if ((u16(&t[e + 10]) == 0xFFFF || cdSize == 0xFFFFFFFF || u32(&t[e + 16]) == 0xFFFFFFFF) && e >= 20 && u32(&t[e - 20]) == 0x07064b50) {
+            const uint64_t at = u64(&t[e - 20 + 8]);
+            uint8_t z[56];
+            if (readAt(at, z, 56) && u32(z) == 0x06064b50) {
+                cdSize = u64(z + 40);
+                end = at;
+            }
+        }
+        if (cdSize > end || cdSize > (64ull << 20)) break;
+        std::vector<uint8_t> cd(static_cast<size_t>(cdSize));
+        if (cdSize && !readAt(end - cdSize, cd.data(), static_cast<DWORD>(cdSize))) break;
+        size_t p = 0;
+        while (p + 46 <= cd.size() && u32(&cd[p]) == 0x02014b50 && out.size() < 20000) {
+            const uint32_t flags = u16(&cd[p + 8]);
+            uint64_t usize = u32(&cd[p + 24]);
+            const size_t nlen = u16(&cd[p + 28]), xlen = u16(&cd[p + 30]), clen = u16(&cd[p + 32]);
+            if (p + 46 + nlen + xlen > cd.size()) break;
+            if (usize == 0xFFFFFFFF)  // zip64: the size is in the extra field
+                for (size_t x = p + 46 + nlen; x + 12 <= p + 46 + nlen + xlen;) {
+                    const uint32_t id = u16(&cd[x]), len = u16(&cd[x + 2]);
+                    if (id == 1 && len >= 8) {
+                        usize = u64(&cd[x + 4]);
+                        break;
+                    }
+                    x += 4 + len;
+                }
+            // names: UTF-8 when flagged (and often when not), else the old DOS code page
+            const char* name = reinterpret_cast<const char*>(&cd[p + 46]);
+            UINT cp = CP_UTF8;
+            int n = MultiByteToWideChar(cp, MB_ERR_INVALID_CHARS, name, static_cast<int>(nlen), nullptr, 0);
+            if (n <= 0 && !(flags & 0x800)) {
+                cp = 437;
+                n = MultiByteToWideChar(cp, 0, name, static_cast<int>(nlen), nullptr, 0);
+            }
+            std::wstring w(static_cast<size_t>(std::max(0, n)), L'\0');
+            if (n > 0) MultiByteToWideChar(cp, 0, name, static_cast<int>(nlen), w.data(), n);
+            if (flags & 1) locked = true;
+            out.push_back({std::move(w), usize});
+            p += 46 + nlen + xlen + clen;
+        }
+        ok = true;
+    } while (false);
+    CloseHandle(h);
+    return ok;
+}
+
+// The rest through Windows' tar.exe, which reads 7z, rar, tar (and gz, bz2, xz, zstd), cab, iso...: "tar -tvf".
+bool PvTarList(const std::wstring& path, std::vector<std::pair<std::wstring, uint64_t>>& out) {
+    wchar_t sys[MAX_PATH];
+    if (!GetSystemDirectoryW(sys, MAX_PATH)) return false;
+    const std::wstring exe = std::wstring(sys) + L"\\tar.exe";
+    if (GetFileAttributesW(exe.c_str()) == INVALID_FILE_ATTRIBUTES) return false;
+    std::wstring cmd = L"\"" + exe + L"\" -tvf \"" + path + L"\"";
+    SECURITY_ATTRIBUTES sa{sizeof(sa), nullptr, TRUE};
+    HANDLE rd = nullptr, wr = nullptr;
+    if (!CreatePipe(&rd, &wr, &sa, 0)) return false;
+    SetHandleInformation(rd, HANDLE_FLAG_INHERIT, 0);
+    STARTUPINFOW si{sizeof(si)};
+    si.dwFlags = STARTF_USESTDHANDLES;
+    si.hStdOutput = wr;
+    PROCESS_INFORMATION pi{};
+    const BOOL started = CreateProcessW(exe.c_str(), cmd.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi);
+    CloseHandle(wr);
+    if (!started) {
+        CloseHandle(rd);
+        return false;
+    }
+    std::string text;
+    const ULONGLONG deadline = GetTickCount64() + 5000;  // a huge archive doesn't hold the preview up
+    for (;;) {
+        DWORD avail = 0;
+        if (!PeekNamedPipe(rd, nullptr, 0, nullptr, &avail, nullptr)) break;  // closed and empty: tar is done
+        if (avail) {
+            char buf[65536];
+            DWORD got = 0;
+            if (!ReadFile(rd, buf, std::min<DWORD>(avail, sizeof(buf)), &got, nullptr) || !got) break;
+            text.append(buf, got);
+            if (text.size() > (8u << 20)) break;
+            continue;
+        }
+        WaitForSingleObject(pi.hProcess, 10);
+        if (GetTickCount64() > deadline) break;
+    }
+    DWORD code = 1;
+    if (WaitForSingleObject(pi.hProcess, 0) != WAIT_OBJECT_0) TerminateProcess(pi.hProcess, 1);
+    else GetExitCodeProcess(pi.hProcess, &code);
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+    CloseHandle(rd);
+    if (text.empty()) return false;
+    int n = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.data(), static_cast<int>(text.size()), nullptr, 0);
+    const UINT cp = n > 0 ? CP_UTF8 : CP_ACP;
+    if (n <= 0) n = MultiByteToWideChar(cp, 0, text.data(), static_cast<int>(text.size()), nullptr, 0);
+    std::wstring all(static_cast<size_t>(std::max(0, n)), L'\0');
+    if (n > 0) MultiByteToWideChar(cp, cp == CP_UTF8 ? MB_ERR_INVALID_CHARS : 0, text.data(), static_cast<int>(text.size()), all.data(), n);
+    // "drwxr-xr-x  0 user group  1234 Nov  8 23:40 folder/name": mode, links, owner, group, size, date (3), the name
+    for (size_t p = 0; p < all.size() && out.size() < 20000;) {
+        size_t nl = all.find(L'\n', p);
+        if (nl == std::wstring::npos) nl = all.size();
+        std::wstring line = all.substr(p, nl - p);
+        p = nl + 1;
+        if (!line.empty() && line.back() == L'\r') line.pop_back();
+        size_t q = 0;
+        std::wstring field[8];
+        bool whole = true;
+        for (std::wstring& f : field) {
+            while (q < line.size() && line[q] == L' ') ++q;
+            const size_t s = q;
+            while (q < line.size() && line[q] != L' ') ++q;
+            f = line.substr(s, q - s);
+            if (f.empty()) whole = false;
+        }
+        if (!whole || field[0].size() < 10 || !iswdigit(field[4][0])) continue;
+        while (q < line.size() && line[q] == L' ') ++q;
+        std::wstring name = line.substr(std::min(q, line.size()));
+        if (field[0][0] == L'l') name = name.substr(0, name.find(L" -> "));
+        if (field[0][0] == L'h') name = name.substr(0, name.find(L" link to "));
+        if (name.empty()) continue;
+        if (field[0][0] == L'd' && name.back() != L'/') name += L'/';
+        out.push_back({std::move(name), _wcstoui64(field[4].c_str(), nullptr, 10)});
+    }
+    return !out.empty() || code == 0;
+}
+
+bool PvArchive(const std::wstring& path, int how, PreviewResult& r) {
+    std::vector<std::pair<std::wstring, uint64_t>> raw;  // inner paths ("folder/" for folders), unpacked sizes
+    if (!(how == 1 ? PvZipList(path, raw, r.arcLocked) : PvTarList(path, raw))) return false;
+    std::unordered_map<std::wstring, size_t> seen;  // lowercase path -> its place in r.arc
+    auto add = [&](const std::wstring& p, bool dir, uint64_t size) {
+        for (size_t slash = p.find(L'/'); slash != std::wstring::npos; slash = p.find(L'/', slash + 1)) {  // its folders, even unlisted
+            const std::wstring d = p.substr(0, slash), k = Lower(d);
+            if (!d.empty() && !seen.count(k)) {
+                seen[k] = r.arc.size();
+                r.arc.push_back({d, true});
+            }
+        }
+        if (p.empty()) return;
+        auto it = seen.find(Lower(p));
+        if (it != seen.end()) return;
+        seen[Lower(p)] = r.arc.size();
+        r.arc.push_back({p, dir, size});
+    };
+    for (auto& [p0, size] : raw) {
+        std::wstring p = p0;
+        for (wchar_t& c : p)
+            if (c == L'\\') c = L'/';
+        while (p.rfind(L"./", 0) == 0) p.erase(0, 2);
+        while (!p.empty() && p[0] == L'/') p.erase(0, 1);
+        const bool dir = !p.empty() && p.back() == L'/';
+        while (!p.empty() && p.back() == L'/') p.pop_back();
+        add(p, dir, size);
+    }
+    for (ArcItem& a : r.arc) {
+        a.depth = static_cast<int>(std::count(a.path.begin(), a.path.end(), L'/'));
+        a.name = a.path.substr(a.path.rfind(L'/') + 1);
+        if (a.dir) ++r.arcDirs;
+        else {
+            ++r.arcFiles;
+            r.arcBytes += a.size;
+        }
+    }
+    // tree order: each folder before what it holds, folders before files, by name
+    std::sort(r.arc.begin(), r.arc.end(), [](const ArcItem& a, const ArcItem& b) {
+        size_t i = 0, j = 0;
+        for (;;) {
+            const size_t ie = a.path.find(L'/', i), je = b.path.find(L'/', j);
+            const size_t ae = ie == std::wstring::npos ? a.path.size() : ie, be = je == std::wstring::npos ? b.path.size() : je;
+            const bool aDir = ie != std::wstring::npos || a.dir, bDir = je != std::wstring::npos || b.dir;
+            const int c = CompareStringOrdinal(a.path.c_str() + i, static_cast<int>(ae - i), b.path.c_str() + j, static_cast<int>(be - j), TRUE);
+            if (c != CSTR_EQUAL) return aDir != bDir ? aDir : c == CSTR_LESS_THAN;
+            if (ie == std::wstring::npos || je == std::wstring::npos) return ie == std::wstring::npos && je != std::wstring::npos;
+            i = ie + 1;
+            j = je + 1;
+        }
+    });
+    r.kind = 10;
+    return true;
+}
+
+// --- songs and videos: the cover or a frame Windows has, title, artist, album, length. They play in media.inl.
+bool PvThumb(IWICImagingFactory* wic, const std::wstring& path, PreviewResult& r, bool* icon);  // below
+int PvMediaKind(const std::wstring& ext) {  // 1 a song, 2 a video, by the registry's PerceivedType; any thread
+    PERCEIVED t = PERCEIVED_TYPE_UNSPECIFIED;
+    PERCEIVEDFLAG f = 0;
+    if (ext.empty() || FAILED(AssocGetPerceivedType(ext.c_str(), &t, &f, nullptr))) return 0;
+    return t == PERCEIVED_TYPE_AUDIO ? 1 : t == PERCEIVED_TYPE_VIDEO ? 2 : 0;
+}
+std::wstring PvPropText(IPropertyStore* ps, const PROPERTYKEY& k) {
+    PROPVARIANT v;
+    PropVariantInit(&v);
+    std::wstring s;
+    if (SUCCEEDED(ps->GetValue(k, &v))) {
+        if (v.vt == VT_LPWSTR && v.pwszVal) s = v.pwszVal;
+        else if (v.vt == (VT_VECTOR | VT_LPWSTR))
+            for (ULONG i = 0; i < v.calpwstr.cElems; ++i) s += (i ? L", " : L"") + std::wstring(v.calpwstr.pElems[i] ? v.calpwstr.pElems[i] : L"");
+    }
+    PropVariantClear(&v);
+    return s;
+}
+bool PvMedia(IWICImagingFactory* wic, const std::wstring& path, int media, PreviewResult& r) {
+    bool icon = true;
+    if (wic && PvThumb(wic, path, r, &icon) && icon) r.bmp.Reset();  // only a real picture: a cover, a frame
+    r.thumb = true;
+    r.imgW = r.imgH = 0;  // the thumbnail's size isn't the video's
+    ComPtr<IPropertyStore> ps;
+    if (SUCCEEDED(SHGetPropertyStoreFromParsingName(path.c_str(), nullptr, GPS_DEFAULT, IID_PPV_ARGS(&ps)))) {
+        static const PROPERTYKEY kTitle = {{0xF29F85E0, 0x4FF9, 0x1068, {0xAB, 0x91, 0x08, 0x00, 0x2B, 0x27, 0xB3, 0xD9}}, 2};
+        static const GUID kMusic = {0x56A3372E, 0xCE9C, 0x11D2, {0x9F, 0x0E, 0x00, 0x60, 0x97, 0xC6, 0x86, 0xF6}};
+        r.mTitle = PvPropText(ps.Get(), kTitle);
+        r.mArtist = PvPropText(ps.Get(), PROPERTYKEY{kMusic, 2});
+        r.mAlbum = PvPropText(ps.Get(), PROPERTYKEY{kMusic, 4});
+        r.mDur = PropNumber(ps.Get(), kPkDuration);
+        if (media == 2) {
+            r.imgW = static_cast<UINT>(PropNumber(ps.Get(), kPkVideoW));
+            r.imgH = static_cast<UINT>(PropNumber(ps.Get(), kPkVideoH));
+        }
+    }
+    r.media = media;
+    r.kind = 9;
     return true;
 }
 
@@ -866,6 +1155,8 @@ void PreviewThread() {
             bool done = wic && PvIsImage(ext) && PvImage(wic.Get(), path, *r);
             if (!done && PvIsFont(ext)) done = PvFont(path, ext, *r);
             if (!done && ext == L".svg") done = PvSvg(path, *r);
+            if (const int arc = done ? 0 : PvArchiveKind(path, ext)) done = PvArchive(path, arc, *r);
+            if (const int media = done ? 0 : PvMediaKind(ext)) done = PvMedia(wic.Get(), path, media, *r);
             int text = 0;
             if (!done && !PvIsBinary(ext)) {
                 const bool table = PvIsTable(ext);
@@ -909,6 +1200,7 @@ void PreviewLoad() {
     static std::once_flag started;
     std::call_once(started, [] { std::thread(PreviewThread).detach(); });
     g_pv.path = g_pv.want;
+    if (g_media.path != g_pv.path) MediaClose();
     g_pv.res.reset();
     g_pv.d2d.Reset();
     g_pv.lines.clear();
@@ -1002,6 +1294,7 @@ void PreviewApply(PreviewResult* raw) {
 
 void PreviewToggle() {
     g_preview = !g_preview;
+    if (!g_preview) MediaClose();
     g_pv.want.clear();
     g_pv.path = L"\x01";  // forces a load
     for (auto& tp : g_tabs) ClampScroll(*tp);
@@ -1009,6 +1302,32 @@ void PreviewToggle() {
     LayoutRename();
     Invalidate();
     TouchSession();
+}
+
+// Play or pause what the preview shows (a song or a video).
+void PreviewPlay() {
+    if (g_pv.res && g_pv.res->kind == 9 && Key(g_pv.res->path) == Key(g_pv.path)) MediaPlayPause(g_pv.res->path, g_pv.res->media == 2);
+}
+
+// An icon font at another size (the play button, the note over a song without a cover).
+IDWriteTextFormat* PvIconFmt(float size) {
+    static std::unordered_map<int, ComPtr<IDWriteTextFormat>> fmts;
+    auto& f = fmts[static_cast<int>(size)];
+    if (!f) f = MakeFormat(FontExists(L"Segoe Fluent Icons") ? L"Segoe Fluent Icons" : L"Segoe MDL2 Assets", size, DWRITE_TEXT_ALIGNMENT_CENTER,
+                           DWRITE_FONT_WEIGHT_NORMAL, false);
+    return f.Get();
+}
+
+// The preview's bitmap (an image, a cover, a frame) fitted into r, centered; enlarge: bigger than it is.
+void PvDrawFit(const D2D1_RECT_F& r, bool enlarge) {
+    if (!g_pv.d2d && g_pv.res && g_pv.res->bmp) g_rt->CreateBitmapFromWicBitmap(g_pv.res->bmp.Get(), nullptr, &g_pv.d2d);
+    if (!g_pv.d2d) return;
+    const D2D1_SIZE_U px = g_pv.d2d->GetPixelSize();
+    const float iw = px.width * 96.f / g_dpi, ih = px.height * 96.f / g_dpi, bw = r.right - r.left, bh = r.bottom - r.top;
+    float k = std::min(bw / iw, bh / ih);
+    if (!enlarge) k = std::min(k, 1.f);
+    const float dw = iw * k, dh = ih * k, x = std::round(r.left + (bw - dw) / 2), y = std::round(r.top + (bh - dh) / 2);
+    g_rt->DrawBitmap(g_pv.d2d.Get(), D2D1::RectF(x, y, x + dw, y + dh), 1.f, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
 }
 
 // steps: notches of the wheel, up or left positive. Sideways only moves tables.
@@ -1167,6 +1486,15 @@ void DrawPreview(float W, float H) {
             info[3] = {L"Shown", L"Indented for reading"};
         else if (rowMatches && g_pv.res && g_pv.res->kind == 6)
             info[3] = {L"Shown", L"Rendered"};
+        else if (rowMatches && g_pv.res && g_pv.res->kind == 9 && g_pv.res->mDur)
+            info[3] = {L"Length", FormatDuration(g_pv.res->mDur) +
+                                      (g_pv.res->imgW ? L"  ·  " + std::to_wstring(g_pv.res->imgW) + L" × " + std::to_wstring(g_pv.res->imgH) : L"")};
+        else if (rowMatches && g_pv.res && g_pv.res->kind == 10) {
+            wchar_t sz[32];
+            FormatSize(g_pv.res->arcBytes, sz, 32);
+            info[3] = {L"Contains", Thousands(g_pv.res->arcFiles) + L" files  ·  " + Thousands(g_pv.res->arcDirs) + L" folders  ·  " + sz +
+                                        (g_pv.res->arcLocked ? L"  ·  encrypted" : L"")};
+        }
         else if (rowMatches && g_pv.res && g_pv.res->kind == 7)
             info[3] = {L"Font", g_pv.res->fontName + L"  ·  " + g_pv.res->fontFace +
                                     (g_pv.res->fontFaces > 1 ? L"  ·  " + Thousands(g_pv.res->fontFaces) + L" faces" : L"")};
@@ -1243,6 +1571,80 @@ void DrawPreview(float W, float H) {
         Text(L"Online only", g_fmtCenter.Get(), L, mid - 18, R, mid + 2);
         Color(cFaint);
         Text(L"Open it to download it", g_fmtCenter.Get(), L, mid + 2, R, mid + 22);
+    } else if (g_pv.res && g_pv.res->kind == 9) {
+        // a song or a video: the picture, then play / pause, the time and the bar
+        const PreviewResult& m = *g_pv.res;
+        const float ctlY = bot - 30;
+        const bool mine = MediaFor(m.path);
+        if (m.media == 2) {
+            const D2D1_RECT_F area = D2D1::RectF(L, top, R, ctlY - 12);
+            const bool frame = mine && MediaDrawVideo(area);
+            if (!frame && m.bmp) PvDrawFit(area, true);
+            if (!frame && !m.bmp) {
+                Color(cFaint);
+                Text(std::wstring(1, L'\xE714'), PvIconFmt(48), area.left, area.top, area.right, area.bottom);  // Video
+            }
+            if (!mine || !g_media.shown) {  // the big play button, until the video shows
+                const float cx = (area.left + area.right) / 2, cy = (area.top + area.bottom) / 2;
+                Color(0x000000, IsHover(HitKind::PreviewPlay, 0) ? 0.7f : 0.55f);
+                g_rt->FillEllipse(D2D1::Ellipse(D2D1::Point2F(cx, cy), 30, 30), g_brush.Get());
+                Color(0xFFFFFF);
+                Text(std::wstring(1, L'\xE768'), PvIconFmt(22), cx - 28, cy - 30, cx + 32, cy + 30);
+            }
+            g_hits.push_back({area, HitKind::PreviewPlay, 0});
+        } else {
+            const float side = std::max(40.f, std::min({R - L, 220.f, ctlY - top - 74}));
+            const float at = top + std::max(4.f, std::round((ctlY - 12 - top - side - 58) / 2));  // cover and names, centered
+            const D2D1_RECT_F art = D2D1::RectF(std::round((L + R - side) / 2), at, std::round((L + R + side) / 2), at + side);
+            if (m.bmp) {
+                PvDrawFit(art, true);
+            } else {
+                Round(art, 12, 0x24242B);
+                Color(cDim);
+                Text(std::wstring(1, L'\xEC4F'), PvIconFmt(std::round(side * 0.35f)), art.left, art.top, art.right, art.bottom);  // MusicNote
+            }
+            g_hits.push_back({art, HitKind::PreviewPlay, 0});
+            const std::wstring title = !m.mTitle.empty() ? m.mTitle : LeafOf(m.path).substr(0, LeafOf(m.path).rfind(L'.'));
+            std::wstring by = m.mArtist;
+            if (!m.mAlbum.empty()) by += (by.empty() ? L"" : L"  ·  ") + m.mAlbum;
+            const float tw = MeasureW(title, g_fmtNameBold.Get());  // centered under the cover, cut with … when long
+            Color(cText);
+            Text(title, g_fmtNameBold.Get(), std::max(L, std::round((L + R - tw) / 2)), art.bottom + 12, R, art.bottom + 34);
+            Color(cDim);
+            Text(by, g_fmtCenter.Get(), L, art.bottom + 34, R, art.bottom + 54);
+        }
+        MediaControls(m.path, L, R, ctlY, m.mDur / 1e7);
+    } else if (g_pv.res && g_pv.res->kind == 10) {
+        // an archive: its tree, folders first, each file's size
+        const auto& items = g_pv.res->arc;
+        const float rh = 22;
+        g_pv.scroll = std::min(g_pv.scroll, std::max(0.f, items.size() * rh - (bot - top)));
+        if (items.empty()) {
+            Color(cFaint);
+            Text(L"Empty archive", g_fmtCenter.Get(), L, top, R, top + 60);
+        }
+        for (int i = std::max(0, static_cast<int>(g_pv.scroll / rh)); i < static_cast<int>(items.size()); ++i) {
+            const float y = top + i * rh - g_pv.scroll;
+            if (y > bot) break;
+            const ArcItem& it = items[i];
+            const float x = L + 2 + std::min(it.depth, 12) * 14.f;
+            const int idx = it.dir ? g_iconFolder : IconForExt(it.name.c_str(), it.name.size());
+            if (ID2D1Bitmap* bmp = idx >= 0 ? IconBitmap(idx) : nullptr) {
+                g_rt->DrawBitmap(bmp, D2D1::RectF(x, y + (rh - kIcon) / 2, x + kIcon, y + (rh + kIcon) / 2), 1.f, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
+            } else {
+                Color(it.dir ? 0xE6B450 : 0x9AA3B2);
+                Glyph(it.dir ? gFolder : gFile, g_fmtIcon.Get(), x - 2, y, x + kIcon + 2, y + rh);
+            }
+            wchar_t sz[32] = L"";
+            if (!it.dir) FormatSize(it.size, sz, 32);
+            const float sw = it.dir ? 0.f : 64.f;
+            Color(0xC9C9D1);
+            Text(it.name, g_fmtName.Get(), x + 24, y, R - sw, y + rh);
+            if (!it.dir) {
+                Color(cFaint);
+                Text(sz, wcslen(sz), g_fmtRight.Get(), R - sw, y, R, y + rh);
+            }
+        }
     } else if (g_pv.res && g_pv.res->kind == 6 && g_pv.res->md) {
         MdDoc& d = *g_pv.res->md;
         const float mr = R - 4;  // room for the text's last letter in italics
