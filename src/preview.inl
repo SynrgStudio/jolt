@@ -12,10 +12,10 @@ constexpr UINT_PTR kTimerPreview = 6;
 constexpr UINT_PTR kTimerHold = 18;  // the preview's key held long enough: the floating preview
 
 // The floating preview: the preview's key (Space) held shows a big preview over the list and letting go hides it;
-// a tap still opens or closes the panel. Which one it was is known on letting go, or once the key is held 150 ms.
+// a tap still opens or closes the panel. Which one it was is known on letting go, or once the key is held
+// [general] preview_hold milliseconds (150 by default, 50 at least).
 bool g_pvFloat = false;
-decltype(NowMs()) g_pvFloatAt = 0;  // when it came up: it grows in
-UINT g_pvHoldKey = 0;               // the preview's key, while it is down
+UINT g_pvHoldKey = 0;  // the preview's key, while it is down
 
 // A font loaded from memory gets a loader of its own, unregistered once the preview moves on: the file is never
 // held open (it can be renamed or deleted while it shows) and nothing builds up.
@@ -1366,12 +1366,11 @@ void PreviewToggle() {
 
 void PreviewHoldStart(UINT vk) {
     g_pvHoldKey = vk;
-    SetTimer(g_hwnd, kTimerHold, 150, nullptr);
+    SetTimer(g_hwnd, kTimerHold, static_cast<UINT>(g_cfg.previewHold), nullptr);
 }
 void PreviewFloatShow() {  // still held: up it comes
     if (!g_pvHoldKey || g_pvFloat) return;
     g_pvFloat = true;
-    g_pvFloatAt = NowMs();
     if (!g_preview) {  // what is under the cursor, now
         g_pv.want.clear();
         g_pv.path = L"\x01";
@@ -2190,32 +2189,19 @@ void DrawPreview(float W, float H) {
     if (!g_pvFloat) DrawPreviewBody(x0, y0, W, y1);  // while it floats, the content is up there
 }
 
-// The floating preview: a big card over the list, the rest dimmed. It comes in growing a little and fading in.
+// The floating preview: a big card over the list, the rest dimmed. It shows at once, without an animation.
 void DrawPreviewFloat(float W, float H) {
     if (!g_pvFloat) return;
-    const float t = std::clamp(static_cast<float>(NowMs() - g_pvFloatAt) / 140.f, 0.f, 1.f), e = 1 - (1 - t) * (1 - t) * (1 - t);
-    if (t < 1) SetTimer(g_hwnd, kTimerTabSlide, 15, nullptr);
     const float top = kTabH, room = H - top;
     const float cw = std::clamp(W * 0.72f, std::min(W - 32, 480.f), std::max(200.f, W - 48));
     const float ch = std::clamp(room * 0.86f, std::min(room - 24, 360.f), std::max(160.f, room - 32));
     const float cx = W / 2, cy = top + room / 2;
     const D2D1_RECT_F card = D2D1::RectF(std::round(cx - cw / 2), std::round(cy - ch / 2), std::round(cx + cw / 2), std::round(cy + ch / 2));
-    Fill(D2D1::RectF(0, 0, W, H), 0x000000, 0.42f * e);
-    D2D1_MATRIX_3X2_F old;
-    g_rt->GetTransform(&old);
-    const float s = 0.96f + 0.04f * e;
-    if (e < 1) {
-        g_rt->SetTransform(D2D1::Matrix3x2F::Scale(s, s, D2D1::Point2F(cx, cy)) * old);
-        g_rt->PushLayer(D2D1::LayerParameters(D2D1::InfiniteRect(), nullptr, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE, D2D1::IdentityMatrix(), e), nullptr);
-    }
+    Fill(D2D1::RectF(0, 0, W, H), 0x000000, 0.42f);
     for (int i = 1; i <= 4; ++i)  // a soft shadow
         Round(D2D1::RectF(card.left - i * 3, card.top - i * 2, card.right + i * 3, card.bottom + i * 4), 12.f + i * 3, 0x000000, 0.07f);
     Round(card, 12, cSide);
     Color(cBorder);
     g_rt->DrawRoundedRectangle(D2D1::RoundedRect(D2D1::RectF(card.left + 0.5f, card.top + 0.5f, card.right - 0.5f, card.bottom - 0.5f), 12, 12), g_brush.Get(), 1);
     DrawPreviewBody(card.left + 6, card.top + 6, card.right - 6, card.bottom - 4);
-    if (e < 1) {
-        g_rt->PopLayer();
-        g_rt->SetTransform(old);
-    }
 }

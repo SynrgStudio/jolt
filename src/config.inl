@@ -38,6 +38,7 @@ struct Config {
     bool previewWrap = true;  // long lines wrap in the text preview
     bool previewMarkdown = true;  // Markdown rendered in the preview (no: its source, highlighted)
     bool checkerDark = false;     // the checkerboard behind see-through images and SVG: light, or dark
+    int previewHold = 150;        // ms the preview's key is held before the floating preview shows (50 to 1000)
     bool cloudStatus = true;  // marks the files of cloud folders that are online only, or always on this PC
     int typoMin = 75;         // searches also show names this close to what was typed, in percent; 0: only real matches
     bool background = true, tray = true, openDrives = false;
@@ -332,6 +333,9 @@ void WriteDefaultConfig() {
         "preview_markdown = yes\n"
         "# The checkerboard behind see-through images and SVG in the preview: light / dark\n"
         "preview_checker = light\n"
+        "# How long Space is held before the big floating preview shows, in milliseconds (50 to 1000). Shorter is\n"
+        "# quicker, but a slow tap may show it for a moment instead of opening the panel.\n"
+        "preview_hold = 150\n"
         "# Cloud folders (OneDrive and the like): a cloud next to what is online only, a check next to what is always\n"
         "# on this PC: yes / no. Jolt never downloads them to list or preview them, whatever this says.\n"
         "cloud_status = yes\n"
@@ -465,6 +469,7 @@ void LoadConfig() {
             else if (key == L"preview_wrap") g_cfg.previewWrap = ParseBool(val);
             else if (key == L"preview_markdown") g_cfg.previewMarkdown = ParseBool(val);
             else if (key == L"preview_checker") g_cfg.checkerDark = Lower(Trim(val)) == L"dark";
+            else if (key == L"preview_hold") g_cfg.previewHold = std::clamp(_wtoi(val.c_str()), 50, 1000);
             else if (key == L"cloud_status") g_cfg.cloudStatus = ParseBool(val);
             else if (key == L"filter_typos") g_cfg.typoMin = _wtoi(val.c_str()) > 0 ? std::clamp(_wtoi(val.c_str()), 50, 100) : ParseBool(val) ? 75 : 0;
             else if (key == L"run_in_background") g_cfg.background = ParseBool(val);
