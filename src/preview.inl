@@ -12,7 +12,7 @@ constexpr UINT_PTR kTimerPreview = 6;
 constexpr UINT_PTR kTimerHold = 18;  // the preview's key held long enough: the floating preview
 
 // The floating preview: the preview's key (Space) held shows a big preview over the list and letting go hides it;
-// a tap still opens or closes the panel. Which one it was is known on letting go, or once the key is held 260 ms.
+// a tap still opens or closes the panel. Which one it was is known on letting go, or once the key is held 150 ms.
 bool g_pvFloat = false;
 decltype(NowMs()) g_pvFloatAt = 0;  // when it came up: it grows in
 UINT g_pvHoldKey = 0;               // the preview's key, while it is down
@@ -1366,7 +1366,7 @@ void PreviewToggle() {
 
 void PreviewHoldStart(UINT vk) {
     g_pvHoldKey = vk;
-    SetTimer(g_hwnd, kTimerHold, 260, nullptr);
+    SetTimer(g_hwnd, kTimerHold, 150, nullptr);
 }
 void PreviewFloatShow() {  // still held: up it comes
     if (!g_pvHoldKey || g_pvFloat) return;
