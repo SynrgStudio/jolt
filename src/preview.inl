@@ -1462,6 +1462,8 @@ ID2D1BitmapBrush* CheckerBrush() {
     return g_pvChecker.Get();
 }
 
+bool SvgNormalize(ID2D1SvgDocument* doc, float& w, float& h);
+
 // The SVG made a Direct2D document, on its first draw. False: Direct2D can't draw it (old Windows, or not valid).
 bool PvSvgOpen() {
     g_pv.svgTried = true;
@@ -1471,11 +1473,21 @@ bool PvSvgOpen() {
     st.Attach(SHCreateMemStream(reinterpret_cast<const BYTE*>(g_pv.res->svg.data()), static_cast<UINT>(g_pv.res->svg.size())));
     ComPtr<ID2D1SvgDocument> doc;
     if (!st || FAILED(dc->CreateSvgDocument(st.Get(), D2D1::SizeF(100, 100), &doc)) || !doc) return false;
+    float w = 0, h = 0;
+    if (!SvgNormalize(doc.Get(), w, h)) return false;
+    g_pv.svg = doc;
+    g_pv.svgW = w;
+    g_pv.svgH = h;
+    g_pv.svgVp = {};
+    return true;
+}
+
+// An SVG document's own size (width and height, or its viewBox's), then made to fill whatever viewport it gets.
+bool SvgNormalize(ID2D1SvgDocument* doc, float& w, float& h) {
     ComPtr<ID2D1SvgElement> root;
     doc->GetRoot(&root);
     if (!root) return false;
-    // its size: width and height, or the viewBox's; then it is made to fill whatever it is given
-    float w = 0, h = 0;
+    w = h = 0;
     D2D1_SVG_LENGTH len{};
     if (SUCCEEDED(root->GetAttributeValue(L"width", D2D1_SVG_ATTRIBUTE_POD_TYPE_LENGTH, &len, sizeof(len))) && len.units == D2D1_SVG_LENGTH_UNITS_NUMBER) w = len.value;
     if (SUCCEEDED(root->GetAttributeValue(L"height", D2D1_SVG_ATTRIBUTE_POD_TYPE_LENGTH, &len, sizeof(len))) && len.units == D2D1_SVG_LENGTH_UNITS_NUMBER) h = len.value;
@@ -1494,11 +1506,7 @@ bool PvSvgOpen() {
     const D2D1_SVG_LENGTH full{100.f, D2D1_SVG_LENGTH_UNITS_PERCENTAGE};
     root->SetAttributeValue(L"width", D2D1_SVG_ATTRIBUTE_POD_TYPE_LENGTH, &full, sizeof(full));
     root->SetAttributeValue(L"height", D2D1_SVG_ATTRIBUTE_POD_TYPE_LENGTH, &full, sizeof(full));
-    g_pv.svg = doc;
-    g_pv.svgW = w;
-    g_pv.svgH = h;
-    g_pv.svgVp = {};
-    return true;
+    return w > 0 && h > 0;
 }
 
 // --- the picture (an image, or the SVG): zoomed with Ctrl+wheel around the mouse, moved by dragging or with the
@@ -1673,6 +1681,237 @@ void PvDrawPicture(const D2D1_RECT_F& box) {
         }
         g_hits.push_back({b, HitKind::PreviewTool, i});
     }
+}
+
+// --- copying the picture to the clipboard (the palette's "preview copy image", or a right click on the preview).
+// An image is read again at its whole size, turned as it shows; a thumbnail or a cover as it is; an SVG drawn at
+// 1024 px on its long side (or its own size, if bigger); a playing video, the frame on screen. Opaque pictures go
+// as a 24-bit DIB, which every program reads; see-through ones as a DIBV5 with alpha and as PNG.
+constexpr UINT WM_APP_CLIPIMG = WM_APP + 17;
+struct ClipImage {
+    HGLOBAL dib = nullptr, png = nullptr;
+    bool v5 = false;  // dib is a BITMAPV5HEADER with alpha (else a 24-bit BITMAPINFOHEADER)
+    UINT w = 0, h = 0;
+    ~ClipImage() {
+        if (dib) GlobalFree(dib);
+        if (png) GlobalFree(png);
+    }
+};
+void TestClipImage(const ClipImage& c);  // testmode.inl: tests don't touch the real clipboard
+
+ClipImage* ClipImageFrom(IWICImagingFactory* wic, IWICBitmapSource* src) {
+    UINT w = 0, h = 0;
+    src->GetSize(&w, &h);
+    ComPtr<IWICFormatConverter> conv;
+    if (!w || !h || FAILED(wic->CreateFormatConverter(&conv)) ||
+        FAILED(conv->Initialize(src, GUID_WICPixelFormat32bppBGRA, WICBitmapDitherTypeNone, nullptr, 0, WICBitmapPaletteTypeCustom)))
+        return nullptr;
+    std::vector<uint8_t> px(static_cast<size_t>(w) * h * 4);
+    if (FAILED(conv->CopyPixels(nullptr, w * 4, static_cast<UINT>(px.size()), px.data()))) return nullptr;
+    bool alpha = false;
+    for (size_t i = 3; i < px.size() && !alpha; i += 4) alpha = px[i] != 255;
+    auto c = std::make_unique<ClipImage>();
+    c->w = w;
+    c->h = h;
+    c->v5 = alpha;
+    if (alpha) {
+        c->dib = GlobalAlloc(GMEM_MOVEABLE, sizeof(BITMAPV5HEADER) + px.size());
+        auto* p = c->dib ? static_cast<uint8_t*>(GlobalLock(c->dib)) : nullptr;
+        if (!p) return nullptr;
+        BITMAPV5HEADER hd{};
+        hd.bV5Size = sizeof(hd);
+        hd.bV5Width = static_cast<LONG>(w);
+        hd.bV5Height = static_cast<LONG>(h);  // bottom-up, which every reader takes
+        hd.bV5Planes = 1;
+        hd.bV5BitCount = 32;
+        hd.bV5Compression = BI_BITFIELDS;
+        hd.bV5SizeImage = static_cast<DWORD>(px.size());
+        hd.bV5RedMask = 0x00FF0000;
+        hd.bV5GreenMask = 0x0000FF00;
+        hd.bV5BlueMask = 0x000000FF;
+        hd.bV5AlphaMask = 0xFF000000;
+        hd.bV5CSType = LCS_sRGB;
+        hd.bV5Intent = LCS_GM_IMAGES;
+        memcpy(p, &hd, sizeof(hd));
+        for (UINT y = 0; y < h; ++y) memcpy(p + sizeof(hd) + static_cast<size_t>(y) * w * 4, px.data() + static_cast<size_t>(h - 1 - y) * w * 4, w * 4);
+        GlobalUnlock(c->dib);
+        // and as PNG, what most programs keep the transparency from
+        ComPtr<IStream> st;
+        ComPtr<IWICBitmapEncoder> enc;
+        ComPtr<IWICBitmapFrameEncode> fr;
+        WICPixelFormatGUID f = GUID_WICPixelFormat32bppBGRA;
+        if (SUCCEEDED(CreateStreamOnHGlobal(nullptr, FALSE, &st))) {
+            if (SUCCEEDED(wic->CreateEncoder(GUID_ContainerFormatPng, nullptr, &enc)) && SUCCEEDED(enc->Initialize(st.Get(), WICBitmapEncoderNoCache)) &&
+                SUCCEEDED(enc->CreateNewFrame(&fr, nullptr)) && SUCCEEDED(fr->Initialize(nullptr)) && SUCCEEDED(fr->SetSize(w, h)) &&
+                SUCCEEDED(fr->SetPixelFormat(&f)) && f == GUID_WICPixelFormat32bppBGRA &&
+                SUCCEEDED(fr->WritePixels(h, w * 4, static_cast<UINT>(px.size()), px.data())) && SUCCEEDED(fr->Commit()) && SUCCEEDED(enc->Commit()))
+                GetHGlobalFromStream(st.Get(), &c->png);
+            else if (HGLOBAL g = nullptr; SUCCEEDED(GetHGlobalFromStream(st.Get(), &g)))
+                GlobalFree(g);
+        }
+    } else {
+        const UINT stride = (w * 3 + 3) & ~3u;
+        c->dib = GlobalAlloc(GMEM_MOVEABLE | GMEM_ZEROINIT, sizeof(BITMAPINFOHEADER) + static_cast<size_t>(stride) * h);
+        auto* p = c->dib ? static_cast<uint8_t*>(GlobalLock(c->dib)) : nullptr;
+        if (!p) return nullptr;
+        BITMAPINFOHEADER hd{};
+        hd.biSize = sizeof(hd);
+        hd.biWidth = static_cast<LONG>(w);
+        hd.biHeight = static_cast<LONG>(h);
+        hd.biPlanes = 1;
+        hd.biBitCount = 24;
+        hd.biCompression = BI_RGB;
+        hd.biSizeImage = stride * h;
+        memcpy(p, &hd, sizeof(hd));
+        for (UINT y = 0; y < h; ++y) {
+            uint8_t* d = p + sizeof(hd) + static_cast<size_t>(h - 1 - y) * stride;
+            const uint8_t* s = px.data() + static_cast<size_t>(y) * w * 4;
+            for (UINT x = 0; x < w; ++x) {
+                d[x * 3] = s[x * 4];
+                d[x * 3 + 1] = s[x * 4 + 1];
+                d[x * 3 + 2] = s[x * 4 + 2];
+            }
+        }
+        GlobalUnlock(c->dib);
+    }
+    return c.release();
+}
+
+// An SVG drawn into a bitmap, 1024 px on its long side or its own size if bigger (4096 at most).
+ComPtr<IWICBitmap> SvgToBitmap(IWICImagingFactory* wic, const std::string& svg) {
+    ComPtr<ID2D1Factory> f;
+    if (FAILED(D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, f.GetAddressOf()))) return nullptr;
+    auto target = [&](UINT w, UINT h, ComPtr<IWICBitmap>& bmp, ComPtr<ID2D1RenderTarget>& rt, ComPtr<ID2D1DeviceContext5>& dc) {
+        return SUCCEEDED(wic->CreateBitmap(w, h, GUID_WICPixelFormat32bppPBGRA, WICBitmapCacheOnLoad, &bmp)) &&
+               SUCCEEDED(f->CreateWicBitmapRenderTarget(bmp.Get(),
+                                                        D2D1::RenderTargetProperties(D2D1_RENDER_TARGET_TYPE_DEFAULT,
+                                                                                     D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED), 96, 96),
+                                                        &rt)) &&
+               SUCCEEDED(rt.As(&dc));
+    };
+    auto open = [&](ID2D1DeviceContext5* dc, ComPtr<ID2D1SvgDocument>& doc, float& w, float& h) {
+        ComPtr<IStream> st;
+        st.Attach(SHCreateMemStream(reinterpret_cast<const BYTE*>(svg.data()), static_cast<UINT>(svg.size())));
+        return st && SUCCEEDED(dc->CreateSvgDocument(st.Get(), D2D1::SizeF(100, 100), &doc)) && doc && SvgNormalize(doc.Get(), w, h);
+    };
+    ComPtr<IWICBitmap> bmp;
+    ComPtr<ID2D1RenderTarget> rt;
+    ComPtr<ID2D1DeviceContext5> dc;
+    ComPtr<ID2D1SvgDocument> doc;
+    float w = 0, h = 0;
+    if (!target(1, 1, bmp, rt, dc) || !open(dc.Get(), doc, w, h)) return nullptr;  // its size first
+    const float side = std::max(w, h), s = std::clamp(1024.f / side, std::min(1.f, 4096.f / side), 4096.f / side);
+    const UINT W = std::max(1u, static_cast<UINT>(std::lround(w * s))), H = std::max(1u, static_cast<UINT>(std::lround(h * s)));
+    if (!target(W, H, bmp, rt, dc) || !open(dc.Get(), doc, w, h)) return nullptr;  // a document belongs to its target
+    doc->SetViewportSize(D2D1::SizeF(static_cast<float>(W), static_cast<float>(H)));
+    rt->BeginDraw();
+    rt->Clear(D2D1::ColorF(0, 0.f));
+    dc->DrawSvgDocument(doc.Get());
+    return SUCCEEDED(rt->EndDraw()) ? bmp : nullptr;
+}
+
+void PreviewClipDone(ClipImage* raw) {
+    std::unique_ptr<ClipImage> c(raw);
+    bool ok = false;
+    if (c->dib && g_test) {
+        TestClipImage(*c);
+        ok = true;
+    } else if (c->dib && OpenClipboard(g_hwnd)) {
+        EmptyClipboard();
+        if (SetClipboardData(c->v5 ? CF_DIBV5 : CF_DIB, c->dib)) {  // the clipboard's now
+            c->dib = nullptr;
+            ok = true;
+        }
+        if (ok && c->png && SetClipboardData(RegisterClipboardFormatW(L"PNG"), c->png)) c->png = nullptr;
+        CloseClipboard();
+    }
+    S.message = ok ? L"Image copied: " + std::to_wstring(c->w) + L" × " + std::to_wstring(c->h) + (c->v5 ? L", with its transparency" : L"")
+                   : std::wstring(L"The image couldn't be copied");
+    Invalidate();
+}
+
+bool PvHasPicture() {
+    const PreviewResult* r = g_pv.res.get();
+    return r && (((r->kind == 1 || r->kind == 9) && r->bmp) || (r->kind == 8 && !r->svg.empty()) ||
+                 (r->kind == 9 && MediaFor(r->path) && g_media.shown && g_media.frame));
+}
+
+void PreviewCopyImage() {
+    if (!(g_preview || g_pvFloat) || !PvHasPicture()) {
+        S.message = L"The preview isn't showing a picture to copy";
+        Invalidate();
+        return;
+    }
+    const PreviewResult& r = *g_pv.res;
+    if (r.kind == 9 && MediaFor(r.path) && g_media.shown && g_media.frame) {  // a video playing: the frame on screen
+        ClipImage* c = ClipImageFrom(g_wic.Get(), g_media.frame.Get());
+        PreviewClipDone(c ? c : new ClipImage);
+        return;
+    }
+    struct Job {
+        std::wstring path;
+        int kind;
+        bool thumb;
+        int rot;
+        std::string svg;
+    };
+    Job j{r.path, r.kind, r.kind == 9 || r.thumb, PvZoomable() ? g_pv.rot : 0, r.kind == 8 ? r.svg : std::string()};
+    S.message = L"Copying the image…";
+    Invalidate();
+    std::thread([j] {
+        CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+        ClipImage* c = nullptr;
+        {
+            ComPtr<IWICImagingFactory> wic;
+            if (SUCCEEDED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&wic)))) {
+                ComPtr<IWICBitmap> bmp;
+                PreviewResult tmp;
+                if (j.kind == 8) bmp = SvgToBitmap(wic.Get(), j.svg);
+                else if (j.thumb ? PvThumb(wic.Get(), j.path, tmp, nullptr) : PvImage(wic.Get(), j.path, tmp, 16384)) bmp = tmp.bmp;
+                if (bmp) {
+                    ComPtr<IWICBitmapSource> src = bmp;
+                    static const WICBitmapTransformOptions turn[] = {WICBitmapTransformRotate0, WICBitmapTransformRotate90, WICBitmapTransformRotate180,
+                                                                     WICBitmapTransformRotate270};
+                    ComPtr<IWICBitmapFlipRotator> fr;
+                    if (j.rot && SUCCEEDED(wic->CreateBitmapFlipRotator(&fr)) && SUCCEEDED(fr->Initialize(bmp.Get(), turn[j.rot & 3]))) src = fr;
+                    c = ClipImageFrom(wic.Get(), src.Get());
+                }
+            }
+        }
+        CoUninitialize();
+        if (!c) c = new ClipImage;  // empty: it failed
+        if (!PostMessageW(g_hwnd, WM_APP_CLIPIMG, 0, reinterpret_cast<LPARAM>(c))) delete c;
+    }).detach();
+}
+
+// A right click on what the preview shows: copy the picture, and turn or zoom it.
+bool PreviewMenuAt(float x, float y, POINT screenPt) {
+    const D2D1_RECT_F& b = g_pv.box;
+    if (!(g_preview || g_pvFloat) || !PvHasPicture() || x < b.left || x > b.right || y < b.top || y > b.bottom) return false;
+    std::vector<MenuItem> items;
+    auto add = [&](const wchar_t* text, UINT id) {
+        MenuItem m;
+        m.text = text;
+        m.id = id;
+        items.push_back(std::move(m));
+    };
+    add(L"Copy image", 1);
+    if (PvZoomable()) {
+        MenuItem sep;
+        sep.sep = true;
+        items.push_back(std::move(sep));
+        add(L"Turn left", 2);
+        add(L"Turn right", 3);
+        add(g_pv.zoom > 0 ? L"Fit" : L"Real size", 4);
+    }
+    const RECT anchor{screenPt.x, screenPt.y, screenPt.x, screenPt.y};
+    PopupOpen(std::move(items), anchor, [](UINT id) {
+        if (id == 1) PreviewCopyImage();
+        else if (id == 2) PreviewRotate(-1);
+        else if (id == 3) PreviewRotate(1);
+        else if (id == 4) PreviewToolClick(2);
+    });
+    return true;
 }
 
 // A "label ...... value" line in the info block.

@@ -11,7 +11,7 @@ enum class Cmd {
     SortByType, ZoomIn, ZoomOut, ZoomReset, RowsTaller, RowsShorter, EmptyRecycleBin,
     Undo, Redo, OpenAsAdmin, PinTab, Restore,
     Install, Quit, RenameMany, FolderSiblings, ViewList, ViewGrid, ViewColumns, ViewBigger, ViewSmaller, Tag, FolderColor, Zen, SizeBars, PreviewWrap, PreviewMarkdown, PreviewPlay, PreviewRotate, PreviewRotateLeft, PreviewZoom, PreviewZoomIn,
-    PreviewZoomOut, PreviewChecker,
+    PreviewZoomOut, PreviewChecker, PreviewCopyImage,
     FindDuplicates, SelectExtraCopies, SelectPattern, SelectSameExtension, InvertSelection, Settings, Checkboxes, NewFromTemplate, CopyTo, MoveTo, Attributes, InUse, Unblock,
     CustomFirst = 1000  // + index into g_cfg.custom: the user's own commands
 };
@@ -113,6 +113,7 @@ const CmdDef kCommands[] = {
     {L"preview_zoom", Cmd::PreviewZoom, L"", L"the image in the preview at its real size, or fitting (toggle)"},
     {L"preview_zoom_in", Cmd::PreviewZoomIn, L"", L"zoom in on the image in the preview (also Ctrl+wheel over it)"},
     {L"preview_zoom_out", Cmd::PreviewZoomOut, L"", L"zoom out of the image in the preview"},
+    {L"preview_copy_image", Cmd::PreviewCopyImage, L"", L"copy the picture in the preview to the clipboard (also a right click on it)"},
     {L"preview_checker", Cmd::PreviewChecker, L"", L"light or dark checkerboard behind see-through images (toggle)"},
     {L"preview_markdown", Cmd::PreviewMarkdown, L"", L"show Markdown rendered in the preview, or as its source (toggle)"},
     {L"split", Cmd::Split, L"Ctrl+S", L"split view with two panes"},
