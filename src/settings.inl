@@ -282,6 +282,9 @@ std::vector<SetRow> SettingsRows(int section) {
             stepper(L"Preview width", L"Dragging its edge changes it too.", static_cast<int>(kPreviewMinW), 1600, 20,
                     [] { return static_cast<int>(std::lround(g_previewW)); }, [](int v) { SetGeneral(L"preview_width", std::to_wstring(v)); },
                     [](int v) { return std::to_wstring(v) + L" px"; });
+            stepper(L"Hold Space for the floating preview", L"How long, before the big preview shows over the list. A tap still opens the panel.", 50, 1000, 10,
+                    [] { return g_cfg.previewHold; }, [](int v) { SetGeneral(L"preview_hold", std::to_wstring(v)); },
+                    [](int v) { return std::to_wstring(v) + L" ms"; });
             head(L"Colors");
             for (const ColorDef& c : kColors) {
                 std::wstring help = c.help;

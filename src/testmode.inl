@@ -572,8 +572,12 @@ void TestRunStep() {
             std::wstring all;
             for (const Favorite& v : g_favs) all += L" | " + v.name;
             TestLog(L"favorites:" + all);
+        } else if (s.cmd == L"key_down" || s.cmd == L"key_up") {  // only one half of a key: held, then let go
+            UINT mods = 0, vk = 0;
+            if (!ParseKey(s.arg, mods, vk)) TestLog(L"unknown key: " + s.arg);
+            else SendMessageW(TestKeyTarget(), s.cmd == L"key_down" ? WM_KEYDOWN : WM_KEYUP, vk, s.cmd == L"key_down" ? 1 : 0xC0000001);
         } else if (s.cmd == L"preview") {  // what the preview shows: its kind and what it found
-            std::wstring out = L"preview: " + LeafOf(g_pv.path) + L" | ";
+            std::wstring out = std::wstring(L"preview") + (g_pvFloat ? L" (floating)" : L"") + (g_preview ? L" (panel)" : L"") + L": " + LeafOf(g_pv.path) + L" | ";
             const PreviewResult* r = g_pv.res.get();
             if (!r) out += g_pv.loading ? L"loading" : L"none";
             else if (r->kind == 1) {

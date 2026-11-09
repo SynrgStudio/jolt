@@ -3650,6 +3650,7 @@ void DrawStatus(int pane, float H) {
 }
 
 void DrawPreview(float W, float H);     // preview.inl
+void DrawPreviewFloat(float W, float H);  // preview.inl
 void DrawViewEditor(float W, float H);  // viewedit.inl
 void DrawInstallPanel(float W, float H);  // install.inl
 void DrawRenamePanel(float W, float H);   // rename.inl
@@ -3725,6 +3726,7 @@ void Render() {
         g_hits.push_back({D2D1::RectF(x - 3, kTabH + ToolH(), x + 4, H - kStatus), HitKind::Divider, 0});
     }
     DrawPreview(W, H);
+    DrawPreviewFloat(W, H);
     DrawViewEditor(W, H);
     DrawPalette(W, H);
     DrawInstallPanel(W, H);
@@ -5401,6 +5403,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         }
         case WM_SETFOCUS:
         case WM_KILLFOCUS:
+            PreviewHoldEnd(true);  // no letting go will come here
             Invalidate();
             return 0;
         case WM_APP_RESULT: {
@@ -5477,6 +5480,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             }
             if (wp == kTimerPreview) PreviewLoad();
             if (wp == kTimerMedia) MediaTick();
+            if (wp == kTimerHold) PreviewFloatShow();
             if (wp == kTimerTest) {
                 if (g_testBlocking) SetTimer(hwnd, kTimerTest, 30, nullptr);  // a step is still waiting
                 else TestRunStep();
@@ -5547,6 +5551,10 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             // configurable shortcuts first (config.txt)
             const UINT mods = (ctrl ? ModCtrl : 0) | (shift ? ModShift : 0) | (alt ? ModAlt : 0);
             Cmd cmd = FindCommand(mods, static_cast<UINT>(wp));
+            if (cmd == Cmd::Preview && msg == WM_KEYDOWN) {  // held: the floating preview; a tap: the panel (on letting go)
+                if (!(lp & (1 << 30))) PreviewHoldStart(static_cast<UINT>(wp));  // not the key repeating
+                return 0;
+            }
             if (cmd != Cmd::None) {
                 g_eatSysChar = msg == WM_SYSKEYDOWN;
                 RunCommand(cmd);
@@ -5586,6 +5594,12 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             }
             return 0;
         }
+        case WM_KEYUP:
+            if (g_pvHoldKey && wp == g_pvHoldKey) {
+                PreviewHoldEnd(false);
+                return 0;
+            }
+            break;
         case WM_SYSCHAR:
             if (g_eatSysChar) {
                 g_eatSysChar = false;
