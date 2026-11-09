@@ -664,6 +664,17 @@ void TestRunStep() {
                 out += L"]";
             }
             TestLog(L"cells:" + out);
+        } else if (s.cmd == L"miller") {  // the Miller columns: each column's folder, * the tab's, > the next one
+            const MillerGeo m = MillerLayout(T());
+            std::wstring out = L"miller: " + std::wstring(GeoFor(T()).miller ? L"on, " : L"off, ") + std::to_wstring(m.n) + L" columns";
+            for (int col = 0; col < m.n; ++col) {
+                const int i = m.first + col;
+                out += L" | " + (i <= m.depth()                               ? MillerTitle(m.chain[i]) + (i == m.depth() ? L"*" : L"")
+                                 : i == m.depth() + 1 && !MillerNext(T()).empty() ? L">" + MillerTitle(MillerNext(T()))
+                                                                                : std::wstring(L"-"));
+                if (i < m.depth()) out += g_cache.count(Key(m.chain[i])) ? L" (in memory)" : g_millerPending.count(Key(m.chain[i])) ? L" (asked)" : L" (not asked)";
+            }
+            TestLog(out);
         } else if (s.cmd == L"rename_preview") {  // the rename panel's rows: old -> new, with problems
             std::wstring out = L"rename_preview: " + std::to_wstring(g_rn.changing) + L" change, " + std::to_wstring(g_rn.problems) + L" problems";
             for (const RnItem& it : g_rn.items)
