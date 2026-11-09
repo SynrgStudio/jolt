@@ -4105,7 +4105,10 @@ void ViewEditorOpen(int pane);
 #include "syntax.inl"
 #include "grep.inl"
 #include "preview.inl"
-void PreviewReleaseBitmap() { g_pv.d2d.Reset(); }
+void PreviewReleaseBitmap() {
+    g_pv.d2d.Reset();
+    g_pvBrushes.clear();
+}
 #include "background.inl"
 #include "install.inl"
 #include "rename.inl"
@@ -5737,6 +5740,13 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (GET_XBUTTON_WPARAM(wp) == XBUTTON1) GoBack();
             else GoForward();
             return TRUE;
+        case WM_MOUSEHWHEEL: {  // the wheel tilted, or two fingers sideways: tables in the preview
+            POINT pt{GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
+            ScreenToClient(hwnd, &pt);
+            const float x = pt.x * 96.f / g_dpi, y = pt.y * 96.f / g_dpi;
+            if (g_preview && x >= ClientDip().width - PreviewW() && y >= kTabH + ToolH()) PreviewWheel(-GET_WHEEL_DELTA_WPARAM(wp) / 120.f, true);
+            return 0;
+        }
         case WM_MOUSEWHEEL: {
             POINT pt{GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
             ScreenToClient(hwnd, &pt);
@@ -5771,7 +5781,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 return 0;
             }
             if (g_preview && x >= ClientDip().width - PreviewW() && y >= kTabH + ToolH()) {
-                PreviewWheel(delta / 120);
+                PreviewWheel(delta / 120.f, (GET_KEYSTATE_WPARAM(wp) & MK_SHIFT) || (g_test && KeyDown(VK_SHIFT)));
                 return 0;
             }
             if (MillerWheel(x, y, delta)) return 0;
