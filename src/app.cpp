@@ -624,7 +624,7 @@ bool g_ignoreClipUpdate = false;
 int g_dropRow = -1, g_dropPane = 0, g_dropSide = -1, g_dropTab = -1;  // target highlighted during a drag
 
 // Clickable areas, recomputed on every draw.
-enum class HitKind { None, Tab, TabClose, TabNew, SideToggle, AppMenu, Back, Fwd, Up, Crumb, CrumbChev, PathEmpty, Side, Header, Divider, ViewBtn, FoldBtn, ColEdge, PreviewEdge, FolderNote, HeadCheck, HeadCol, Miller, PreviewPlay, PreviewSeek };
+enum class HitKind { None, Tab, TabClose, TabNew, SideToggle, AppMenu, Back, Fwd, Up, Crumb, CrumbChev, PathEmpty, Side, Header, Divider, ViewBtn, FoldBtn, ColEdge, PreviewEdge, FolderNote, HeadCheck, HeadCol, Miller, PreviewPlay, PreviewSeek, PreviewImage, PreviewTool };
 struct Hit {
     D2D1_RECT_F r;
     HitKind kind;
@@ -4599,6 +4599,18 @@ void RunCommand(Cmd cmd) {
         case Cmd::PreviewPlay:
             if (g_preview) PreviewPlay();
             break;
+        case Cmd::PreviewRotate: PreviewRotate(1); break;
+        case Cmd::PreviewRotateLeft: PreviewRotate(-1); break;
+        case Cmd::PreviewZoom: PreviewToolClick(2); break;
+        case Cmd::PreviewZoomIn: PreviewZoomStep(1); break;
+        case Cmd::PreviewZoomOut: PreviewZoomStep(-1); break;
+        case Cmd::PreviewChecker:
+            g_cfg.checkerDark = !g_cfg.checkerDark;
+            ConfigSetValue(L"general", L"preview_checker", g_cfg.checkerDark ? L"dark" : L"light");
+            RefreshConfigSig();
+            S.message = g_cfg.checkerDark ? L"Checkerboard behind see-through images: dark" : L"Checkerboard behind see-through images: light";
+            Invalidate();
+            break;
         case Cmd::PreviewMarkdown:
             g_cfg.previewMarkdown = !g_cfg.previewMarkdown;
             ConfigSetValue(L"general", L"preview_markdown", g_cfg.previewMarkdown ? L"yes" : L"no");
@@ -5604,6 +5616,15 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 PreviewPlay();
                 return 0;
             }
+            if (HitAt(x, y).kind == HitKind::PreviewTool) {
+                PreviewToolClick(HitAt(x, y).idx);
+                return 0;
+            }
+            if (HitAt(x, y).kind == HitKind::PreviewImage) {  // dragging moves a zoomed picture
+                PreviewPanStart(x, y);
+                SetCapture(hwnd);
+                return 0;
+            }
             if (HitAt(x, y).kind == HitKind::PreviewSeek) {  // a click on the bar goes there; dragging follows
                 g_media.seeking = true;
                 MediaSeekAt(x, g_pv.res ? g_pv.res->mDur / 1e7 : 0);
@@ -5677,6 +5698,12 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 Invalidate();
                 return 0;
             }
+            if (g_pv.panning) {
+                g_pv.panning = false;
+                ReleaseCapture();
+                Invalidate();
+                return 0;
+            }
             if (g_divDrag) {
                 g_divDrag = false;
                 ReleaseCapture();
@@ -5698,6 +5725,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             ColDragEnd();
             PreviewDragEnd();
             g_media.seeking = false;
+            g_pv.panning = false;
             return 0;
         case WM_MBUTTONDOWN:
             SetFocus(hwnd);
@@ -5740,6 +5768,11 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             }
             Hit dh = HitAt(DipX(lp), DipY(lp));
             if (dh.kind == HitKind::FolderNote) return 0;  // the first click already did it
+            if (dh.kind == HitKind::PreviewImage) {  // fitting <-> its real size, there
+                PreviewZoomToggle(DipX(lp), DipY(lp));
+                return 0;
+            }
+            if (dh.kind == HitKind::PreviewTool || dh.kind == HitKind::PreviewPlay || dh.kind == HitKind::PreviewSeek) return 0;
             if (dh.kind == HitKind::ColEdge) {
                 FitColumn(dh.idx % ColKinds, dh.idx / ColKinds);
                 return 0;
@@ -5805,6 +5838,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 }
                 return 0;
             }
+            // Ctrl+wheel over a picture in the preview: zoom, around the mouse.
+            if (((GET_KEYSTATE_WPARAM(wp) & MK_CONTROL) || (g_test && KeyDown(VK_CONTROL))) && PreviewZoomAt(x, y, delta / 120.f)) return 0;
             // Ctrl+wheel: tabs of the pane underneath (up = next, down = previous).
             // Ctrl comes in the wheel message itself, so it doesn't depend on focus.
             if ((GET_KEYSTATE_WPARAM(wp) & MK_CONTROL) || (g_test && KeyDown(VK_CONTROL))) {
@@ -5864,6 +5899,10 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             }
             if (g_media.seeking) {
                 MediaSeekAt(x, g_pv.res ? g_pv.res->mDur / 1e7 : 0);
+                return 0;
+            }
+            if (g_pv.panning) {
+                PreviewPanMove(x, y);
                 return 0;
             }
             if (g_divDrag) {
@@ -5929,6 +5968,10 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 GetCursorPos(&pt);
                 ScreenToClient(hwnd, &pt);
                 Hit h = HitAt(pt.x * 96.f / g_dpi, pt.y * 96.f / g_dpi);
+                if (h.kind == HitKind::PreviewImage) {  // a picture bigger than the box can be moved
+                    SetCursor(LoadCursorW(nullptr, g_pv.panning || PreviewPannable() ? IDC_SIZEALL : IDC_ARROW));
+                    return TRUE;
+                }
                 const bool sizeWE = h.kind == HitKind::Divider || h.kind == HitKind::ColEdge || h.kind == HitKind::PreviewEdge;
                 bool link = h.kind != HitKind::None && h.kind != HitKind::PathEmpty && !sizeWE;
                 if (h.kind == HitKind::None && HeaderRowIn(std::max(0, PaneAt(pt.x * 96.f / g_dpi, pt.y * 96.f / g_dpi)), pt.x * 96.f / g_dpi, pt.y * 96.f / g_dpi) >= 0)
