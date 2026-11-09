@@ -922,6 +922,61 @@ void ArcOpenInside(const std::wstring& full) {
     }).detach();
 }
 
+// Dragging out of an archive: the selection is taken out to a folder of its own first (2 GB at most), and those
+// copies are what is dragged, so they can be dropped on a tab, the other pane, File Explorer or the desktop.
+bool ArcDragOut(ComPtr<IDataObject>& pdo, std::vector<std::wstring>& files) {
+    Tab& t = T();
+    std::wstring archive, inner;
+    if (!ArcSplit(t.path, archive, inner)) return false;
+    const std::shared_ptr<const ArcTree> tree = ArcTreeOf(archive);
+    if (!tree) return false;
+    std::vector<std::wstring> inners, names;
+    uint64_t bytes = 0;
+    for (const std::wstring& f : SelectedFullPaths(t)) {
+        std::wstring a, i;
+        if (!ArcSplit(f, a, i) || i.empty()) continue;
+        const ArcTree::Item* it = tree->Find(i);
+        if (!it) continue;
+        inners.push_back(i);
+        names.push_back(it->raw.empty() ? i : it->raw);
+        if (!it->dir) {
+            bytes += it->size;
+        } else {  // everything under it
+            std::wstring prefix = it->path + L"/";
+            for (const ArcTree::Item& c : tree->items)
+                if (!c.dir && c.path.size() > prefix.size() && _wcsnicmp(c.path.c_str(), prefix.c_str(), prefix.size()) == 0) bytes += c.size;
+        }
+    }
+    if (inners.empty()) return false;
+    if (bytes > (2ull << 30)) {
+        S.message = L"Too much to drag out of the archive at once: F5 or right click → Extract do it without waiting";
+        Invalidate();
+        return false;
+    }
+    HCURSOR was = SetCursor(LoadCursorW(nullptr, IDC_WAIT));
+    static int n = 0;
+    const std::wstring dir = ArcTempRoot() + L"\\drag-" + std::to_wstring(GetCurrentProcessId()) + L"-" + std::to_wstring(GetTickCount64()) + L"-" + std::to_wstring(++n);
+    const bool ok = ArcExtractSome(archive, names, dir);
+    SetCursor(was);
+    for (const std::wstring& i : inners)
+        if (ok && PathExists(dir + L"\\" + i)) files.push_back(dir + L"\\" + i);
+    if (files.empty()) {
+        S.message = L"Couldn't take that out of " + LeafOf(archive);
+        Invalidate();
+        return false;
+    }
+    std::vector<PIDLIST_ABSOLUTE> full;  // the copies as Shell items: what other programs take
+    for (const std::wstring& p : files) {
+        PIDLIST_ABSOLUTE f = nullptr;
+        if (SUCCEEDED(SHParseDisplayName(p.c_str(), nullptr, &f, 0, nullptr)) && f) full.push_back(f);
+    }
+    ComPtr<IShellItemArray> items;
+    if (!full.empty() && SUCCEEDED(SHCreateShellItemArrayFromIDLists(static_cast<UINT>(full.size()), (PCIDLIST_ABSOLUTE_ARRAY)full.data(), &items)))
+        items->BindToHandler(nullptr, BHID_DataObject, IID_PPV_ARGS(&pdo));
+    for (auto f : full) CoTaskMemFree(f);
+    return pdo != nullptr;
+}
+
 // Commands inside an archive: copying takes things out, the rest of what would change it is refused. True when handled.
 bool ArcBrowseCommand(Cmd cmd) {
     Tab& t = T();

@@ -3,9 +3,30 @@
 // Target: the folder under the cursor (row, background, favorite, drive or tab) delegates to the
 // IDropTarget the Shell provides for that folder: the same code File Explorer uses, so
 // move/copy by drive, Ctrl/Shift, conflicts, "optimized move" and undo all behave the same.
-// Source: the selection is dragged with the Shell data object (SHDoDragDrop sets the image).
+// Source: the selection is dragged with the Shell data object (SHDoDragDrop sets the image). From inside an archive,
+// the selection is taken out first and the copies are dragged (archive.inl).
+// A drag held over a tab for a moment brings that tab to the front, so the drop can go into its folder or one of its
+// subfolders; a quick drop on the tab still goes into its folder.
 
 ComPtr<IDropTargetHelper> g_dropHelper;
+constexpr UINT_PTR kTimerSpring = 19;  // a drag held over a tab
+int g_springTab = -1;                  // the tab under the drag (that isn't in front)
+bool ArcDragOut(ComPtr<IDataObject>& pdo, std::vector<std::wstring>& files);  // archive.inl
+
+// The tab under a drag: once it has been there a moment it comes to the front.
+void SpringTab(int tab) {
+    if (tab >= 0 && tab < static_cast<int>(g_tabs.size()) && g_tabs[tab].get() == &T()) tab = -1;  // already in front
+    if (tab == g_springTab) return;
+    g_springTab = tab;
+    if (tab >= 0) SetTimer(g_hwnd, kTimerSpring, 500, nullptr);
+    else KillTimer(g_hwnd, kTimerSpring);
+}
+void SpringFire() {
+    const int tab = g_springTab;
+    g_springTab = -1;
+    if (tab >= 0 && tab < static_cast<int>(g_tabs.size())) SelectTab(tab);
+    Invalidate();
+}
 
 // What's dragged from Jolt and dropped in Jolt isn't passed to the Shell, which doesn't report what it did:
 // it's resolved with FileOp when the drag ends, so it lands in the Ctrl+Z history.
@@ -105,6 +126,7 @@ struct DropTarget : IDropTarget {
         else
             inner->DragOver(keys, pt, effect);
         Highlight(row, side, tab);
+        SpringTab(tab);
     }
 
     STDMETHODIMP DragEnter(IDataObject* pdo, DWORD keys, POINTL pt, DWORD* effect) override {
@@ -128,6 +150,7 @@ struct DropTarget : IDropTarget {
         return S_OK;
     }
     STDMETHODIMP DragLeave() override {
+        SpringTab(-1);
         if (inner) inner->DragLeave();
         inner.Reset();
         innerValid = false;
@@ -139,6 +162,7 @@ struct DropTarget : IDropTarget {
     STDMETHODIMP Drop(IDataObject* pdo, DWORD keys, POINTL pt, DWORD* effect) override {
         data = pdo;
         Track(keys, pt, effect, false);
+        SpringTab(-1);
         if (g_dropHelper) {
             POINT p{pt.x, pt.y};
             g_dropHelper->Drop(pdo, &p, *effect);
@@ -227,15 +251,17 @@ void RunPendingDrop() {
 
 // Drags the current selection.
 void StartDrag() {
+    ComPtr<IDataObject> pdo;
+    std::vector<std::wstring> files;
     if (InArchive(T().path)) {
-        S.message = L"To take something out of an archive: Ctrl+C here and Ctrl+V there, or right click → Extract";
-        Invalidate();
-        return;
+        if (!ArcDragOut(pdo, files)) return;  // taken out first; it says why if it can't
+    } else {
+        pdo = SelectionDataObject();
+        files = SelectedFullPaths(T());
     }
-    ComPtr<IDataObject> pdo = SelectionDataObject();
     if (!pdo) return;
     ReleaseCapture();
-    g_dragFiles = SelectedFullPaths(T());
+    g_dragFiles = std::move(files);
     DWORD effect = DROPEFFECT_NONE;
     HRESULT hr = SHDoDragDrop(g_hwnd, pdo.Get(), nullptr, DROPEFFECT_COPY | DROPEFFECT_MOVE | DROPEFFECT_LINK, &effect);
     Log(L"SHDoDragDrop hr=0x%08X effect=%u", static_cast<unsigned>(hr), effect);

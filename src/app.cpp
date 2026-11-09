@@ -5515,6 +5515,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (wp == kTimerPreview) PreviewLoad();
             if (wp == kTimerMedia) MediaTick();
             if (wp == kTimerHold) PreviewFloatShow();
+            if (wp == kTimerSpring) SpringFire();
             if (wp == kTimerTest) {
                 if (g_testBlocking) SetTimer(hwnd, kTimerTest, 30, nullptr);  // a step is still waiting
                 else TestRunStep();

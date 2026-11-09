@@ -430,9 +430,23 @@ void TestDragOver(const std::wstring& arg) {
     int consumed = 0;
     swscanf_s(arg.c_str(), L"%f %f %31s %n", &x, &y, mode, 32, &consumed);
     std::wstring src = Trim(arg.substr(std::min<size_t>(consumed, arg.size())));
-    g_testDrag = Lower(src) == L"selection" ? SelectionDataObject() : TestDataObjectForPaths(src);
+    if (Lower(src) == L"keep" && g_testDrag) {  // the same drag, moved to another point
+        Render();
+        POINT pt{TestPx(x), TestPx(y)};
+        ClientToScreen(g_hwnd, &pt);
+        g_testDragPt = {pt.x, pt.y};
+        DWORD eff = DROPEFFECT_COPY | DROPEFFECT_MOVE | DROPEFFECT_LINK;
+        g_dropTarget->DragOver(g_testDragKeys, g_testDragPt, &eff);
+        TestLog(L"dragging over " + g_dropTarget->innerPath + L": offers " + EffectText(eff));
+        return;
+    }
     g_dragFiles.clear();
-    if (Lower(src) == L"selection") g_dragFiles = SelectedFullPaths(T());
+    if (Lower(src) == L"selection" && InArchive(T().path)) {
+        ArcDragOut(g_testDrag, g_dragFiles);
+    } else {
+        g_testDrag = Lower(src) == L"selection" ? SelectionDataObject() : TestDataObjectForPaths(src);
+        if (Lower(src) == L"selection") g_dragFiles = SelectedFullPaths(T());
+    }
     if (!g_testDrag) {
         TestLog(L"drag_over: nothing to drag (" + src + L")");
         return;
