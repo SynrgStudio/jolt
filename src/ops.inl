@@ -290,7 +290,9 @@ void TransferToOther(bool move) {
         return;
     }
     if (FileOp(move ? FileOpKind::Move : FileOpKind::Copy, files, dst.path)) {
-        if (files.size() == 1) dst.pendingSelect = LeafOf(files[0]);
+        std::vector<std::wstring> names;
+        for (const auto& f : files) names.push_back(LeafOf(f));
+        SelectLanded(dst.path, names);
         S.message = (move ? L"Moved to " : L"Copied to ") + TabTitle(dst);
     }
     Enqueue(dst.path, JobKind::Revalidate);

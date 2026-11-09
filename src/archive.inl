@@ -389,7 +389,7 @@ void ArcMessage(WPARAM wp, LPARAM lp) {
     }
     g_undoMerge = false;
     if (!d->folder.empty()) Enqueue(d->folder, JobKind::Revalidate);
-    if (!d->select.empty() && Key(T().path) == Key(d->folder)) T().pendingSelect = d->select;
+    if (!d->select.empty()) SelectLanded(d->folder, {LeafOf(d->select)});
     S.message = d->message;
     Invalidate();
 }
@@ -847,9 +847,9 @@ void ArcOutDone(ArcOut* raw) {
         }
     } else if (o->then == 2 && !o->files.empty()) {
         if (FileOp(FileOpKind::Move, o->files, o->dest)) {
-            if (o->files.size() == 1 && Key(T().path) == Key(o->dest)) T().pendingSelect = LeafOf(o->files[0]);
-            for (auto& tp : g_tabs)
-                if (Key(tp->path) == Key(o->dest)) Enqueue(o->dest, JobKind::Revalidate);
+            std::vector<std::wstring> names;
+            for (const std::wstring& f : o->files) names.push_back(LeafOf(f));
+            SelectLanded(o->dest, names);
         } else {
             o->message.clear();
         }

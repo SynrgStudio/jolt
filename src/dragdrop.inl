@@ -9,6 +9,7 @@
 // subfolders; a quick drop on the tab still goes into its folder.
 
 ComPtr<IDropTargetHelper> g_dropHelper;
+std::vector<std::wstring> DropNames(IDataObject* pdo);
 constexpr UINT_PTR kTimerSpring = 19;  // a drag held over a tab
 int g_springTab = -1;                  // the tab under the drag (that isn't in front)
 bool ArcDragOut(ComPtr<IDataObject>& pdo, std::vector<std::wstring>& files);  // archive.inl
@@ -175,6 +176,7 @@ struct DropTarget : IDropTarget {
         } else if (inner) {
             HRESULT hr = inner->Drop(pdo, keys, pt, effect);
             Log(L"Drop hr=0x%08X effect=%u on \"%s\"", static_cast<unsigned>(hr), *effect, innerPath.c_str());
+            if (SUCCEEDED(hr) && *effect != DROPEFFECT_NONE) SelectLanded(innerPath, DropNames(pdo));  // when it shows up
         } else {
             *effect = DROPEFFECT_NONE;
         }
@@ -245,8 +247,29 @@ void RunPendingDrop() {
     for (const auto& f : files)
         if (Key(ParentOf(f)) != Key(d.dest)) elsewhere.push_back(f);
     // copying onto its own folder creates copies with another name, as in File Explorer
-    if (d.move) FileOp(FileOpKind::Move, elsewhere, d.dest);
-    else FileOp(FileOpKind::Copy, files, d.dest, elsewhere.size() == files.size() ? 0 : FOF_RENAMEONCOLLISION);
+    const bool ok = d.move ? FileOp(FileOpKind::Move, elsewhere, d.dest)
+                           : FileOp(FileOpKind::Copy, files, d.dest, elsewhere.size() == files.size() ? 0 : FOF_RENAMEONCOLLISION);
+    std::vector<std::wstring> names;
+    for (const auto& f : d.move ? elsewhere : files) names.push_back(LeafOf(f));
+    if (ok) SelectLanded(d.dest, names);
+}
+
+// The names a drop brings (CF_HDROP), to select them where they land.
+std::vector<std::wstring> DropNames(IDataObject* pdo) {
+    std::vector<std::wstring> names;
+    FORMATETC fe{CF_HDROP, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL};
+    STGMEDIUM sm{};
+    if (!pdo || FAILED(pdo->GetData(&fe, &sm))) return names;
+    if (HDROP h = static_cast<HDROP>(sm.hGlobal)) {
+        const UINT n = DragQueryFileW(h, 0xFFFFFFFF, nullptr, 0);
+        for (UINT i = 0; i < n && i < 1000; ++i) {
+            std::wstring p(DragQueryFileW(h, i, nullptr, 0) + 1, L'\0');
+            p.resize(DragQueryFileW(h, i, p.data(), static_cast<UINT>(p.size())));
+            names.push_back(LeafOf(p));
+        }
+    }
+    ReleaseStgMedium(&sm);
+    return names;
 }
 
 // Drags the current selection.
