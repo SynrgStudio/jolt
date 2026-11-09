@@ -24,6 +24,8 @@
 #include <d2d1_3.h>  // and d2d1.h: SVG documents (Windows 10 1703+) for the preview
 #include <dwrite_3.h>  // and dwrite.h: fonts from memory for the preview
 #include <wincodec.h>
+#include <mfapi.h>          // songs and videos in the preview (media.inl)
+#include <mfmediaengine.h>
 #include <wrl/client.h>
 
 #include <algorithm>
@@ -50,6 +52,8 @@
 #pragma comment(lib, "mpr.lib")
 #pragma comment(lib, "bcrypt.lib")  // SHA-256 to compare duplicates
 #pragma comment(lib, "oleaut32.lib")  // UI Automation for test mode (SysFreeString)
+#pragma comment(lib, "mfplat.lib")    // Media Foundation: playing in the preview
+#pragma comment(lib, "mfuuid.lib")
 
 using Microsoft::WRL::ComPtr;
 
@@ -620,7 +624,7 @@ bool g_ignoreClipUpdate = false;
 int g_dropRow = -1, g_dropPane = 0, g_dropSide = -1, g_dropTab = -1;  // target highlighted during a drag
 
 // Clickable areas, recomputed on every draw.
-enum class HitKind { None, Tab, TabClose, TabNew, SideToggle, AppMenu, Back, Fwd, Up, Crumb, CrumbChev, PathEmpty, Side, Header, Divider, ViewBtn, FoldBtn, ColEdge, PreviewEdge, FolderNote, HeadCheck, HeadCol, Miller };
+enum class HitKind { None, Tab, TabClose, TabNew, SideToggle, AppMenu, Back, Fwd, Up, Crumb, CrumbChev, PathEmpty, Side, Header, Divider, ViewBtn, FoldBtn, ColEdge, PreviewEdge, FolderNote, HeadCheck, HeadCol, Miller, PreviewPlay, PreviewSeek };
 struct Hit {
     D2D1_RECT_F r;
     HitKind kind;
@@ -4105,9 +4109,11 @@ void ViewEditorOpen(int pane);
 #include "syntax.inl"
 #include "grep.inl"
 #include "markdown.inl"
+#include "media.inl"
 #include "preview.inl"
 void PreviewReleaseBitmap() {
     g_pv.d2d.Reset();
+    g_media.d2d.Reset();
     g_pv.svg.Reset();
     g_pv.svgTried = false;
     g_pvChecker.Reset();
@@ -4589,6 +4595,9 @@ void RunCommand(Cmd cmd) {
         case Cmd::FolderSiblings: CrumbMenu(CrumbSiblingsDir(t.path), g_crumbLast[g_act]); break;
         case Cmd::OpenAsAdmin:
             FolderNoteAct(t.sel >= 0 && t.sel < Count() && EntryAt(t, t.sel).isDir() ? RowPath(t, t.sel) : t.path);
+            break;
+        case Cmd::PreviewPlay:
+            if (g_preview) PreviewPlay();
             break;
         case Cmd::PreviewMarkdown:
             g_cfg.previewMarkdown = !g_cfg.previewMarkdown;
@@ -5410,6 +5419,9 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             g_thumbDirty = false;
             Invalidate();
             return 0;
+        case WM_APP_MEDIA:
+            MediaEvent(static_cast<DWORD>(wp), static_cast<uint64_t>(lp));
+            return 0;
         case WM_APP_META:
             g_metaDirty = false;
             Invalidate();
@@ -5452,6 +5464,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 if (--g_recChecksLeft > 0) SetTimer(hwnd, kTimerRecCheck, g_recChecksLeft == 2 ? 2000 : 5000, nullptr);
             }
             if (wp == kTimerPreview) PreviewLoad();
+            if (wp == kTimerMedia) MediaTick();
             if (wp == kTimerTest) {
                 if (g_testBlocking) SetTimer(hwnd, kTimerTest, 30, nullptr);  // a step is still waiting
                 else TestRunStep();
@@ -5587,6 +5600,16 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 Invalidate();
                 return 0;
             }
+            if (HitAt(x, y).kind == HitKind::PreviewPlay) {
+                PreviewPlay();
+                return 0;
+            }
+            if (HitAt(x, y).kind == HitKind::PreviewSeek) {  // a click on the bar goes there; dragging follows
+                g_media.seeking = true;
+                MediaSeekAt(x, g_pv.res ? g_pv.res->mDur / 1e7 : 0);
+                SetCapture(hwnd);
+                return 0;
+            }
             if (HitAt(x, y).kind != HitKind::Divider) ActivatePane(PaneAt(x, y));
             if (SideDragStart(HitAt(x, y), x, y)) return 0;
             if (ColMoveStart(HitAt(x, y), x)) return 0;
@@ -5648,6 +5671,12 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 ReleaseCapture();
                 return 0;
             }
+            if (g_media.seeking) {
+                g_media.seeking = false;
+                ReleaseCapture();
+                Invalidate();
+                return 0;
+            }
             if (g_divDrag) {
                 g_divDrag = false;
                 ReleaseCapture();
@@ -5668,6 +5697,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             g_divDrag = false;
             ColDragEnd();
             PreviewDragEnd();
+            g_media.seeking = false;
             return 0;
         case WM_MBUTTONDOWN:
             SetFocus(hwnd);
@@ -5830,6 +5860,10 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             }
             if (g_pvDrag) {
                 SetPreviewW(g_pvDragW + g_pvDragX - x);  // anchored to the right: the edge follows the mouse
+                return 0;
+            }
+            if (g_media.seeking) {
+                MediaSeekAt(x, g_pv.res ? g_pv.res->mDur / 1e7 : 0);
                 return 0;
             }
             if (g_divDrag) {

@@ -2,7 +2,7 @@
 
 Every planned feature, one line per GitHub issue. A line is checked and struck through when its PR is merged.
 
-**40 of 89 done.**
+**41 of 89 done.**
 
 ## Navigation
 
@@ -63,10 +63,10 @@ Every planned feature, one line per GitHub issue. A line is checked and struck t
 
 ## Preview
 
-1 of 5 done.
+2 of 5 done.
 
 - [x] ~~[#30](https://github.com/SynrgStudio/jolt/issues/30) Syntax highlighting with line numbers and wrap in the preview~~
-- [ ] [#31](https://github.com/SynrgStudio/jolt/issues/31) More preview formats: audio, video, SVG, fonts, Markdown, CSV, JSON, hex, zip contents, EXIF
+- [x] ~~[#31](https://github.com/SynrgStudio/jolt/issues/31) More preview formats: audio, video, SVG, fonts, Markdown, CSV, JSON, hex, zip contents, EXIF~~
 - [ ] [#32](https://github.com/SynrgStudio/jolt/issues/32) Zoom and pan images in the preview, checkerboard background, rotate
 - [ ] [#33](https://github.com/SynrgStudio/jolt/issues/33) Floating preview while Space is held
 - [ ] [#34](https://github.com/SynrgStudio/jolt/issues/34) Copy the previewed image to the clipboard

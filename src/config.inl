@@ -10,7 +10,7 @@ enum class Cmd {
     Terminal, OpenExplorer, RealLocation, CollapseGroups, ExpandGroups, GroupByDay, GroupByType, NoGroups,
     SortByType, ZoomIn, ZoomOut, ZoomReset, RowsTaller, RowsShorter, EmptyRecycleBin,
     Undo, Redo, OpenAsAdmin, PinTab, Restore,
-    Install, Quit, RenameMany, FolderSiblings, ViewList, ViewGrid, ViewColumns, ViewBigger, ViewSmaller, Tag, FolderColor, Zen, SizeBars, PreviewWrap, PreviewMarkdown,
+    Install, Quit, RenameMany, FolderSiblings, ViewList, ViewGrid, ViewColumns, ViewBigger, ViewSmaller, Tag, FolderColor, Zen, SizeBars, PreviewWrap, PreviewMarkdown, PreviewPlay,
     FindDuplicates, SelectExtraCopies, SelectPattern, SelectSameExtension, InvertSelection, Settings, Checkboxes, NewFromTemplate, CopyTo, MoveTo, Attributes, InUse, Unblock,
     CustomFirst = 1000  // + index into g_cfg.custom: the user's own commands
 };
@@ -104,6 +104,7 @@ const CmdDef kCommands[] = {
     {L"go_to_location", Cmd::GoToLocation, L"Ctrl+Shift+E", L"open the folder containing the highlighted item"},
     {L"preview", Cmd::Preview, L"Space", L"show or hide the preview"},
     {L"preview_wrap", Cmd::PreviewWrap, L"", L"wrap long lines in the text preview (toggle)"},
+    {L"preview_play", Cmd::PreviewPlay, L"", L"play or pause the song or video in the preview"},
     {L"preview_markdown", Cmd::PreviewMarkdown, L"", L"show Markdown rendered in the preview, or as its source (toggle)"},
     {L"split", Cmd::Split, L"Ctrl+S", L"split view with two panes"},
     {L"other_pane", Cmd::OtherPane, L"Tab", L"switch to the other pane"},
