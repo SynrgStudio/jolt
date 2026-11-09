@@ -27,7 +27,7 @@ float BoxContentY() {
 bool OnItem(int row, float x) {
     Tab& t = T();
     if (row < 0 || row >= Count()) return false;
-    if (GeoFor(t).grid) return true;  // the whole cell is the item
+    if (GeoFor(t).grid || GeoFor(t).miller) return true;  // the whole cell (or the column's row) is the item
     const Row& rw = t.rows[row];
     const Entry& e = rw.l->entries[rw.e];
     const Columns c = Cols(g_act);
@@ -61,7 +61,7 @@ void BoxApply() {
     const float cy = BoxContentY();
     const float y1 = std::min(g_box.y0, cy), y2 = std::max(g_box.y0, cy);
     const float x1 = std::min(g_box.x0, g_box.x), x2 = std::max(g_box.x0, g_box.x);
-    const bool grid = GeoFor(t).grid;  // in the grid the box must also reach the cell sideways
+    const bool grid = GeoFor(t).grid || GeoFor(t).miller;  // in the grid the box must also reach the cell sideways
     int lo = -1, hi = -1;
     for (int i = 0; i < n; ++i) {
         if (IsHeader(t, i)) continue;

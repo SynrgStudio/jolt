@@ -10,7 +10,7 @@ enum class Cmd {
     Terminal, OpenExplorer, RealLocation, CollapseGroups, ExpandGroups, GroupByDay, GroupByType, NoGroups,
     SortByType, ZoomIn, ZoomOut, ZoomReset, RowsTaller, RowsShorter, EmptyRecycleBin,
     Undo, Redo, OpenAsAdmin, PinTab, Restore,
-    Install, Quit, RenameMany, FolderSiblings, ViewList, ViewGrid, ViewBigger, ViewSmaller, Tag, FolderColor, Zen, PreviewWrap,
+    Install, Quit, RenameMany, FolderSiblings, ViewList, ViewGrid, ViewColumns, ViewBigger, ViewSmaller, Tag, FolderColor, Zen, PreviewWrap,
     FindDuplicates, SelectExtraCopies, SelectPattern, SelectSameExtension, InvertSelection, Settings, Checkboxes, NewFromTemplate, CopyTo, MoveTo, Attributes, InUse, Unblock,
     CustomFirst = 1000  // + index into g_cfg.custom: the user's own commands
 };
@@ -40,6 +40,7 @@ struct Config {
     bool background = true, tray = true, openDrives = false;
     int checkboxes = 0;  // selection checkboxes: 0 none, 1 on the row under the mouse and the selected ones, 2 always
     int recentMark = 0;  // a mark on files changed lately: -1 none, 0 today, N the last N hours
+    float millerW = 240;  // the width the Miller columns aim for
     int hotCount = 10;  // folders in Recents (0: no section)
     std::wstring globalKey = L"Win+J";
     std::vector<int> cols = {ColDate, ColSize};  // [columns] show: ColKinds, left to right
@@ -142,6 +143,7 @@ const CmdDef kCommands[] = {
     {L"rows_shorter", Cmd::RowsShorter, L"", L"less space between rows"},
     {L"view_list", Cmd::ViewList, L"", L"show this folder as a list (details)"},
     {L"view_grid", Cmd::ViewGrid, L"", L"show this folder as a grid of thumbnails"},
+    {L"view_columns", Cmd::ViewColumns, L"Ctrl+Alt+M", L"Miller columns in this tab: the folders above to the left, what the highlighted one holds to the right"},
     {L"view_bigger", Cmd::ViewBigger, L"", L"bigger cells in the grid (Ctrl+Alt+wheel up)"},
     {L"view_smaller", Cmd::ViewSmaller, L"", L"smaller cells, down to the list (Ctrl+Alt+wheel down)"},
     {L"tag", Cmd::Tag, L"", L"tag the selection: add or remove a tag"},
@@ -337,6 +339,8 @@ void WriteDefaultConfig() {
         "checkboxes = no\n"
         "# A mark at the left of the files changed lately, fading with the hours: today / no / a number of hours, like 6.\n"
         "recent_mark = today\n"
+        "# How wide each column of the Miller columns (Ctrl+Alt+M) tries to be; they share the pane equally.\n"
+        "miller_width = 240\n"
         "\n[columns]\n"
         "# Columns besides the name, left to right: modified, dimensions, duration, attributes, items, size\n"
         "# dimensions: of images and videos. duration: of songs and videos. items: how many a folder has.\n"
@@ -446,6 +450,7 @@ void LoadConfig() {
             else if (key == L"global_hotkey") g_cfg.globalKey = val;
             else if (key == L"tray_icon") g_cfg.tray = ParseBool(val);
             else if (key == L"open_drives") g_cfg.openDrives = ParseBool(val);
+            else if (key == L"miller_width") g_cfg.millerW = std::clamp(static_cast<float>(_wtof(val.c_str())), 140.f, 800.f);
             else if (key == L"recent_mark") {
                 const std::wstring v = Lower(Trim(val));
                 const int hours = _wtoi(v.c_str());

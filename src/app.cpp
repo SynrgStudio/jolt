@@ -552,6 +552,10 @@ struct Tab {
     bool has = false;
     int pane = 0;                // 0 = left, 1 = right (split view)
     bool pinned = false;         // stays at the left of its pane, small, and doesn't close
+    bool miller = false;         // Miller columns (miller.inl), whatever the folder's own view says
+    mutable int millerFirst = -1;                    // the chain step in the leftmost column (-1: as far left as fits)
+    mutable std::wstring millerFor;                  // the path millerChain was made for
+    mutable std::vector<std::wstring> millerChain;   // from the top down to path
     std::wstring pendingSelect;  // name (in the folder) or full path to select when it appears
     int sel = 0;                 // cursor
     int anchor = 0;              // start of the Shift range
@@ -616,7 +620,7 @@ bool g_ignoreClipUpdate = false;
 int g_dropRow = -1, g_dropPane = 0, g_dropSide = -1, g_dropTab = -1;  // target highlighted during a drag
 
 // Clickable areas, recomputed on every draw.
-enum class HitKind { None, Tab, TabClose, TabNew, SideToggle, AppMenu, Back, Fwd, Up, Crumb, CrumbChev, PathEmpty, Side, Header, Divider, ViewBtn, FoldBtn, ColEdge, PreviewEdge, FolderNote, HeadCheck, HeadCol };
+enum class HitKind { None, Tab, TabClose, TabNew, SideToggle, AppMenu, Back, Fwd, Up, Crumb, CrumbChev, PathEmpty, Side, Header, Divider, ViewBtn, FoldBtn, ColEdge, PreviewEdge, FolderNote, HeadCheck, HeadCol, Miller };
 struct Hit {
     D2D1_RECT_F r;
     HitKind kind;
@@ -675,6 +679,9 @@ const std::wstring& RowDir(const Tab& t, int row) { return t.rows[row].l->path; 
 std::wstring RowPath(const Tab& t, int row) { return Normalize(Join(RowDir(t, row), RowNameP(t, row))); }
 std::wstring RowKey(const Tab& t, int row) { return Key(RowPath(t, row)); }
 bool FlatView(const Tab& t) { return !t.filter.empty() || t.recursive || IsVirtual(t.path); }
+constexpr int kMiller = -1;  // LayoutOf's value for the Miller columns
+int LayoutOf(const Tab& t);
+void ToggleMiller();  // miller.inl
 
 #include "fuzzy.inl"
 
@@ -686,8 +693,9 @@ bool GroupFolded(const Tab& t, const Listing* l, size_t gi) {
 }
 
 void AddTree(const Tab& t, const Listing* l, int depth, std::vector<Row>& out) {
-    const bool tree = !t.expanded.empty();
-    const bool groups = depth == 0 && !l->groups.empty() && t.filter.empty();
+    const bool miller = LayoutOf(t) == kMiller;  // the columns have neither tree nor groups
+    const bool tree = !t.expanded.empty() && !miller;
+    const bool groups = depth == 0 && !l->groups.empty() && t.filter.empty() && !miller;
     size_t gi = 0;
     bool folded = false;
     for (size_t i = 0; i < l->entries.size(); ++i) {
@@ -1051,16 +1059,64 @@ int PaneAt(float x, float y) {
 constexpr int kGridSizes[] = {0, 80, 112, 144, 192, 256};  // the view scale: the list, then bigger cells
 constexpr float kCellPadX = 20.f, kCellText = 40.f;      // around the image; the two lines of name below
 
-int LayoutOf(const Tab& t) { return t.path.empty() || t.recursive ? 0 : ViewFor(t.path)->layout; }
+int LayoutOf(const Tab& t) {
+    if (t.miller && !t.recursive && !IsVirtual(t.path)) return kMiller;
+    return t.path.empty() || t.recursive ? 0 : ViewFor(t.path)->layout;
+}
+
+// --- Miller columns: where they go (the rest is in miller.inl). Equal columns as wide as miller_width allows; the
+// tab's folder and the next one always show, and otherwise the columns stay put, so what was clicked doesn't move.
+struct MillerGeo {
+    const std::vector<std::wstring>& chain;  // from the top (This PC) down to the tab's folder (the tab's own)
+    int n = 0, first = 0;             // how many columns, and the chain step in the leftmost
+    float L = 0, colW = 0;
+    int depth() const { return static_cast<int>(chain.size()) - 1; }
+};
+std::unordered_map<std::wstring, float> g_millerScroll;      // a side column the wheel moved: "pane|folder" -> scroll
+std::unordered_set<std::wstring> g_millerPending;            // folders asked for: their listing redraws
+std::unordered_map<std::wstring, uint64_t> g_millerChecked;  // folder -> the navigation it was last checked in (+1)
+bool g_millerKeep = false;  // the next navigation keeps the columns where they are (a click on them, or Left)
+
+MillerGeo MillerLayout(const Tab& t) {
+    if (t.millerFor != t.path || t.millerChain.empty()) {
+        t.millerFor = t.path;
+        t.millerChain.assign(1, t.path);
+        for (int guard = 0; guard < 64 && !t.millerChain.back().empty(); ++guard) {
+            const std::wstring up = ParentOf(t.millerChain.back());
+            if (Key(up) == Key(t.millerChain.back())) break;
+            t.millerChain.push_back(up);
+        }
+        std::reverse(t.millerChain.begin(), t.millerChain.end());
+    }
+    MillerGeo m{t.millerChain};
+    const PaneX p = PaneGeo(t.pane);
+    m.n = std::max(2, static_cast<int>((p.R - p.L) / g_cfg.millerW));
+    m.colW = std::floor((p.R - p.L) / m.n);
+    m.L = p.L;
+    const int d = m.depth(), lo = std::max(0, d + 2 - m.n);
+    t.millerFirst = t.millerFirst < 0 ? lo : std::clamp(t.millerFirst, lo, d);
+    m.first = t.millerFirst;
+    return m;
+}
 
 struct Geo {
     bool grid = false;
+    bool miller = false;  // one column of rows (cells), where the Miller layout puts the tab's folder
     int size = 0, cols = 1;
     float cellW = 0, cellH = 0, x0 = 0;
 };
 Geo GeoFor(const Tab& t) {
     Geo g;
     g.size = LayoutOf(t);
+    if (g.size == kMiller) {
+        const MillerGeo m = MillerLayout(t);
+        g.size = 0;
+        g.miller = true;
+        g.cellW = m.colW;
+        g.cellH = kRow;
+        g.x0 = m.L + (m.depth() - m.first) * m.colW;
+        return g;
+    }
     if (!g.size) return g;
     const PaneX p = PaneGeo(t.pane);
     g.grid = true;
@@ -1074,16 +1130,21 @@ Geo GeoFor(const Tab& t) {
 
 void EnsureGeo(Tab& t) {
     const Geo g = GeoFor(t);
-    if (!g.grid) {
+    if (!g.grid && !g.miller) {
         t.cells.clear();
         t.cellsKey = 0;
         return;
     }
     const uint64_t key = (t.rowsGen << 24) ^ (static_cast<uint64_t>(g.cols) << 16) ^ static_cast<uint64_t>(g.size) ^
-                         (static_cast<uint64_t>(std::lround(g.x0)) << 44) ^ (static_cast<uint64_t>(std::lround(kRow)) << 56);
+                         (static_cast<uint64_t>(std::lround(g.x0)) << 44) ^ (static_cast<uint64_t>(std::lround(kRow)) << 56) ^
+                         (static_cast<uint64_t>(std::lround(g.cellW)) << 32) ^ (g.miller ? 0x9E3779B9ull : 0);
     if (key == t.cellsKey && t.cells.size() == t.rows.size()) return;
     t.cellsKey = key;
     t.cells.resize(t.rows.size());
+    if (g.miller) {  // one row per line, in the tab's column
+        for (size_t i = 0; i < t.rows.size(); ++i) t.cells[i] = D2D1::RectF(g.x0, i * kRow, g.x0 + g.cellW, (i + 1) * kRow);
+        return;
+    }
     float y = 4;
     int col = 0;
     for (size_t i = 0; i < t.rows.size(); ++i) {
@@ -1401,6 +1462,9 @@ void Navigate(Tab& t, const std::wstring& path, bool pushHistory) {
             t.fwd.clear();
         }
     }
+    t.millerFirst = g_millerKeep ? t.millerFirst : -1;
+    g_millerKeep = false;
+    if (current) g_millerScroll.clear();
     StopRecursive(t, false);
     if (current && (!t.has || Key(t.path) != Key(path))) HeatMark(path);
     t.has = true;
@@ -1466,6 +1530,7 @@ void ApplyJob(const std::shared_ptr<Job>& j) {
     const std::wstring k = Key(l->path);
     RememberListing(k, l);
     CrumbMenuListed(*l);
+    if (g_millerPending.erase(k)) Invalidate();  // a Miller column was waiting for it
     if (j->kind == JobKind::Prefetch) {
         if (g_preview) Invalidate();  // a folder's preview may be waiting for it
         return;
@@ -1737,6 +1802,7 @@ void GoUp() {
     if (!t.has || t.path.empty()) return;
     std::wstring parent = ParentOf(t.path);
     g_lastSel[Key(parent)] = LeafOf(t.path);
+    g_millerKeep = true;
     Navigate(t, parent, true);
 }
 
@@ -1989,6 +2055,10 @@ void SetLayout(int size) {
 }
 // Ctrl+Alt+wheel: one step along the view scale (list, then bigger and bigger cells).
 void StepLayout(int dir) {
+    if (T().miller) {  // out of the columns, to the folder's own view
+        ToggleMiller();
+        return;
+    }
     const int cur = LayoutOf(T());
     int i = 0;
     for (int k = 0; k < static_cast<int>(std::size(kGridSizes)); ++k)
@@ -2894,6 +2964,8 @@ void DrawSidebar(float H) {
 
 // --- column header and list
 #include "columns.inl"
+Hit HitAt(float x, float y);
+#include "miller.inl"
 int g_colDrag = 0, g_colDragPane = 0;  // column being dragged: its ColKind + 1 (0: none)
 float g_colDragX = 0, g_colDragW = 0;
 struct Columns {
@@ -2915,7 +2987,8 @@ Columns Cols(int pane) {
     // laid out from the right edge: on a narrow pane, the leftmost ones give way first and the name keeps ~290
     int ks[ColKinds], m = 0;
     float x = c.right, used = 0, ls[ColKinds];
-    for (size_t i = g_cfg.cols.size(); i-- > 0 && m < ColKinds;) {
+    const bool millerCols = LayoutOf(PT(pane)) == kMiller;
+    for (size_t i = g_cfg.cols.size(); !millerCols && i-- > 0 && m < ColKinds;) {
         const int k = g_cfg.cols[i];
         used += g_colW[k] + 18;
         if (g.R - g.L < used + 290) break;
@@ -3090,6 +3163,10 @@ void DrawHeader(int pane) {
         Text(label, right ? g_fmtRight.Get() : g_fmtHeader.Get(), tl, y0, tr, y1);
         return r;
     };
+    if (LayoutOf(PT(pane)) == kMiller) {  // no sorting titles: each column's folder instead
+        DrawMillerTitles(pane, y0, y1, c.nameL + 44);
+        return;
+    }
     g_hits.push_back({title(L"Name", 0, c.nameL, c.nameR, false, IsHover(HitKind::Header, pane * 3), false), HitKind::Header, pane * 3});
     // The other titles sort on release and can be dragged to another place (HeadCol: pane * ColKinds + kind).
     // Their hits stay where they end up, even while they slide there.
@@ -3245,15 +3322,19 @@ void DrawList(int pane, float H) {
     const float L = c.L, R = c.R;
     g_rt->PushAxisAlignedClip(D2D1::RectF(L, listTop, R, listBot), D2D1_ANTIALIAS_MODE_ALIASED);
     const int n = RowCount(t);
+    // with Miller columns, the other columns first; the messages go in the tab's own
+    const Geo lg = GeoFor(t);
+    if (lg.miller) DrawMillerSides(pane, listTop, listBot);
+    const float mL = lg.miller ? lg.x0 : L, mR = lg.miller ? lg.x0 + lg.cellW : R;
     if (t.loading) {
         Color(cDim);
-        Text(L"Loading…", g_fmtCenter.Get(), L, listTop, R, listTop + 80);
+        Text(L"Loading…", g_fmtCenter.Get(), mL, listTop, mR, listTop + 80);
     } else if (t.list && t.list->error) {
-        DrawFolderError(t, L, R, listTop);
+        DrawFolderError(t, mL, mR, listTop);
     } else if (t.list && n == 0) {
         Color(cDim);
         Text(t.dups && !t.dupDone ? L"Looking for duplicates…" : t.recursive && !t.recDone ? L"Searching…" : t.dups && t.filter.empty() ? L"No duplicates" : !t.filter.empty() ? L"No matches" : IsServerPath(t.path) ? L"No shared folders" : L"Empty folder",
-             g_fmtCenter.Get(), L, listTop, R, listTop + 80);
+             g_fmtCenter.Get(), mL, listTop, mR, listTop + 80);
     } else if (t.list) {
         const bool focused = (g_test ? g_testActive && !g_renaming && !g_editing : GetFocus() == g_hwnd) && pane == g_act;
         const bool multi = SelCount(t) > 1;
@@ -3301,7 +3382,9 @@ void DrawList(int pane, float H) {
             const Entry& e = row.l->entries[row.e];
             const wchar_t* name = row.l->name(e);
             const bool drives = row.l->path.empty();
-            const D2D1_RECT_F rr = geo.grid ? D2D1::RectF(cell.left + 2, y + 2, cell.right - 2, y + geo.cellH - 2) : D2D1::RectF(L + 6, y + 1, R - 8, y + kRow - 1);
+            const D2D1_RECT_F rr = geo.grid    ? D2D1::RectF(cell.left + 2, y + 2, cell.right - 2, y + geo.cellH - 2)
+                                   : geo.miller ? D2D1::RectF(cell.left + 4, y + 1, cell.right - 4, y + kRow - 1)
+                                                : D2D1::RectF(L + 6, y + 1, R - 8, y + kRow - 1);
             const bool selected = IsSel(t, i);
             const bool hover = i == g_hoverRow && pane == g_hoverPane;
             if (selected)
@@ -3321,6 +3404,10 @@ void DrawList(int pane, float H) {
             }
             const bool showCheck = g_cfg.checkboxes == 2 || (g_cfg.checkboxes == 1 && (hover || selected));
             const float recent = e.isDir() || drives ? 0.f : RecentAlpha(e.mtime, since, now);
+            if (geo.miller) {
+                DrawMillerItem(e, name, full, rr, y, a, selected && focused, drives, recent, t.filter.empty() ? std::wstring() : filterPat);
+                continue;
+            }
             if (geo.grid) {
                 DrawGridCell(e, name, full, cell, y, geo, a, filterPat, row.closeness);
                 if (recent > 0 && !row.closeness) {  // the corner the closeness percentage would use; over the picture
@@ -3428,7 +3515,8 @@ void DrawList(int pane, float H) {
         if (contentH > viewH) {
             const float thumbH = std::max(24.f, viewH * viewH / contentH);
             const float thumbY = listTop + (viewH - thumbH) * (t.scroll / (contentH - viewH));
-            Round(D2D1::RectF(R - 5, thumbY, R - 2, thumbY + thumbH), 1.5f, 0xFFFFFF, 0.14f);
+            const float sbR = geo.miller ? geo.x0 + geo.cellW : R;  // in the columns, the tab's own
+            Round(D2D1::RectF(sbR - 5, thumbY, sbR - 2, thumbY + thumbH), 1.5f, 0xFFFFFF, 0.14f);
         }
     }
     DrawBox(pane, listTop, listBot);
@@ -3569,6 +3657,7 @@ void Render() {
     if (g_iconFolder < 0) g_iconFolder = IconByAttrs(L"folder", FILE_ATTRIBUTE_DIRECTORY);
     if (g_iconFile < 0) g_iconFile = IconByAttrs(L"file", FILE_ATTRIBUTE_NORMAL);
     g_hits.clear();
+    g_millerHits.clear();
     g_crumbPaths.clear();
     CheckAnimFrame();
     g_notePaths.clear();
@@ -3797,6 +3886,11 @@ void LayoutRename() {
         top = px(y + 6 + geo.size + 4);
         left = px(cell.left + 4);
         right = px(cell.right - 4);
+    } else if (geo.miller) {  // over the name, up to the chevron
+        int rowTop = px(y), rowH = px(kRow);
+        top = rowTop + (rowH - editH) / 2;
+        left = px(cell.left + 4 + 8 + kIcon + 8 - 2);
+        right = px(cell.right - 24);
     } else {
         int rowTop = px(y), rowH = px(kRow);
         top = rowTop + (rowH - editH) / 2;
@@ -4032,8 +4126,10 @@ void SaveSession() {
     out << "active=" << g_cur << '\n';
     out << "visible=" << g_paneCur[0] << ',' << g_paneCur[1] << '\n';
     for (auto& t : g_tabs) out << (t->pane ? "tab2=" : "tab=") << Utf8(t->path) << '\n';
-    for (size_t i = 0; i < g_tabs.size(); ++i)
+    for (size_t i = 0; i < g_tabs.size(); ++i) {
         if (g_tabs[i]->pinned) out << "pinned=" << i << '\n';
+        if (g_tabs[i]->miller) out << "miller=" << i << '\n';
+    }
     std::wstring rf = RecentsFile();
     if (!rf.empty()) {
         std::ofstream ro(rf, std::ios::binary);
@@ -4045,6 +4141,7 @@ void SaveSession() {
 struct Session {
     std::vector<std::pair<std::wstring, int>> tabs;  // path, pane
     std::vector<int> pinned;                         // indexes into tabs
+    std::vector<int> miller;                         // the tabs in Miller columns
     int active = 0, visible[2] = {-1, -1};
     bool hasWindow = false;
     RECT rc{};
@@ -4068,6 +4165,7 @@ Session LoadSession() {
         if (k == "tab") s.tabs.push_back({Wide(v), 0});
         else if (k == "tab2") s.tabs.push_back({Wide(v), 1});
         else if (k == "pinned") s.pinned.push_back(atoi(v.c_str()));
+        else if (k == "miller") s.miller.push_back(atoi(v.c_str()));
         else if (k == "active") s.active = atoi(v.c_str());
         else if (k == "visible") sscanf_s(v.c_str(), "%d,%d", &s.visible[0], &s.visible[1]);
         else if (k == "sidebar") s.sidebar = v != "0";
@@ -4478,8 +4576,18 @@ void RunCommand(Cmd cmd) {
             break;
         case Cmd::Tag: TagPaletteOpen(); break;
         case Cmd::FolderColor: FolderColorMenu(); break;
-        case Cmd::ViewList: SetLayout(0); break;
-        case Cmd::ViewGrid: if (!LayoutOf(t)) SetLayout(144); break;
+        case Cmd::ViewList:
+            if (!t.miller) SetLayout(0);
+            else {
+                ToggleMiller();
+                if (LayoutOf(t)) SetLayout(0);
+            }
+            break;
+        case Cmd::ViewGrid:
+            if (t.miller) ToggleMiller();
+            if (LayoutOf(t) <= 0) SetLayout(144);
+            break;
+        case Cmd::ViewColumns: ToggleMiller(); break;
         case Cmd::ViewBigger: StepLayout(1); break;
         case Cmd::ViewSmaller: StepLayout(-1); break;
         case Cmd::EmptyRecycleBin: EmptyRecycleBin(); break;
@@ -4562,7 +4670,7 @@ Hit HitAt(float x, float y) {
 // Is the point over the chevron (expand) of a folder row?
 bool OnChevron(int row, float x) {
     Tab& t = T();
-    if (row < 0 || row >= Count() || FlatView(t) || !EntryAt(t, row).isDir()) return false;
+    if (row < 0 || row >= Count() || FlatView(t) || GeoFor(t).miller || !EntryAt(t, row).isDir()) return false;
     Columns c = Cols(g_act);
     float cx = c.nameL + RowIndent(t, row);
     return x >= cx - 4 && x < cx + kChev + 2;
@@ -4572,7 +4680,7 @@ bool OnChevron(int row, float x) {
 // It counts wherever it would show: with "hover", the mouse is over the row, so it is there.
 bool OnCheckbox(int row, float x, float y) {
     Tab& t = T();
-    if (!g_cfg.checkboxes || row < 0 || row >= Count() || IsHeader(t, row)) return false;
+    if (!g_cfg.checkboxes || row < 0 || row >= Count() || IsHeader(t, row) || GeoFor(t).miller) return false;
     if (GeoFor(t).grid) {
         const D2D1_RECT_F cell = RowRect(t, row);
         const float top = ListTop() + cell.top - t.scroll;
@@ -4813,6 +4921,7 @@ void OnClick(float x, float y, bool middle) {
                 Navigate(T(), g_sidePaths[h.idx], true);
             return;
         case HitKind::Header: SetSort(static_cast<SortBy>(h.idx % 3)); return;
+        case HitKind::Miller: MillerOpen(h.idx); return;
         case HitKind::HeadCol:
             if (ColSortOf(h.idx % ColKinds) >= 0) SetSort(static_cast<SortBy>(ColSortOf(h.idx % ColKinds)));
             return;
@@ -5442,6 +5551,10 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (HitAt(x, y).kind != HitKind::Divider) ActivatePane(PaneAt(x, y));
             if (SideDragStart(HitAt(x, y), x, y)) return 0;
             if (ColMoveStart(HitAt(x, y), x)) return 0;
+            if (HitAt(x, y).kind == HitKind::Miller) {  // another Miller column: the tab goes there
+                MillerOpen(HitAt(x, y).idx);
+                return 0;
+            }
             if (HitAt(x, y).kind == HitKind::FolderNote) {  // before the row under it takes the click
                 OnClick(x, y, false);
                 return 0;
@@ -5540,11 +5653,22 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             else if (side.kind == HitKind::Crumb) CrumbMenu(CrumbSiblingsDir(g_crumbPaths[side.idx]), side.r);
             else if (side.kind == HitKind::CrumbChev) CrumbMenu(g_crumbPaths[side.idx], side.r);
             else if (OnColumnTitles(x, y)) OpenColumnMenu(pt);
+            else if (side.kind == HitKind::Miller) {  // there first, then the menu of what was clicked
+                const bool item = side.idx < static_cast<int>(g_millerHits.size()) && !g_millerHits[side.idx].name.empty();
+                MillerOpen(side.idx);
+                g_millerClickAt = 0;
+                OpenShellMenu(pt, item ? T().sel : -1);
+            }
             else if (PaneAt(x, y) == g_act && y >= ListTop() && y < ListBottom()) OpenShellMenu(pt, HitRow(x, y));
             return 0;
         }
         case WM_LBUTTONDBLCLK: {
             PressEnd(false);
+            if (g_millerClickAt && NowMs() - g_millerClickAt < GetDoubleClickTime()) {  // an item of another column
+                g_millerClickAt = 0;
+                OpenSelected(false);
+                return 0;
+            }
             Hit dh = HitAt(DipX(lp), DipY(lp));
             if (dh.kind == HitKind::FolderNote) return 0;  // the first click already did it
             if (dh.kind == HitKind::ColEdge) {
@@ -5625,6 +5749,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 PreviewWheel(delta / 120);
                 return 0;
             }
+            if (MillerWheel(x, y, delta)) return 0;
             int pane = PaneAt(x, y);
             if (pane < 0) return 0;
             Tab& wt = PT(pane);  // the wheel scrolls the pane underneath, without activating it
@@ -6031,6 +6156,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdLine, int show) {
         NewTab(p, false, g_act);
         newIdx[i] = static_cast<int>(g_tabs.size()) - 1;
         g_tabs.back()->pinned = std::find(ses.pinned.begin(), ses.pinned.end(), static_cast<int>(i)) != ses.pinned.end();
+        g_tabs.back()->miller = std::find(ses.miller.begin(), ses.miller.end(), static_cast<int>(i)) != ses.miller.end();
     }
     auto mapIdx = [&](int old, int pane) {
         if (old >= 0 && old < static_cast<int>(newIdx.size()) && newIdx[old] >= 0 && g_tabs[newIdx[old]]->pane == pane)
