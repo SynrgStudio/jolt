@@ -227,6 +227,9 @@ struct DirDiffView {
     bool hovering = false;
 } g_dd;
 constexpr int kDdContext = 2;
+// The two sides' colors. Not the file comparison's red and green: nothing here was removed or added, it is only in one
+// place or the other.
+constexpr UINT32 kDdSide[2] = {0x4CC2D6, 0xB392F0};
 constexpr float kDdRow = 24.f, kDdGutter = 30.f;
 
 // Where a row is below the two folders, the same on both sides: what it is known by from one comparison to the next.
@@ -491,7 +494,7 @@ void DdHeader(float x0, float y0, float R) {
     const float mid = std::floor((x0 + R) / 2);
     for (int s = 0; s < 2; ++s) {
         const float l = s ? mid + 14 : x0 + 18, rr = s ? R - 48 : mid - 14;
-        Fill(D2D1::RectF(l, y0 + 12, l + 3, y0 + 46), s ? kDfGreen : kDfRed, 0.8f);
+        Fill(D2D1::RectF(l, y0 + 12, l + 3, y0 + 46), kDdSide[s], 0.8f);
         Color(cText);
         Text(LeafOf(g_dd.root[s]), g_fmtNameBold.Get(), l + 12, y0 + 8, rr, y0 + 28);
         std::wstring info;
@@ -599,7 +602,7 @@ void DrawDirDiff(float W, float H) {
             const bool selected = g_dd.sel[sh.row] != 0;
             for (int s = 0; s < 2; ++s) {
                 const float cx = s ? L + colW + kDdGutter : L, cr = cx + colW;
-                const UINT32 tint = s ? kDfGreen : kDfRed;
+                const UINT32 tint = kDdSide[s];
                 const D2D1_RECT_F cell = D2D1::RectF(cx, y, cr, y + kDdRow);
                 if (differ && !e[s]) Fill(cell, 0x000000, 0.22f);  // it isn't on this side
                 else if (differ) Fill(cell, tint, both ? 0.09f : 0.16f);
@@ -650,7 +653,7 @@ void DrawDirDiff(float W, float H) {
         Fill(ov, 0xFFFFFF, 0.03f);
         auto shade = [&](size_t i) -> UINT32 {  // 0: nothing to mark
             const int st = g_dd.show[i].fold ? DdSame : res.rows[g_dd.show[i].row].state;
-            return st == DdSame ? 0 : st == DdOnlyA ? kDfRed : st == DdOnlyB ? kDfGreen : kDfAmber;
+            return st == DdSame ? 0 : st == DdOnlyA ? kDdSide[0] : st == DdOnlyB ? kDdSide[1] : kDfAmber;
         };
         for (size_t i = 0; i < g_dd.show.size();) {
             const UINT32 c = shade(i);
