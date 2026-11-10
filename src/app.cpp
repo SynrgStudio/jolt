@@ -173,6 +173,12 @@ inline bool IsSharePath(const std::wstring& p) {
 inline bool IsOnNetwork(const std::wstring& p) { return IsNet(p) || (p.size() > 2 && p[0] == L'\\' && p[1] == L'\\'); }
 std::wstring VirtualJoin(const std::wstring& dir, const wchar_t* name);  // bin.inl
 void BinEnumerate(Listing& out);
+bool ArcEnumerate(const std::wstring& path, Listing& out);  // archive.inl: a folder inside an archive
+bool InArchive(const std::wstring& path);                   // archive.inl: an archive, or a folder inside one
+bool ArcInside(const std::wstring& path);                   // archive.inl: an item inside an archive
+bool ArcBrowsableExt(const std::wstring& path);             // archive.inl: an archive Enter goes into
+void ArcOpenInside(const std::wstring& full);               // archive.inl
+bool ArcIsDir(const std::wstring& path);                    // archive.inl: an archive, or a folder in one
 void NetEnumerateComputers(Listing& out);  // net.inl
 void NetEnumerateShares(const std::wstring& server, Listing& out);
 
@@ -201,6 +207,8 @@ void RunJob(const std::shared_ptr<Job>& j) {
     if (IsBin(j->path)) BinEnumerate(*l);
     else if (IsNet(j->path)) NetEnumerateComputers(*l);
     else if (IsServerPath(j->path)) NetEnumerateShares(j->path, *l);
+    else if (ArcEnumerate(j->path, *l)) {
+    }  // a folder inside an archive
     else EnumerateDir(j->path, EnumMethod::Nt, *l);
     double t1 = NowMs();
     SortBy by = static_cast<SortBy>(g_sortBy.load());
@@ -1832,6 +1840,15 @@ void OpenSelected(bool inNewTab) {
             NewTab(full);
         else
             Navigate(t, full, true);
+        return;
+    }
+    if (ArcInside(full)) {  // inside an archive: a copy taken out, opened
+        ArcOpenInside(full);
+        return;
+    }
+    if (g_cfg.browseArchives && ArcBrowsableExt(full)) {  // an archive: in, like a folder
+        if (inNewTab) NewTab(full);
+        else Navigate(t, full, true);
         return;
     }
     AddRecent(full);
@@ -3926,7 +3943,7 @@ void LayoutRename() {
 
 void BeginRename() {
     Tab& t = T();
-    if (g_renaming || !t.list || t.list->error || t.sel < 0 || t.sel >= Count() || IsVirtual(t.path)) return;
+    if (g_renaming || !t.list || t.list->error || t.sel < 0 || t.sel >= Count() || IsVirtual(t.path) || InArchive(t.path)) return;
     if (RowDir(t, t.sel).empty()) return;  // drives
     g_renameOld = SelectedName(t);
     g_renameDir = RowDir(t, t.sel);
@@ -4397,6 +4414,7 @@ void RunCommand(Cmd cmd) {
             return;
         }
     }
+    if (ArcBrowseCommand(cmd)) return;  // inside an archive: copying takes things out, changing is refused
     if (IsCustom(cmd)) {
         RunCustomCommand(CustomIndex(cmd));
         return;
@@ -5444,6 +5462,9 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case WM_APP_ARC:
             ArcMessage(wp, lp);
             return 0;
+        case WM_APP_ARCOUT:
+            ArcOutDone(reinterpret_cast<ArcOut*>(lp));
+            return 0;
         case WM_APP_CLIPIMG:
             PreviewClipDone(reinterpret_cast<ClipImage*>(lp));
             return 0;
@@ -6138,7 +6159,8 @@ std::wstring DefaultPath() {
 bool FolderExists(const std::wstring& p) {
     if (IsVirtual(p) || IsServerPath(p)) return true;
     DWORD a = GetFileAttributesW(ToExtendedPath(p).c_str());
-    return a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_DIRECTORY);
+    if (a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_DIRECTORY)) return true;
+    return InArchive(p) && ArcIsDir(p);  // an archive, or a folder inside one
 }
 
 }  // namespace

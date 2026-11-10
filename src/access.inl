@@ -129,7 +129,7 @@ void FolderNoteAct(const std::wstring& path) {
 // Enter on a folder that can't be read: better to stay here and say why next to its name. Only where asking is
 // instant; a network location goes in and says it on its page.
 bool CantEnter(const std::wstring& path) {
-    if (g_cache.count(Key(path)) || !IsLocalFixed(path)) return false;
+    if (g_cache.count(Key(path)) || !IsLocalFixed(path) || InArchive(path)) return false;
     HANDLE h = CreateFileW(ToExtendedPath(path).c_str(), FILE_LIST_DIRECTORY | SYNCHRONIZE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                            nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
     if (h != INVALID_HANDLE_VALUE) {

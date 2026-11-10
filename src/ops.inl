@@ -275,7 +275,7 @@ void TransferToOther(bool move) {
     }
     Tab& src = T();
     Tab& dst = PT(1 - g_act);
-    if (dst.path.empty() || IsVirtual(dst.path)) {
+    if (dst.path.empty() || IsVirtual(dst.path) || InArchive(dst.path)) {
         S.message = L"The other pane isn't in a folder";
         Invalidate();
         return;

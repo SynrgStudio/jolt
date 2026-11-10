@@ -36,9 +36,14 @@ struct ArcItem {
     int depth = 0;
 };
 
+bool ArcInside(const std::wstring& path);                                 // archive.inl
+bool ArcIsDir(const std::wstring& path);                                  // archive.inl
+bool ArcTakeOut(const std::wstring& path, std::wstring& out, uint64_t most);  // archive.inl
+
 struct PreviewResult {
     uint64_t gen = 0;
     std::wstring path;
+    std::wstring file;  // where it is read from: path, or for something inside an archive, its copy taken out
     int kind = 0;  // 0 nothing, 1 image, 2 text, 3 not on this PC, 4 hex (a binary), 5 table (CSV), 6 Markdown, 7 font, 8 SVG,
                    // 9 a song or a video, 10 an archive's contents
     ComPtr<IWICBitmap> bmp;
@@ -236,7 +241,7 @@ int PvArchiveKind(const std::wstring& path, const std::wstring& ext) {
 }
 
 // A zip's central directory: every name and its unpacked size (zip64 too). Data before the zip (self-extractors) is fine.
-bool PvZipList(const std::wstring& path, std::vector<std::pair<std::wstring, uint64_t>>& out, bool& locked) {
+bool PvZipList(const std::wstring& path, std::vector<std::pair<std::wstring, uint64_t>>& out, bool& locked, std::vector<int64_t>* times = nullptr) {
     HANDLE h = CreateFileW(ToExtendedPath(path).c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
                            OPEN_EXISTING, FILE_FLAG_RANDOM_ACCESS, nullptr);
     if (h == INVALID_HANDLE_VALUE) return false;
@@ -304,6 +309,11 @@ bool PvZipList(const std::wstring& path, std::vector<std::pair<std::wstring, uin
             std::wstring w(static_cast<size_t>(std::max(0, n)), L'\0');
             if (n > 0) MultiByteToWideChar(cp, 0, name, static_cast<int>(nlen), w.data(), n);
             if (flags & 1) locked = true;
+            if (times) {  // its date, written as local time in DOS form
+                FILETIME lf{}, uf{};
+                const bool dated = DosDateTimeToFileTime(static_cast<WORD>(u16(&cd[p + 14])), static_cast<WORD>(u16(&cd[p + 12])), &lf) && LocalFileTimeToFileTime(&lf, &uf);
+                times->push_back(dated ? (static_cast<int64_t>(uf.dwHighDateTime) << 32) | uf.dwLowDateTime : 0);
+            }
             out.push_back({std::move(w), usize});
             p += 46 + nlen + xlen + clen;
         }
@@ -1184,25 +1194,33 @@ void PreviewThread() {
         auto r = std::make_unique<PreviewResult>();
         r->gen = gen;
         r->path = path;
+        // inside an archive: taken out to a temporary folder first (not too big), and read from there
+        std::wstring file = path;
+        if (ArcInside(path)) {
+            std::wstring out;
+            file = ArcTakeOut(path, out, 256ull << 20) ? out : std::wstring();
+        }
+        r->file = file;
         SHFILEINFOW sfi{};
-        const bool online = OnlineOnlyPath(path);
-        if (SHGetFileInfoW(path.c_str(), online ? FILE_ATTRIBUTE_NORMAL : 0, &sfi, sizeof(sfi), SHGFI_TYPENAME | (online ? SHGFI_USEFILEATTRIBUTES : 0)))
+        const bool online = !file.empty() && OnlineOnlyPath(file);
+        if (!file.empty() && SHGetFileInfoW(file.c_str(), online ? FILE_ATTRIBUTE_NORMAL : 0, &sfi, sizeof(sfi), SHGFI_TYPENAME | (online ? SHGFI_USEFILEATTRIBUTES : 0)))
             r->typeName = sfi.szTypeName;
         std::wstring ext = ExtOf(path.c_str(), path.size());
-        if (online) {  // a thumbnail Windows already has, at most: reading it would download it
-            if (!wic || !PvThumb(wic.Get(), path, *r)) r->kind = 3;
+        if (file.empty()) {  // couldn't be taken out of its archive (or too big): its icon
+        } else if (online) {  // a thumbnail Windows already has, at most: reading it would download it
+            if (!wic || !PvThumb(wic.Get(), file, *r)) r->kind = 3;
         } else {
-            bool done = wic && PvIsImage(ext) && PvImage(wic.Get(), path, *r, full ? full : 2048);
+            bool done = wic && PvIsImage(ext) && PvImage(wic.Get(), file, *r, full ? full : 2048);
             r->full = full != 0;
             if (full) done = true;  // only the image: if it fails, what shows stays
-            if (!done && PvIsFont(ext)) done = PvFont(path, ext, *r);
-            if (!done && ext == L".svg") done = PvSvg(path, *r);
-            if (const int arc = done ? 0 : PvArchiveKind(path, ext)) done = PvArchive(path, arc, *r);
-            if (const int media = done ? 0 : PvMediaKind(ext)) done = PvMedia(wic.Get(), path, media, *r);
+            if (!done && PvIsFont(ext)) done = PvFont(file, ext, *r);
+            if (!done && ext == L".svg") done = PvSvg(file, *r);
+            if (const int arc = done ? 0 : PvArchiveKind(file, ext)) done = PvArchive(file, arc, *r);
+            if (const int media = done ? 0 : PvMediaKind(ext)) done = PvMedia(wic.Get(), file, media, *r);
             int text = 0;
             if (!done && !PvIsBinary(ext)) {
                 const bool table = PvIsTable(ext);
-                text = PvText(path, *r, table);
+                text = PvText(file, *r, table);
                 done = text == 1;
                 if (done && table) {
                     PvTable(ext, *r);
@@ -1216,12 +1234,12 @@ void PreviewThread() {
                 }
             }
             bool icon = false;
-            if (!done && wic) done = PvThumb(wic.Get(), path, *r, &icon);
+            if (!done && wic) done = PvThumb(wic.Get(), file, *r, &icon);
             if (text == 2 && (!done || icon)) {  // a binary Windows has nothing better for than its icon: its bytes
                 r->kind = 0;
                 r->bmp.Reset();
                 r->thumb = false;
-                PvHex(path, *r);
+                PvHex(file, *r);
             }
         }
         PreviewResult* raw = r.release();
@@ -1260,6 +1278,7 @@ void PreviewLoad() {
     }
     DWORD a = GetFileAttributesW(ToExtendedPath(g_pv.path).c_str());
     g_pv.isDir = a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_DIRECTORY);
+    if (a == INVALID_FILE_ATTRIBUTES && ArcInside(g_pv.path)) g_pv.isDir = ArcIsDir(g_pv.path);  // a folder inside an archive
     if (g_pv.isDir) {
         if (!g_cache.count(Key(g_pv.path))) Enqueue(g_pv.path, JobKind::Revalidate);
         Invalidate();
@@ -1394,7 +1413,7 @@ void PreviewHoldEnd(bool cancel) {
 
 // Play or pause what the preview shows (a song or a video).
 void PreviewPlay() {
-    if (g_pv.res && g_pv.res->kind == 9 && Key(g_pv.res->path) == Key(g_pv.path)) MediaPlayPause(g_pv.res->path, g_pv.res->media == 2);
+    if (g_pv.res && g_pv.res->kind == 9 && Key(g_pv.res->path) == Key(g_pv.path)) MediaPlayPause(g_pv.res->file, g_pv.res->media == 2);
 }
 
 // An icon font at another size (the play button, the note over a song without a cover).
@@ -1833,7 +1852,7 @@ void PreviewClipDone(ClipImage* raw) {
 bool PvHasPicture() {
     const PreviewResult* r = g_pv.res.get();
     return r && (((r->kind == 1 || r->kind == 9) && r->bmp) || (r->kind == 8 && !r->svg.empty()) ||
-                 (r->kind == 9 && MediaFor(r->path) && g_media.shown && g_media.frame));
+                 (r->kind == 9 && MediaFor(r->file) && g_media.shown && g_media.frame));
 }
 
 void PreviewCopyImage() {
@@ -1843,7 +1862,7 @@ void PreviewCopyImage() {
         return;
     }
     const PreviewResult& r = *g_pv.res;
-    if (r.kind == 9 && MediaFor(r.path) && g_media.shown && g_media.frame) {  // a video playing: the frame on screen
+    if (r.kind == 9 && MediaFor(r.file) && g_media.shown && g_media.frame) {  // a video playing: the frame on screen
         ClipImage* c = ClipImageFrom(g_wic.Get(), g_media.frame.Get());
         PreviewClipDone(c ? c : new ClipImage);
         return;
@@ -1855,7 +1874,7 @@ void PreviewCopyImage() {
         int rot;
         std::string svg;
     };
-    Job j{r.path, r.kind, r.kind == 9 || r.thumb, PvZoomable() ? g_pv.rot : 0, r.kind == 8 ? r.svg : std::string()};
+    Job j{r.file, r.kind, r.kind == 9 || r.thumb, PvZoomable() ? g_pv.rot : 0, r.kind == 8 ? r.svg : std::string()};
     S.message = L"Copying the image…";
     Invalidate();
     std::thread([j] {
@@ -2084,7 +2103,7 @@ void DrawPreviewBody(float x0, float y0, float W, float y1) {
         // a song or a video: the picture, then play / pause, the time and the bar
         const PreviewResult& m = *g_pv.res;
         const float ctlY = bot - 30;
-        const bool mine = MediaFor(m.path);
+        const bool mine = MediaFor(m.file);
         if (m.media == 2) {
             const D2D1_RECT_F area = D2D1::RectF(L, top, R, ctlY - 12);
             const bool frame = mine && MediaDrawVideo(area);
@@ -2122,7 +2141,7 @@ void DrawPreviewBody(float x0, float y0, float W, float y1) {
             Color(cDim);
             Text(by, g_fmtCenter.Get(), L, art.bottom + 34, R, art.bottom + 54);
         }
-        MediaControls(m.path, L, R, ctlY, m.mDur / 1e7);
+        MediaControls(m.file, L, R, ctlY, m.mDur / 1e7);
     } else if (g_pv.res && g_pv.res->kind == 10) {
         // an archive: its tree, folders first, each file's size
         const auto& items = g_pv.res->arc;
