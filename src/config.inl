@@ -13,7 +13,7 @@ enum class Cmd {
     Install, Quit, RenameMany, FolderSiblings, ViewList, ViewGrid, ViewColumns, ViewBigger, ViewSmaller, Tag, FolderColor, Zen, SizeBars, PreviewWrap, PreviewMarkdown, PreviewPlay, PreviewRotate, PreviewRotateLeft, PreviewZoom, PreviewZoomIn,
     PreviewZoomOut, PreviewChecker, PreviewCopyImage, Compress, Compress7z, Extract, ExtractTo, ArchiveStop, CheckUpdates, UpdateJolt,
     FindDuplicates, SelectExtraCopies, SelectPattern, SelectSameExtension, InvertSelection, Settings, Checkboxes, NewFromTemplate, CopyTo, MoveTo, Attributes, InUse, Unblock,
-    Compare, Checksums,
+    Compare, Checksums, DeleteEmptyFolders, Flatten,
     CustomFirst = 1000  // + index into g_cfg.custom: the user's own commands
 };
 inline bool IsCustom(Cmd c) { return static_cast<int>(c) >= static_cast<int>(Cmd::CustomFirst); }
@@ -143,6 +143,8 @@ const CmdDef kCommands[] = {
     {L"attributes", Cmd::Attributes, L"Shift+Alt+Enter", L"attributes and dates of the selection: hidden, read-only, modified, created"},
     {L"in_use", Cmd::InUse, L"", L"which programs have the selection open, with a button to close each"},
     {L"unblock", Cmd::Unblock, L"", L"unblock the selection: drop the \"downloaded from the internet\" mark (Zone.Identifier)"},
+    {L"delete_empty_folders", Cmd::DeleteEmptyFolders, L"", L"send the empty folders inside this one (or inside the selected ones) to the Recycle Bin"},
+    {L"flatten", Cmd::Flatten, L"", L"flatten the selected folders: what is inside them moves up next to them, and they go away"},
     {L"compare", Cmd::Compare, L"", L"compare two files or two folders: the two selected, or what is in each pane of the split view"},
     {L"checksums", Cmd::Checksums, L"", L"checksums of the selected files (MD5, SHA-1, SHA-256), to copy them or check a copied one"},
     {L"folder_sizes", Cmd::FolderSizes, L"Alt+R", L"calculate folder sizes"},

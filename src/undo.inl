@@ -17,6 +17,7 @@ struct UndoItem {
 struct UndoEntry {
     UndoKind kind;
     std::vector<UndoItem> items;
+    std::vector<std::wstring> dissolved;  // Move: folders it emptied and removed (flatten). Undo makes them again first
 };
 
 constexpr size_t kUndoMax = 100;
@@ -367,6 +368,9 @@ int UndoApply(UndoEntry& e, bool undo, std::wstring& why, std::vector<std::wstri
     if (e.kind == UndoKind::Rename || e.kind == UndoKind::Move) {
         auto srcOf = [&](const UndoItem& i) -> const std::wstring& { return undo ? i.to : i.from; };
         auto dstOf = [&](const UndoItem& i) -> const std::wstring& { return undo ? i.from : i.to; };
+        if (undo)  // flattened: the folders it removed come back, for their things to go back into
+            for (const std::wstring& d : e.dissolved)
+                if (!PathExists(d) && PathExists(ParentOf(d)) && CreateDirectoryW(ToExtendedPath(d).c_str(), nullptr)) touch(d);
         std::vector<UndoItem> ready;
         for (UndoItem& i : e.items) {
             if (!PathExists(srcOf(i))) fail(L"no longer where it was");
@@ -401,6 +405,9 @@ int UndoApply(UndoEntry& e, bool undo, std::wstring& why, std::vector<std::wstri
                 }
             }
         }
+        if (!undo)  // and flattening again removes them, if they ended up empty
+            for (const std::wstring& d : e.dissolved)
+                if (RemoveDirectoryW(ToExtendedPath(d).c_str())) touch(d);
         for (UndoItem& i : done) {
             touch(i.from);
             touch(i.to);

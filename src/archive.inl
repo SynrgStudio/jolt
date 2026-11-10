@@ -999,7 +999,7 @@ bool ArcBrowseCommand(Cmd cmd) {
         case Cmd::Rename: case Cmd::RenameMany: case Cmd::NewFolder: case Cmd::NewFile: case Cmd::Cut: case Cmd::Paste: case Cmd::Delete:
         case Cmd::MoveToOther: case Cmd::CopyTo: case Cmd::MoveTo: case Cmd::Attributes: case Cmd::InUse: case Cmd::Unblock: case Cmd::Duplicate:
         case Cmd::GroupInFolder: case Cmd::Properties: case Cmd::Terminal: case Cmd::OpenAsAdmin: case Cmd::Tag: case Cmd::SearchSubfolders:
-        case Cmd::Compress: case Cmd::Compress7z: case Cmd::Extract: case Cmd::ExtractTo:
+        case Cmd::Compress: case Cmd::Compress7z: case Cmd::Extract: case Cmd::ExtractTo: case Cmd::DeleteEmptyFolders: case Cmd::Flatten:
             S.message = L"Inside " + LeafOf(archive) + L" nothing can be changed: copy out what you need (Ctrl+C), or extract it";
             Invalidate();
             return true;
