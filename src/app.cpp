@@ -638,7 +638,7 @@ bool g_ignoreClipUpdate = false;
 int g_dropRow = -1, g_dropPane = 0, g_dropSide = -1, g_dropTab = -1;  // target highlighted during a drag
 
 // Clickable areas, recomputed on every draw.
-enum class HitKind { None, Tab, TabClose, TabNew, SideToggle, AppMenu, Back, Fwd, Up, Crumb, CrumbChev, PathEmpty, Side, Header, Divider, ViewBtn, FoldBtn, ColEdge, PreviewEdge, FolderNote, HeadCheck, HeadCol, Miller, PreviewPlay, PreviewSeek, PreviewImage, PreviewTool, StatusLink };
+enum class HitKind { None, Tab, TabClose, TabNew, SideToggle, AppMenu, Back, Fwd, Up, Crumb, CrumbChev, PathEmpty, Side, Header, Divider, ViewBtn, FoldBtn, ColEdge, PreviewEdge, FolderNote, HeadCheck, HeadCol, Miller, PreviewPlay, PreviewSeek, PreviewImage, PreviewTool, StatusLink, FilterHint };
 struct Hit {
     D2D1_RECT_F r;
     HitKind kind;
@@ -1896,6 +1896,7 @@ void OpenSelected(bool inNewTab) {
         return;
     }
     AddRecent(full);
+    HeatUseFile(full);  // Ctrl+P ranks it by use
     // Starts in the file's own folder, like File Explorer: games and many programs look for their data there.
     std::thread([full, dir = ParentOf(full)] {
         CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
@@ -2309,7 +2310,7 @@ ComPtr<IDWriteRenderingParams> g_textParams;
 
 // defined in palette.inl
 void TextHighlighted(const std::wstring& s, const std::wstring& patLower, IDWriteTextFormat* fmt, float l, float t,
-                     float r, float b, UINT32 color, UINT32 hiColor, float alpha = 1.f);
+                     float r, float b, UINT32 color, UINT32 hiColor, float alpha = 1.f, bool bold = true);
 void DrawPalette(float W, float H);  // "classic GDI" rasterization: same as the EDIT and File Pilot
 
 void CreateTextParams() {
@@ -3380,6 +3381,8 @@ void DrawRowCheck(const std::wstring& key, const D2D1_RECT_F& r, bool on, bool b
     DrawCheckbox(key, r, on, 0xE73E, g_cfg.checkboxes == 1, backed, onSel ? 0xC6D4EE : cDim, onSel ? 0xFFFFFF : cAccent, onSel ? 0xFFFFFF : cAccent);
 }
 
+void DrawFilterHint(const Tab& t, float L, float R, float y);  // search.inl: where else there is something
+
 void DrawList(int pane, float H) {
     const float listTop = ListTop(), listBot = H - kStatus;
     Tab& t = PT(pane);
@@ -3400,6 +3403,7 @@ void DrawList(int pane, float H) {
         Color(cDim);
         Text(t.dups && !t.dupDone ? L"Looking for duplicates…" : t.recursive && !t.recDone ? L"Searching…" : t.dups && t.filter.empty() ? L"No duplicates" : !t.filter.empty() ? L"No matches" : IsServerPath(t.path) ? L"No shared folders" : L"Empty folder",
              g_fmtCenter.Get(), mL, listTop, mR, listTop + 80);
+        DrawFilterHint(t, mL, mR, listTop + 58);
     } else if (t.list) {
         const bool focused = (g_test ? g_testActive && !g_renaming && !g_editing : GetFocus() == g_hwnd) && pane == g_act;
         const bool multi = SelCount(t) > 1;
@@ -4235,6 +4239,7 @@ void SaveSession() {
         for (const std::wstring& p : g_recents) ro << Utf8(p) << '\n';
     }
     HeatSave();
+    PickSave();
 }
 
 struct Session {
@@ -4301,6 +4306,7 @@ Session LoadSession() {
         if (!line.empty() && g_recents.size() < 300) g_recents.push_back(Wide(line));
     }
     HeatLoad();
+    PickLoad();
     return s;
 }
 
@@ -4568,7 +4574,15 @@ void RunCommand(Cmd cmd) {
             Invalidate();
             break;
         }
-        case Cmd::GoTo: PaletteOpen(1); break;
+        case Cmd::GoTo: {
+            const std::wstring words = HintWords();  // the filter found nothing here, and the note says the drives have it
+            PaletteOpen(1);
+            if (!words.empty()) {
+                g_pal.text = words;
+                PaletteFilter();
+            }
+            break;
+        }
         case Cmd::SearchSubfolders:
             if (t.recursive) StopRecursive(t, true);
             else StartRecursive(t);
@@ -5543,6 +5557,11 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             PaletteRefresh();
             return 0;
         }
+        case WM_APP_HINT: {
+            std::unique_ptr<HintMsg> m(reinterpret_cast<HintMsg*>(lp));
+            HintDone(*m);
+            return 0;
+        }
         case WM_APP_IDXGONE: {
             std::unique_ptr<IdxGone> g(reinterpret_cast<IdxGone*>(lp));
             auto at = std::find(g_ixRes.hits.begin(), g_ixRes.hits.end(), g->path);
@@ -5571,6 +5590,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (wp == kTimerMedia) MediaTick();
             if (wp == kTimerHold) PreviewFloatShow();
             if (wp == kTimerSpring) SpringFire();
+            if (wp == kTimerHint) HintStart();
             if (wp == kTimerUpdate) UpdTimer();
             if (wp == kTimerTest) {
                 if (g_testBlocking) SetTimer(hwnd, kTimerTest, 30, nullptr);  // a step is still waiting
@@ -5719,6 +5739,10 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             }
             if (HitAt(x, y).kind == HitKind::PreviewPlay) {
                 PreviewPlay();
+                return 0;
+            }
+            if (HitAt(x, y).kind == HitKind::FilterHint) {
+                HintGo(HitAt(x, y).idx);
                 return 0;
             }
             if (HitAt(x, y).kind == HitKind::StatusLink) {

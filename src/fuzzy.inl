@@ -231,3 +231,28 @@ bool NearPositions(const wchar_t* text, size_t len, const std::wstring& pat, int
     std::sort(pos.begin(), pos.end());
     return !pos.empty();
 }
+
+// ---- Ctrl+P: what is near the folder being looked at ranks higher, the more so the fewer folders between them.
+// common: how many folders below the drive both share (0: only the drive); up: how many levels above the folder being
+// looked at they meet; down: how far below that meeting point the result is. Meeting more than two levels up isn't near.
+inline int NearFolderPoints(int common, int up, int down) {
+    if (common < 1 || up < 0 || down < 0 || up > 2) return 0;
+    return 96 / (2 + 2 * up + down);  // 48 for the folder itself, 32 for what's in it, 16 for what's in a sibling folder
+}
+
+// The same, from the two paths ("C:\a\b"), compared folder by folder.
+int NearFolderPoints(const std::wstring& path, const std::wstring& here) {
+    if (path.size() < 3 || here.size() < 3 || path[1] != L':' || here[1] != L':') return 0;  // folders on drives only
+    const size_t n = std::min(path.size(), here.size());
+    size_t i = 0, shared = 0;  // where the part both have ends, at a folder's edge
+    for (; i < n && towupper(path[i]) == towupper(here[i]); ++i)
+        if (path[i] == L'\\') shared = i;
+    if (i == n && (path.size() == n || path[n] == L'\\') && (here.size() == n || here[n] == L'\\')) shared = n;
+    auto depth = [](const std::wstring& s, size_t end) {  // folders below the drive, up to there
+        int d = 0;
+        for (size_t k = 0; k < end; ++k) d += s[k] == L'\\' && k + 1 < s.size();
+        return d;
+    };
+    const int common = depth(path, shared);
+    return NearFolderPoints(common, depth(here, here.size()) - common, depth(path, path.size()) - common);
+}

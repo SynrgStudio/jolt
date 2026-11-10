@@ -7,6 +7,7 @@ struct PalItem {
     Cmd cmd = Cmd::None;  // if it's a command with a configurable shortcut
     std::wstring path;    // Go to: the folder or file
     bool pinned = false;  // always visible, at the top (the typed path)
+    bool picked = false;  // Go to: what was picked for this text often enough, first below the typed path (PickFor)
     int bonus = 0;        // Go to: recents and known places rank above index results
 };
 
@@ -26,6 +27,7 @@ struct Palette {
     int hoverShortcut = -1; // visible row whose shortcut is under the mouse
     D2D1_RECT_F panel{};
     std::vector<D2D1_RECT_F> rowRects, shortcutRects;
+    std::vector<std::wstring> shownDetail;  // what each visible row shows on the right (a long path, shortened)
 } g_pal;
 
 constexpr float kPalW = 600.f, kPalInputH = 40.f, kPalRow = 30.f;
@@ -63,6 +65,103 @@ void SelPatternBuild();  // select.inl
 void SelPatternPreview();
 void SelPatternCancel();
 
+// ---- Go to remembers what was picked for each text typed: after the same pick three times for the same text, that one
+// is first for it, even above names that match better. A different pick takes a time off the others, so a habit that
+// changes needs three picks too. Kept in picks.txt, next to the other data; what goes unused for months is forgotten.
+struct Pick {
+    std::wstring query, path;
+    int times = 0;
+    long long last = 0;  // seconds since 1970
+};
+std::vector<Pick> g_picks;
+constexpr int kPickTimes = 3, kPickMost = kPickTimes + 3;
+constexpr size_t kPickMax = 400;
+constexpr long long kPickForget = 120LL * 86400;
+
+std::wstring PickFile() {
+    const std::wstring f = FavFile();
+    return f.empty() ? L"" : f.substr(0, f.find_last_of(L'\\') + 1) + L"picks.txt";
+}
+
+// The text as remembered: lowercase and trimmed. Nothing for a path being typed: that isn't a search.
+std::wstring PickQuery(const std::wstring& text) {
+    const std::wstring q = Lower(Trim(text));
+    if (q.empty() || q.find_first_of(L"\\/:") != std::wstring::npos || q[0] == L'%' || q[0] == L'~') return L"";
+    return q;
+}
+
+void PickRecord(const std::wstring& text, const std::wstring& path) {
+    const std::wstring q = PickQuery(text);
+    if (q.empty() || path.empty()) return;
+    const std::wstring k = Key(path);
+    const long long now = time(nullptr);
+    bool found = false;
+    for (Pick& p : g_picks) {
+        if (p.query != q) continue;
+        if (Key(p.path) == k) {
+            p.times = std::min(kPickMost, p.times + 1);
+            p.last = now;
+            p.path = path;
+            found = true;
+        } else {
+            --p.times;
+        }
+    }
+    if (!found) g_picks.push_back({q, path, 1, now});
+    std::erase_if(g_picks, [](const Pick& p) { return p.times <= 0; });
+    if (g_picks.size() > kPickMax)
+        g_picks.erase(std::min_element(g_picks.begin(), g_picks.end(), [](const Pick& a, const Pick& b) { return a.last < b.last; }));
+    TouchSession();
+}
+
+// What goes first for this text: picked for it kPickTimes times or more (the most, then the latest), or "".
+std::wstring PickFor(const std::wstring& text) {
+    const std::wstring q = PickQuery(text);
+    const Pick* best = nullptr;
+    for (const Pick& p : g_picks)
+        if (!q.empty() && p.query == q && p.times >= kPickTimes &&
+            (!best || p.times > best->times || (p.times == best->times && p.last > best->last)))
+            best = &p;
+    return best ? best->path : L"";
+}
+
+void PickForget(const std::wstring& path) {
+    const std::wstring k = Key(path);
+    if (std::erase_if(g_picks, [&](const Pick& p) { return Key(p.path) == k; })) TouchSession();
+}
+
+// Seek reads this file too (the same text typed in its find puts the pick first): a change to its columns or its name has
+// to be told to Seek's side.
+void PickSave() {
+    const std::wstring f = PickFile();
+    if (f.empty()) return;
+    std::ofstream out(f, std::ios::binary);
+    out << "# Jolt: what was picked in Ctrl+P for each text typed: times, last time, text and path. Rewritten automatically.\n";
+    for (const Pick& p : g_picks) out << p.times << '\t' << p.last << '\t' << Utf8(p.query) << '\t' << Utf8(p.path) << '\n';
+}
+
+void PickLoad() {
+    g_picks.clear();
+    std::ifstream in(PickFile(), std::ios::binary);
+    const long long now = time(nullptr);
+    std::string line;
+    while (in && std::getline(in, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (line.empty() || line[0] == '#') continue;
+        const size_t a = line.find('\t'), b = a == std::string::npos ? a : line.find('\t', a + 1),
+                     c = b == std::string::npos ? b : line.find('\t', b + 1);
+        if (c == std::string::npos) continue;
+        Pick p{Wide(line.substr(b + 1, c - b - 1)), Wide(line.substr(c + 1)), std::clamp(atoi(line.c_str()), 0, kPickMost),
+               atoll(line.c_str() + a + 1)};
+        if (p.times > 0 && !p.query.empty() && !p.path.empty() && now - p.last < kPickForget && g_picks.size() < kPickMax)
+            g_picks.push_back(std::move(p));
+    }
+}
+
+// Points for how much a place has been used lately: every use counts and fades as time passes (heat.inl), on a scale that
+// grows slower and slower, so a place used a hundred times doesn't bury every better match.
+int UsePoints(double heat) { return heat < 0.05 ? 0 : std::min(60, static_cast<int>(std::lround(12 * std::log2(1 + heat)))); }
+
 void PaletteFilter() {
     g_pal.hits.clear();
     g_pal.match = g_pal.text;
@@ -71,10 +170,22 @@ void PaletteFilter() {
     if (g_pal.mode == 3) SelPatternBuild();
     std::wstring pat = Lower(g_pal.match);
     const NearPattern close(pat, g_cfg.typoMin);
+    // Go to: what has been used lately, and what is near the folder being looked at, rank higher
+    const bool rank = GotoLike() && !pat.empty();
+    std::unordered_map<std::wstring, double> used;
+    if (rank) {
+        const long long now = time(nullptr);
+        for (const Heat& h : g_heat) used[Key(h.path)] = HeatAt(h, now);
+    }
+    const std::wstring here = rank ? T().path : L"";
     for (size_t i = 0; i < g_pal.all.size(); ++i) {
         const PalItem& it = g_pal.all[i];
         if (it.pinned) {
             g_pal.hits.push_back({static_cast<int>(i), 1 << 28});
+            continue;
+        }
+        if (it.picked) {
+            g_pal.hits.push_back({static_cast<int>(i), 1 << 27});
             continue;
         }
         int s1 = 0, s2 = 0;
@@ -88,7 +199,12 @@ void PaletteFilter() {
             }
             if (!m1 && !m2) continue;
         }
-        g_pal.hits.push_back({static_cast<int>(i), real + it.bonus + (GotoLike() ? NameRank(it.title.c_str(), it.title.size(), pat) : 0)});
+        int extra = 0;
+        if (rank) {
+            extra = NameRank(it.title.c_str(), it.title.size(), pat) + NearFolderPoints(it.path, here);
+            if (auto u = used.find(Key(it.path)); u != used.end()) extra += UsePoints(u->second);
+        }
+        g_pal.hits.push_back({static_cast<int>(i), real + it.bonus + extra});
     }
     if (!pat.empty())
         std::stable_sort(g_pal.hits.begin(), g_pal.hits.end(), [](auto& a, auto& b) { return a.second > b.second; });
@@ -271,6 +387,7 @@ void GotoOpen(const std::wstring& p, bool newTab) {
     DWORD a = p.empty() || IsVirtual(p) ? FILE_ATTRIBUTE_DIRECTORY : GetFileAttributesW(ToExtendedPath(p).c_str());
     if (a == INVALID_FILE_ATTRIBUTES) {
         S.message = L"No longer exists: " + p;
+        PickForget(p);
         Invalidate();
         return;
     }
@@ -279,6 +396,7 @@ void GotoOpen(const std::wstring& p, bool newTab) {
         dir = ParentOf(p);
         g_lastSel[Key(dir)] = LeafOf(p);
         AddRecent(p);
+        HeatUseFile(p);  // a file picked here is a file used
     }
     if (newTab)
         NewTab(dir);
@@ -298,6 +416,7 @@ void TransferTo(std::wstring dest, bool move, const std::vector<std::wstring>& f
     const DWORD a = GetFileAttributesW(ToExtendedPath(dest).c_str());
     if (a == INVALID_FILE_ATTRIBUTES) {
         S.message = L"No longer exists: " + dest;
+        PickForget(dest);
         Invalidate();
         return;
     }
@@ -413,6 +532,12 @@ void GotoBuild() {
         }
         return;
     }
+    // what was picked for this text often enough: first, even if nothing else would bring it
+    const std::wstring picked = PickFor(text);
+    if (!picked.empty()) {
+        add(PlaceTitle(picked), picked, false, 0);
+        if (!g_pal.all.empty() && Key(g_pal.all.back().path) == Key(picked)) g_pal.all.back().picked = true;
+    }
     for (const std::wstring& r : g_recents) add(PlaceTitle(r), r);
     for (const Favorite& f : g_favs) add(f.name, f.path);
     struct K {
@@ -445,15 +570,23 @@ void GotoBuild() {
             add(DriveLabel(root[0]), root);
         }
     // the whole drive (global index): arrives a moment later and joins the list
-    IdxRequest(text);
+    IdxRequest(text, T().path);
     // while the new search runs, the last one stays, filtered: what matches the longer text is in it, and nothing blinks
     if (text.size() >= 2 && !g_ixRes.query.empty() && text.rfind(g_ixRes.query, 0) == 0)
         for (const std::wstring& p : g_ixRes.hits) add(PlaceTitle(p), p, false, 0);
 }
 
+// Go to: what was picked, for the text typed (PickRecord).
+void PalRemember(int hit) {
+    if (!GotoLike() || hit < 0 || hit >= static_cast<int>(g_pal.hits.size())) return;
+    const PalItem& it = g_pal.all[g_pal.hits[hit].first];
+    if (!it.pinned) PickRecord(g_pal.text, it.path);
+}
+
 void PaletteRun(int hit) {
     if (hit < 0 || hit >= static_cast<int>(g_pal.hits.size())) return;
     auto run = g_pal.all[g_pal.hits[hit].first].run;
+    PalRemember(hit);
     if (g_pal.mode == 3 && run) run();  // the selection is applied first: closing would put the old one back
     PaletteClose();
     if (g_pal.mode != 3 && run) run();
@@ -553,6 +686,7 @@ void PaletteKey(WPARAM vk) {
         case VK_RETURN:
             if (g_pal.mode == 1 && KeyDown(VK_CONTROL) && g_pal.sel < n) {  // (mode 4 has no new-tab variant)
                 std::wstring p = g_pal.all[g_pal.hits[g_pal.sel].first].path;
+                PalRemember(g_pal.sel);
                 PaletteClose();
                 GotoOpen(p, true);  // Ctrl+Enter: in a new tab
                 return;
@@ -585,9 +719,47 @@ void PaletteChar(wchar_t c) {
     Invalidate();
 }
 
-// Draws text with the matching positions highlighted.
+// A path too long for its room, shortened in the middle: "C:\Users\…\project\file.txt". The drive (or the server and
+// share) stays, and as many of the last folders as fit. One layout per path: where each folder starts comes from it.
+std::wstring ShortenPath(const std::wstring& p, IDWriteTextFormat* fmt, float room) {
+    static std::unordered_map<std::wstring, std::wstring> cache;
+    const std::wstring key = p + L'\x01' + std::to_wstring(static_cast<int>(room)) + L'\x01' + std::to_wstring(reinterpret_cast<uintptr_t>(fmt));
+    if (auto it = cache.find(key); it != cache.end()) return it->second;
+    if (cache.size() > 2000) cache.clear();
+    std::wstring& out = cache[key];
+    out = p;
+    ComPtr<IDWriteTextLayout> lay;
+    if (room <= 0 || FAILED(g_dw->CreateTextLayout(p.c_str(), static_cast<UINT32>(p.size()), fmt, 100000.f, 100.f, &lay))) return out;
+    DWRITE_TEXT_METRICS m{};
+    lay->GetMetrics(&m);
+    const float full = m.widthIncludingTrailingWhitespace;
+    if (full <= room) return out;
+    auto xAt = [&](size_t i) {
+        FLOAT x = 0, y = 0;
+        DWRITE_HIT_TEST_METRICS hm{};
+        lay->HitTestTextPosition(static_cast<UINT32>(i), FALSE, &x, &y, &hm);
+        return x;
+    };
+    std::vector<size_t> seps;
+    for (size_t i = 0; i < p.size(); ++i)
+        if (p[i] == L'\\') seps.push_back(i);
+    const size_t rootAt = p.rfind(L"\\\\", 0) == 0 ? 3 : 0;  // the part that always stays ends here ("C:\" or "\\server\share\")
+    if (seps.size() < rootAt + 2) return out;                 // nothing in the middle to take out: cut at the end
+    const float dots = MeasureW(L"…", fmt);
+    const size_t root = seps[rootAt], second = seps[rootAt + 1];
+    for (size_t k = rootAt + 1; k < seps.size(); ++k)  // the longest end first
+        for (size_t h : {second, root})                 // and one more folder at the start, if it fits too
+            if (h < seps[k] && xAt(h + 1) + dots + (full - xAt(seps[k])) <= room) {
+                out = p.substr(0, h + 1) + L"…" + p.substr(seps[k]);
+                return out;
+            }
+    out = L"…" + p.substr(seps.back());
+    return out;
+}
+
+// Draws text with the matching positions highlighted: in color, and in bold unless the text was measured to fit as it is.
 void TextHighlighted(const std::wstring& s, const std::wstring& patLower, IDWriteTextFormat* fmt, float l, float t,
-                     float r, float b, UINT32 color, UINT32 hiColor, float alpha) {
+                     float r, float b, UINT32 color, UINT32 hiColor, float alpha, bool bold) {
     std::vector<int> pos;
     int score = 0;
     bool found = !patLower.empty() && FuzzyMatch(s.c_str(), s.size(), patLower, score, &pos);
@@ -609,7 +781,7 @@ void TextHighlighted(const std::wstring& s, const std::wstring& patLower, IDWrit
     for (int p : pos) {
         DWRITE_TEXT_RANGE range{static_cast<UINT32>(p), 1};
         lay->SetDrawingEffect(g_brushAccent.Get(), range);
-        lay->SetFontWeight(DWRITE_FONT_WEIGHT_BOLD, range);
+        if (bold) lay->SetFontWeight(DWRITE_FONT_WEIGHT_BOLD, range);
     }
     Color(color, alpha);
     g_rt->DrawTextLayout(D2D1::Point2F(l, t), lay.Get(), g_brush.Get(), D2D1_DRAW_TEXT_OPTIONS_CLIP);
@@ -658,6 +830,7 @@ void DrawPalette(float W, float H) {
     if (rows) HLine(px + 10, px + pw - 10, py + kPalInputH);
     g_pal.rowRects.assign(rows, {});
     g_pal.shortcutRects.assign(rows, {});
+    g_pal.shownDetail.assign(rows, {});
     std::wstring pat = Lower(g_pal.match);
     float y = py + kPalInputH + 4;
     for (int i = 0; i < rows; ++i) {
@@ -690,14 +863,27 @@ void DrawPalette(float W, float H) {
             Text(it.shortcut, g_fmtRight.Get(), right - 160, y, right, y + kPalRow);
             right -= MeasureW(it.shortcut, g_fmtRight.Get()) + 16;
         }
-        float dw = it.detail.empty() ? 0 : std::min(MeasureW(it.detail, g_fmtRight.Get()), (right - r.left) * 0.55f);
         float tx = r.left + 10;
         if (GotoLike()) {
             DrawIcon(it.path, nullptr, nullptr, 0, IsDriveRoot(it.path), tx, y + (kPalRow - kIcon) / 2, 1.f);
             tx += 26;
         }
+        std::wstring detail = it.detail;
+        float dw = 0;
+        if (!detail.empty()) {
+            const float rowW = right - r.left;
+            float most = rowW * 0.55f;
+            if (GotoLike() && detail == it.path) {
+                // a path: the room the name leaves, and when that isn't enough, shortened in the middle, so the drive and the
+                // last folders stay in sight
+                most = std::clamp(right - tx - MeasureW(it.title, g_fmtName.Get()) - 24, rowW * 0.35f, rowW * 0.7f);
+                detail = ShortenPath(detail, g_fmtRight.Get(), most);
+            }
+            dw = std::min(MeasureW(detail, g_fmtRight.Get()) + 1, most);
+        }
+        g_pal.shownDetail[i] = detail;
         TextHighlighted(it.title, it.pinned ? L"" : pat, g_fmtName.Get(), tx, y, right - dw - 12, y + kPalRow, cText, cAccent);
-        if (dw > 0) TextHighlighted(it.detail, pat, g_fmtRight.Get(), right - dw, y, right, y + kPalRow, cFaint, cAccent);
+        if (dw > 0) TextHighlighted(detail, pat, g_fmtRight.Get(), right - dw, y, right, y + kPalRow, cFaint, cAccent, 1.f, false);
         if (const int percent = PalNear(it, pat)) {
             const float px0 = tx + MeasureW(it.title, g_fmtName.Get()) + 8;
             Color(cFaint);

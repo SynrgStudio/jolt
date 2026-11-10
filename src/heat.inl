@@ -1,15 +1,17 @@
 // Usage-based recents: each folder gains heat when used and cools over time, so the ones really in use stay
-// on top rather than the last one opened. Also holds the state of sidebar drags.
+// on top rather than the last one opened. Files opened from Jolt gain it too: Ctrl+P ranks by it (palette.inl).
+// Also holds the state of sidebar drags.
 
 constexpr UINT_PTR kTimerHeat = 13;
 constexpr UINT kHeatDwellMs = 1500;                       // passing through a folder doesn't count as using it
 constexpr double kHeatHalfLife = 30.0 * 24 * 3600;        // heat halves every 30 days
-constexpr size_t kHeatMax = 500, kHotMax = kHotCountMax;
+constexpr size_t kHeatMax = 1000, kHotMax = kHotCountMax;  // folders and files
 
 struct Heat {
     std::wstring path;
     double score = 0;
     long long last = 0;  // seconds since 1970
+    bool file = false;   // a file opened from Jolt: it counts in Ctrl+P, not in the sidebar's most used
 };
 struct HotItem {
     std::wstring path, name;
@@ -40,7 +42,7 @@ void HeatRefresh() {
     const long long now = time(nullptr);
     std::vector<const Heat*> order;
     for (const Heat& h : g_heat)
-        if (!IsDriveRoot(h.path) && !favs.count(Key(h.path))) order.push_back(&h);
+        if (!h.file && !IsDriveRoot(h.path) && !favs.count(Key(h.path))) order.push_back(&h);
     std::sort(order.begin(), order.end(), [&](const Heat* a, const Heat* b) {
         const double x = HeatAt(*a, now), y = HeatAt(*b, now);
         return x != y ? x > y : a->last > b->last;
@@ -60,15 +62,16 @@ void HeatRefresh() {
     }
 }
 
-void HeatAdd(const std::wstring& path, double amount, long long when) {
+void HeatAdd(const std::wstring& path, double amount, long long when, bool file = false) {
     const std::wstring k = Key(path);
     auto it = std::find_if(g_heat.begin(), g_heat.end(), [&](const Heat& h) { return Key(h.path) == k; });
     if (it == g_heat.end()) {
-        g_heat.push_back({path, amount, when});
+        g_heat.push_back({path, amount, when, file});
     } else {
         it->score = HeatAt(*it, when) + amount;
         it->last = when;
         it->path = path;
+        it->file = file;
     }
     if (g_heat.size() > kHeatMax) {
         const long long now = time(nullptr);
@@ -100,12 +103,21 @@ void HeatCommit() {
     Invalidate();
 }
 
+// A file opened from Jolt, or picked in Ctrl+P: it counts at once (nobody passes through a file on the way elsewhere).
+void HeatUseFile(const std::wstring& path) {
+    if (!g_heatReady || path.empty() || IsVirtual(path)) return;
+    HeatAdd(path, 1.0, time(nullptr), true);
+    TouchSession();
+}
+
+// Seek (the search for AI agents) reads this file too: a change to its columns, the "file" value or its name has to be
+// told to Seek's side, or its ranking breaks.
 void HeatSave() {
     const std::wstring f = HeatFile();
     if (f.empty()) return;
     std::ofstream out(f, std::ios::binary);
-    out << "# Jolt folder usage: heat, last use and path. Rewritten automatically.\n";
-    for (const Heat& h : g_heat) out << h.score << '\t' << h.last << '\t' << Utf8(h.path) << '\n';
+    out << "# Jolt usage: heat, last use and path, and \"file\" for files. Rewritten automatically.\n";
+    for (const Heat& h : g_heat) out << h.score << '\t' << h.last << '\t' << Utf8(h.path) << (h.file ? "\tfile" : "") << '\n';
 }
 
 void HeatLoad() {
@@ -118,7 +130,9 @@ void HeatLoad() {
             if (line.empty() || line[0] == '#') continue;
             const size_t a = line.find('\t'), b = a == std::string::npos ? a : line.find('\t', a + 1);
             if (b == std::string::npos) continue;
-            g_heat.push_back({Wide(line.substr(b + 1)), atof(line.c_str()), atoll(line.c_str() + a + 1)});
+            const size_t c = line.find('\t', b + 1);  // a fourth column: "file"
+            g_heat.push_back({Wide(line.substr(b + 1, c == std::string::npos ? std::string::npos : c - b - 1)), atof(line.c_str()),
+                              atoll(line.c_str() + a + 1), c != std::string::npos && line.compare(c + 1, std::string::npos, "file") == 0});
         }
     } else {
         // first run: the recents history gives a starting point, most recent first
