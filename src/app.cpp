@@ -30,6 +30,7 @@
 #include <wrl/client.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cmath>
 #include <condition_variable>
@@ -597,6 +598,9 @@ struct Tab {
     uint64_t dupGen = 0;
     std::vector<DupSet> dupSets;
     std::shared_ptr<Listing> dupHead;  // its groups are the sets' titles
+    // folder comparison (cmpdir.inl): a subfolder search of two folders at once whose rows are what differs
+    bool cmp = false;
+    std::shared_ptr<struct CmpState> cmpState;
     float scroll = 0;
     // grid view: one rect per row in content coordinates (see RowRect), rebuilt when the rows or the width change
     std::vector<D2D1_RECT_F> cells;
@@ -935,6 +939,10 @@ bool FilterPass(const FilterSpec& s, const Entry& e, const wchar_t* name, size_t
 
 void BuildDupRows(Tab& t);  // dups.inl
 std::wstring DupStatus(const Tab& t);
+void BuildCmpRows(Tab& t);  // cmpdir.inl
+std::wstring CmpStatus(const Tab& t);
+std::wstring CmpRelDir(const Tab& t, const std::wstring& dir);
+int CmpShown(const Tab& t, size_t g);
 
 void BuildRows(Tab& t) {
     t.rows.clear();
@@ -943,6 +951,10 @@ void BuildRows(Tab& t) {
     if (!t.list) return;
     if (t.recursive && t.dups) {
         BuildDupRows(t);
+        return;
+    }
+    if (t.recursive && t.cmp) {
+        BuildCmpRows(t);
         return;
     }
     if (t.recursive) {
@@ -3401,7 +3413,7 @@ void DrawList(int pane, float H) {
         DrawFolderError(t, mL, mR, listTop);
     } else if (t.list && n == 0) {
         Color(cDim);
-        Text(t.dups && !t.dupDone ? L"Looking for duplicates…" : t.recursive && !t.recDone ? L"Searching…" : t.dups && t.filter.empty() ? L"No duplicates" : !t.filter.empty() ? L"No matches" : IsServerPath(t.path) ? L"No shared folders" : L"Empty folder",
+        Text(t.dups && !t.dupDone ? L"Looking for duplicates…" : t.cmp && !t.recDone ? L"Comparing…" : t.recursive && !t.recDone ? L"Searching…" : t.dups && t.filter.empty() ? L"No duplicates" : t.cmp && t.filter.empty() ? L"No differences: the two folders are the same" : !t.filter.empty() ? L"No matches" : IsServerPath(t.path) ? L"No shared folders" : L"Empty folder",
              g_fmtCenter.Get(), mL, listTop, mR, listTop + 80);
         DrawFilterHint(t, mL, mR, listTop + 58);
     } else if (t.list) {
@@ -3442,6 +3454,7 @@ void DrawList(int pane, float H) {
                     const int copies = t.dupSets[-1 - row.e].shown;
                     cnt = copies == 1 ? L"only copy left" : Thousands(copies) + L" copies";
                 }
+                if (t.cmp) cnt = Thousands(CmpShown(t, static_cast<size_t>(-1 - row.e)));
                 float tw = MeasureW(gr.second, g_fmtSection.Get());
                 const bool gfold = GroupFolded(t, row.l, static_cast<size_t>(-1 - row.e));
                 const bool ghov = hoverHeader == i && pane == g_hoverPane;
@@ -3552,10 +3565,10 @@ void DrawList(int pane, float H) {
                 afterName += 16;
             }
             if (e.isDir() && !drives && !g_folderNotes.empty()) afterName = DrawFolderNote(full, afterName, nameEnd, y, a, selected && focused);
-            if (flat && row.depth > 0 && row.l->path.size() > t.path.size()) {
-                std::wstring rel = row.l->path.substr(t.path.size());
+            if (flat && row.depth > 0 && (t.cmp || row.l->path.size() > t.path.size())) {
+                std::wstring rel = t.cmp ? CmpRelDir(t, row.l->path) : row.l->path.substr(t.path.size());
                 while (!rel.empty() && rel[0] == L'\\') rel.erase(0, 1);
-                if (afterName < nameEnd - 30) {
+                if (!rel.empty() && afterName < nameEnd - 30) {
                     Color(selected && focused ? 0x9FB3D9 : cFaint, a);
                     Text(rel, g_fmtName.Get(), afterName, y, nameEnd, y + kRow);
                     afterName += MeasureW(rel, g_fmtName.Get()) + 14;
@@ -3661,13 +3674,13 @@ void DrawStatus(int pane, float H) {
     float lx = g.TL + kPad + 2;
     if (!t.filter.empty() || t.recursive) {
         // filter box, File Pilot style: magnifier + text + count
-        std::wstring label = t.dups ? L"duplicates:" : t.recursive ? L"in subfolders:" : L"";
+        std::wstring label = t.dups ? L"duplicates:" : t.cmp ? L"differences:" : t.recursive ? L"in subfolders:" : L"";
         float lw = label.empty() ? 0 : MeasureW(label, g_fmtName.Get()) + 6;
         float tw = MeasureW(t.filter, g_fmtName.Get());
         D2D1_RECT_F box = D2D1::RectF(lx - 4, y0 + 3, lx + 30 + lw + tw + 12, H - 3);
         Round(box, 5, cAccent, 0.18f);
         Color(cAccent);
-        Glyph(t.dups ? 0xE8C8 : t.recursive ? 0xE8B7 : 0xE721, g_fmtIconSm.Get(), box.left + 4, box.top, box.left + 24, box.bottom);
+        Glyph(t.dups ? 0xE8C8 : t.cmp ? 0xE8AB : t.recursive ? 0xE8B7 : 0xE721, g_fmtIconSm.Get(), box.left + 4, box.top, box.left + 24, box.bottom);
         if (!label.empty()) {
             Color(0x9FB3D9);
             Text(label, g_fmtName.Get(), box.left + 26, box.top, box.right, box.bottom);
@@ -3679,6 +3692,8 @@ void DrawStatus(int pane, float H) {
         const std::wstring close = t.nearRows ? L", " + Thousands(t.nearRows) + L" close" : L"";
         if (t.dups) {
             left = DupStatus(t);
+        } else if (t.cmp) {
+            left = CmpStatus(t);
         } else if (t.recursive) {
             left = (t.filter.empty() ? Thousands(n) + L" items" : Thousands(n) + L" matches" + close) + L" in " +
                    Thousands(t.recDirs) + (t.recDirs == 1 ? L" folder" : L" folders") +
@@ -3728,6 +3743,8 @@ void DrawMenuEditor(float W, float H);    // menu.inl
 void DrawSettings(float W, float H);      // settings.inl
 void DrawAttrs(float W, float H);         // attrs.inl
 void DrawInUse(float W, float H);         // inuse.inl
+void DrawHash(float W, float H);          // hash.inl
+void DrawDiff(float W, float H);          // diff.inl
 
 // Milliseconds since the process started (includes loading the executable).
 double MsSinceProcessStart() {
@@ -3805,6 +3822,8 @@ void Render() {
     DrawSettings(W, H);
     DrawAttrs(W, H);
     DrawInUse(W, H);
+    DrawHash(W, H);
+    DrawDiff(W, H);
     if (g_rt->EndDraw() == D2DERR_RECREATE_TARGET) ReleaseTarget();
     if (g_firstFrameMs == 0) g_firstFrameMs = MsSinceProcessStart();
 
@@ -4184,6 +4203,9 @@ void ViewEditorOpen(int pane);
 #include "media.inl"
 #include "preview.inl"
 #include "archive.inl"
+#include "hash.inl"
+#include "diff.inl"
+#include "cmpdir.inl"
 void PreviewReleaseBitmap() {
     g_pv.d2d.Reset();
     g_media.d2d.Reset();
@@ -4628,6 +4650,8 @@ void RunCommand(Cmd cmd) {
         case Cmd::Properties: Properties(); break;
         case Cmd::Attributes: AttrsOpen(); break;
         case Cmd::InUse: InUseOpen(); break;
+        case Cmd::Checksums: HashOpen(); break;
+        case Cmd::Compare: CompareCmd(); break;
         case Cmd::Unblock: Unblock(); break;
         case Cmd::FolderSizes: ComputeFolderSizes(); break;
         case Cmd::ShowFolders:
@@ -5229,6 +5253,57 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return TRUE;
         }
     }
+    // comparing two files: a view over everything
+    if (g_df.open) {
+        if (msg == WM_KEYDOWN || (msg == WM_SYSKEYDOWN && wp != VK_F4)) {
+            DiffKey(wp);
+            return 0;
+        }
+        if (msg == WM_CHAR || msg == WM_SYSCHAR) return 0;
+        if (msg == WM_MOUSEMOVE) {
+            DiffMouseMove(DipX(lp), DipY(lp));
+            return 0;
+        }
+        if (msg == WM_LBUTTONDOWN || msg == WM_LBUTTONDBLCLK) {
+            DiffClick(DipX(lp), DipY(lp));
+            return 0;
+        }
+        if (msg == WM_MOUSEWHEEL || msg == WM_MOUSEHWHEEL) {
+            const int d = GET_WHEEL_DELTA_WPARAM(wp);
+            DiffWheel(msg == WM_MOUSEHWHEEL ? -d : d, msg == WM_MOUSEHWHEEL || (GET_KEYSTATE_WPARAM(wp) & MK_SHIFT));
+            return 0;
+        }
+        if (msg == WM_LBUTTONUP || msg == WM_RBUTTONDOWN || msg == WM_RBUTTONUP || msg == WM_MBUTTONDOWN) return 0;
+        if (msg == WM_SETCURSOR && LOWORD(lp) == HTCLIENT) {
+            SetCursor(LoadCursorW(nullptr, g_df.hovering ? IDC_HAND : IDC_ARROW));
+            return TRUE;
+        }
+    }
+    // checksums: a panel over everything
+    if (g_hs.open) {
+        if (msg == WM_KEYDOWN || (msg == WM_SYSKEYDOWN && wp != VK_F4)) {
+            HashKey(wp);
+            return 0;
+        }
+        if (msg == WM_CHAR || msg == WM_SYSCHAR) return 0;
+        if (msg == WM_MOUSEMOVE) {
+            HashMouseMove(DipX(lp), DipY(lp));
+            return 0;
+        }
+        if (msg == WM_LBUTTONDOWN || msg == WM_LBUTTONDBLCLK) {
+            HashClick(DipX(lp), DipY(lp));
+            return 0;
+        }
+        if (msg == WM_MOUSEWHEEL) {
+            HashWheel(GET_WHEEL_DELTA_WPARAM(wp));
+            return 0;
+        }
+        if (msg == WM_LBUTTONUP || msg == WM_RBUTTONDOWN || msg == WM_RBUTTONUP || msg == WM_MBUTTONDOWN) return 0;
+        if (msg == WM_SETCURSOR && LOWORD(lp) == HTCLIENT) {
+            SetCursor(LoadCursorW(nullptr, g_hs.hovering ? IDC_HAND : IDC_ARROW));
+            return TRUE;
+        }
+    }
     // in use: a panel over everything
     if (g_iu.open) {
         if (msg == WM_KEYDOWN || (msg == WM_SYSKEYDOWN && wp != VK_F4)) {
@@ -5516,6 +5591,15 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case WM_APP_REC:
             ApplyRecBatch(reinterpret_cast<RecBatch*>(lp));
             return 0;
+        case WM_APP_HASH:
+            HashApply(wp, lp);
+            return 0;
+        case WM_APP_DIFF:
+            DiffApply(wp, lp);
+            return 0;
+        case WM_APP_CMP:
+            CmpApply(wp, lp);
+            return 0;
         case WM_APP_DUP:
             DupApply(wp, lp);
             return 0;
@@ -5591,6 +5675,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (wp == kTimerHold) PreviewFloatShow();
             if (wp == kTimerSpring) SpringFire();
             if (wp == kTimerHint) HintStart();
+            if (wp == kTimerHashCopied) Invalidate();
+            if (wp == kTimerCmp) CmpTimer();
             if (wp == kTimerUpdate) UpdTimer();
             if (wp == kTimerTest) {
                 if (g_testBlocking) SetTimer(hwnd, kTimerTest, 30, nullptr);  // a step is still waiting
@@ -5619,6 +5705,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 g_cutKeys.clear();
                 Invalidate();
             }
+            HsReadClipboard();  // a hash copied while the checksums are open
             return 0;
         case WM_KEYDOWN:
         case WM_SYSKEYDOWN: {

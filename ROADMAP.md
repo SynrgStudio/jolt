@@ -2,7 +2,7 @@
 
 Every planned feature, one line per GitHub issue. A line is checked and struck through when its PR is merged.
 
-**51 of 89 done.**
+**52 of 89 done.**
 
 ## Navigation
 
@@ -73,10 +73,10 @@ Every planned feature, one line per GitHub issue. A line is checked and struck t
 
 ## Tools
 
-2 of 7 done.
+3 of 7 done.
 
 - [x] ~~[#35](https://github.com/SynrgStudio/jolt/issues/35) Compress and extract zip (and 7z when installed); browse archives as folders~~
-- [ ] [#36](https://github.com/SynrgStudio/jolt/issues/36) Hash files, compare two files, compare two folders
+- [x] ~~[#36](https://github.com/SynrgStudio/jolt/issues/36) Hash files, compare two files, compare two folders~~
 - [x] ~~[#37](https://github.com/SynrgStudio/jolt/issues/37) Custom commands from config with {file} and {dir}, in the palette and the menu~~
 - [ ] [#38](https://github.com/SynrgStudio/jolt/issues/38) Run as administrator from the keyboard
 - [ ] [#39](https://github.com/SynrgStudio/jolt/issues/39) Convert and resize images with WIC

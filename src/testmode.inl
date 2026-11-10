@@ -634,6 +634,63 @@ void TestRunStep() {
             std::wstring out = L"picks:";
             for (const Pick& p : g_picks) out += L" | " + p.query + L" -> " + LeafOf(p.path) + L" (" + std::to_wstring(p.times) + L")";
             TestLog(out);
+        } else if (s.cmd == L"clip") {  // what the clipboard holds, as if copied from another app (the real one stays as it is)
+            g_testClip = s.arg;
+            HsReadClipboard();
+        } else if (s.cmd == L"checksums") {  // the checksums panel: each file's hashes, and the copied hash it matches
+            if (!g_hs.open) {
+                TestLog(L"checksums: closed");
+            } else {
+                Render();
+                bool pending = false;
+                const auto [mf, ma] = HsMatch(&pending);
+                std::wstring out = L"checksums: " + Thousands(static_cast<int>(g_hs.files.size())) + L" files, " + Thousands(g_hs.folders) + L" folders left out";
+                for (const HsFile& f : g_hs.files) {
+                    out += L"\n  " + LeafOf(f.path) + (f.done ? L"" : L" (not read yet)");
+                    if (!f.error.empty()) out += L" error: " + f.error;
+                    for (int a = 0; a < kHsAlgs && f.done && f.error.empty(); ++a) out += L"\n    " + std::wstring(kHsNames[a]) + L" " + f.hash[a];
+                }
+                out += L"\n  clipboard: " + (g_hs.clip.empty() ? L"no hash" : g_hs.clip.substr(0, 12) + L"… " +
+                                                (mf >= 0 ? L"matches " + std::wstring(kHsNames[ma]) + L" of " + LeafOf(g_hs.files[mf].path)
+                                                         : pending ? std::wstring(L"pending") : std::wstring(L"matches none")));
+                for (const HsHit& h : g_hs.hits)
+                    if (h.k == HsK::Hash)
+                        out += L"\n  @" + std::to_wstring(static_cast<int>((h.r.left + h.r.right) / 2)) + L"," + std::to_wstring(static_cast<int>((h.r.top + h.r.bottom) / 2)) +
+                               L" copies " + kHsNames[h.alg] + L" of " + LeafOf(g_hs.files[h.file].path);
+                TestLog(out);
+            }
+        } else if (s.cmd == L"diff") {  // the comparison of two files: what it found, and the rows it shows
+            if (!g_df.open || !g_df.r) {
+                TestLog(L"diff: closed" + std::wstring(g_diffBusy ? L" (comparing)" : L""));
+            } else {
+                Render();
+                const DiffResult& r = *g_df.r;
+                std::wstring out = L"diff: " + LeafOf(r.path[0]) + L" | " + LeafOf(r.path[1]) + L", kind " + std::to_wstring(r.kind);
+                if (r.kind == 3) {
+                    out += L", " + std::to_wstring(g_df.hunkAt.size()) + L" changes, -" + std::to_wstring(r.removed) + L" +" + std::to_wstring(r.added) + L", current " +
+                           std::to_wstring(g_df.cur) + L", top row " + std::to_wstring(static_cast<int>(g_df.scroll / kDfRow)) + (g_df.all ? L", all lines" : L"");
+                    const wchar_t* k = L"=~-+";
+                    for (size_t i = 0; i < g_df.show.size() && i < 60; ++i) {
+                        const DfShow& sh = g_df.show[i];
+                        if (sh.fold) {
+                            out += L"\n  [" + std::to_wstring(sh.fold) + L" equal lines]";
+                            continue;
+                        }
+                        const DiffOp& op = r.ops[sh.op];
+                        out += L"\n  " + std::wstring(1, k[op.kind]) + L" " + (op.a >= 0 ? std::to_wstring(op.a + 1) + L":" + r.lines[0][op.a] : L"-") + L" | " +
+                               (op.b >= 0 ? std::to_wstring(op.b + 1) + L":" + r.lines[1][op.b] : L"-");
+                    }
+                } else {
+                    out += L", " + std::to_wstring(r.runs.size()) + (r.moreRuns ? L"+" : L"") + L" runs, " + std::to_wstring(r.diffBytes) + L" bytes differ, first at " +
+                           (r.runs.empty() ? L"-" : std::to_wstring(r.runs[0])) + L", current " + std::to_wstring(g_df.cur) + L", top row " + std::to_wstring(g_df.hexRow);
+                }
+                for (const DfHit& h : g_df.hits)
+                    if (h.k == DfK::Fold)
+                        out += L"\n  fold @" + std::to_wstring(static_cast<int>((h.r.left + h.r.right) / 2)) + L"," + std::to_wstring(static_cast<int>((h.r.top + h.r.bottom) / 2));
+                TestLog(out);
+            }
+        } else if (s.cmd == L"compared") {  // a folder comparison: its status line
+            TestLog(L"compared: " + (T().cmp ? CmpStatus(T()) : std::wstring(L"no comparison")));
         } else if (s.cmd == L"hint") {  // the note under "No matches"
             TestLog(L"hint: filter \"" + g_hint.filter + L"\" started " + std::to_wstring(g_hint.started) + L", subfolders " +
                     (g_hint.sub ? (g_hint.subDone ? std::to_wstring(g_hint.inSub) + (g_hint.capped ? L"+" : L"") : L"…") : L"-") + L", drives " +
@@ -765,8 +822,13 @@ void TestRunStep() {
             for (int i = 0; i < RowCount(T()) && i < 40; ++i) {
                 const Row& r = T().rows[i];
                 std::wstring n = IsHeader(T(), i) ? L"[" + r.l->groups[static_cast<size_t>(-1 - r.e)].second + L"]" : RowName(T(), i);
-                if (T().recursive && Key(RowDir(T(), i)) != Key(T().path))  // results: where it is, below the root
-                    n = RowPath(T(), i).substr(T().path.size() + (T().path.back() == L'\\' ? 0 : 1));
+                if (T().cmp && T().cmpState && !IsHeader(T(), i)) {  // a comparison: the side, and where it is below it
+                    const int side = CmpSide(*T().cmpState, RowDir(T(), i));
+                    const std::wstring rel = CmpRelDir(T(), RowDir(T(), i));
+                    n = (side == 1 ? L"B:" : L"A:") + (rel.empty() ? n : rel + L"\\" + n);
+                } else if (T().recursive && !IsHeader(T(), i) && Key(RowDir(T(), i)) != Key(T().path) && RecUnder(Key(RowDir(T(), i)), Key(T().path))) {
+                    n = RowPath(T(), i).substr(T().path.size() + (T().path.back() == L'\\' ? 0 : 1));  // results: where it is, below the root
+                }
                 names += L" " + n;
                 if (T().rows[i].closeness) names += L"(" + std::to_wstring(T().rows[i].closeness) + L"%)";
             }
