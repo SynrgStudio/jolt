@@ -103,6 +103,8 @@ bool BgAdminPlace(int show) {
     return true;
 }
 
+bool RunsAsAdmin(const std::wstring& full, bool followLink = true);
+
 // Opens a folder in a separate Jolt that runs as administrator: a window of its own, passing through, that closes for
 // real and leaves the session alone. A second folder goes to the same window, without asking again.
 void OpenAsAdmin(const std::wstring& path) {
@@ -136,6 +138,52 @@ void OpenAsAdmin(const std::wstring& path) {
         S.message = e == ERROR_CANCELLED ? L"Cancelled: the folder stays closed" : L"Couldn't open it as administrator: " + ErrorText(e);
         Invalidate();
     }
+}
+
+// Does Windows know how to run this file as administrator? Programs and scripts; and a shortcut to one, which runs
+// what it points to.
+bool RunsAsAdmin(const std::wstring& full, bool followLink) {
+    const wchar_t* ext = PathFindExtensionW(full.c_str());
+    if (!*ext) return false;
+    if (!_wcsicmp(ext, L".lnk")) {
+        ComPtr<IShellLinkW> link;
+        ComPtr<IPersistFile> file;
+        wchar_t to[4096] = L"";
+        if (!followLink || FAILED(CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&link))) ||
+            FAILED(link.As(&file)) || FAILED(file->Load(full.c_str(), STGM_READ)) || FAILED(link->GetPath(to, 4096, nullptr, 0)))
+            return false;
+        if (!to[0]) return true;  // to an app with no file of its own: Windows knows
+        const DWORD attrs = GetFileAttributesW(to);
+        return (attrs == INVALID_FILE_ATTRIBUTES || !(attrs & FILE_ATTRIBUTE_DIRECTORY)) && RunsAsAdmin(to, false);
+    }
+    DWORD n = 0;  // only whether there is one: its length
+    const HRESULT hr = AssocQueryStringW(ASSOCF_NOTRUNCATE, ASSOCSTR_COMMAND, ext, L"runas", nullptr, &n);
+    return hr == S_FALSE && n > 1;
+}
+
+// Runs a file as administrator: Windows asks first. It starts in the file's own folder, like opening it does.
+void RunAsAdmin(const std::wstring& full) {
+    if (g_test) {  // the prompt is for a person
+        TestLog(L"run as administrator: " + full);
+        return;
+    }
+    const std::wstring dir = ParentOf(full);
+    SHELLEXECUTEINFOW sei{sizeof(sei)};
+    sei.hwnd = g_hwnd;
+    sei.lpVerb = L"runas";
+    sei.lpFile = full.c_str();
+    sei.lpDirectory = dir.empty() ? nullptr : dir.c_str();
+    sei.nShow = SW_SHOWNORMAL;
+    if (ShellExecuteExW(&sei)) {
+        AddRecent(full);
+        HeatUseFile(full);
+        return;
+    }
+    const DWORD e = GetLastError();
+    S.message = e == ERROR_CANCELLED ? L"Cancelled: " + LeafOf(full) + L" wasn't run"
+              : e == ERROR_NO_ASSOCIATION ? L"Windows can't run " + LeafOf(full) + L" as administrator"
+              : L"Couldn't run it as administrator: " + ErrorText(e);
+    Invalidate();
 }
 
 // ---- show and hide

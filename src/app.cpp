@@ -4690,9 +4690,12 @@ void RunCommand(Cmd cmd) {
         case Cmd::RowsTaller: SetRowHeight(kRow + 1); break;
         case Cmd::RowsShorter: SetRowHeight(kRow - 1); break;
         case Cmd::FolderSiblings: CrumbMenu(CrumbSiblingsDir(t.path), g_crumbLast[g_act]); break;
-        case Cmd::OpenAsAdmin:
-            FolderNoteAct(t.sel >= 0 && t.sel < Count() && EntryAt(t, t.sel).isDir() ? RowPath(t, t.sel) : t.path);
+        case Cmd::OpenAsAdmin: {  // a program runs as administrator; a folder (or this one) opens in that window
+            const bool on = t.sel >= 0 && t.sel < Count() && !IsHeader(t, t.sel);
+            if (on && !EntryAt(t, t.sel).isDir() && RunsAsAdmin(RowPath(t, t.sel))) RunAsAdmin(RowPath(t, t.sel));
+            else FolderNoteAct(on && EntryAt(t, t.sel).isDir() ? RowPath(t, t.sel) : t.path);
             break;
+        }
         case Cmd::PreviewPlay:
             if (g_preview) PreviewPlay();
             break;
