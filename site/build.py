@@ -69,7 +69,8 @@ def main():
         shutil.rmtree(out)
     os.makedirs(os.path.join(out, 'media'))
     open(os.path.join(out, 'index.html'), 'w', encoding='utf-8', newline='\n').write(page)
-    shutil.copy(os.path.join(site, 'style.css'), out)
+    for f in ('style.css', 'InterVariable.woff2', 'Inter-LICENSE.txt'):
+        shutil.copy(os.path.join(site, f), out)
     shutil.copy(os.path.join(site, 'CNAME'), out)
     open(os.path.join(out, '.nojekyll'), 'w').close()
     for f in os.listdir(os.path.join(root, 'docs', 'media')):

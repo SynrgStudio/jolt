@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Jolt — a fast file explorer for Windows</title>
 <meta name="description" content="Jolt is a file explorer for Windows that keeps up with you: instant folders, fuzzy filter, preview, tabs, split view, undo. One small file, no dependencies, no telemetry.">
+<meta name="theme-color" content="#111214">
 <link rel="icon" href="favicon.ico">
 <link rel="stylesheet" href="style.css">
 <meta property="og:title" content="Jolt — a fast file explorer for Windows">
@@ -16,63 +17,90 @@
 <nav class="side" id="nav">
   <a class="brand" href="#top"><img src="media/jolt-256.png" alt=""> Jolt <span class="v">v{{VERSION}}</span></a>
   <div class="group">Start</div>
-  <a class="item" href="#get">Get Jolt</a>
-  <a class="item" href="#always">Always ready</a>
-  <a class="item" href="#basics">The basics</a>
+  <div class="items">
+    <a class="item" href="#get">Get Jolt</a>
+    <a class="item" href="#always">Always ready</a>
+    <a class="item" href="#basics">The basics</a>
+  </div>
   <div class="group">Use</div>
-  <a class="item" href="#find">Find things</a>
-  <a class="item" href="#filter">Filter terms</a>
-  <a class="item" href="#preview">Preview</a>
-  <a class="item" href="#files">Working with files</a>
-  <a class="item" href="#rename">Rename</a>
-  <a class="item" href="#views">Views</a>
-  <a class="item" href="#commands">Custom commands</a>
-  <a class="item" href="#shortcuts">All shortcuts</a>
+  <div class="items">
+    <a class="item" href="#find">Find things</a>
+    <a class="item" href="#filter">Filter terms</a>
+    <a class="item" href="#preview">Preview</a>
+    <a class="item" href="#files">Working with files</a>
+    <a class="item" href="#rename">Rename</a>
+    <a class="item" href="#views">Views</a>
+    <a class="item" href="#commands">Custom commands</a>
+    <a class="item" href="#shortcuts">All shortcuts</a>
+  </div>
   <div class="group">Tune</div>
-  <a class="item" href="#config">Configuration</a>
-  <a class="item" href="#menu">Context menu</a>
-  <a class="item" href="#cli">Command line</a>
-  <a class="item" href="#privacy">Privacy &amp; signing</a>
+  <div class="items">
+    <a class="item" href="#config">Configuration</a>
+    <a class="item" href="#menu">Context menu</a>
+    <a class="item" href="#cli">Command line</a>
+    <a class="item" href="#privacy">Privacy &amp; signing</a>
+  </div>
   <div class="group">Project</div>
-  <a class="item" href="#dev">For developers</a>
-  <a class="item" href="#roadmap">Roadmap</a>
-  <a class="item" href="#seek">Seek, for AI agents</a>
+  <div class="items">
+    <a class="item" href="#dev">For developers</a>
+    <a class="item" href="#roadmap">Roadmap</a>
+    <a class="item" href="#seek">Seek, for AI agents</a>
+  </div>
   <div class="foot">
     <a href="https://github.com/SynrgStudio/jolt">GitHub</a>
     <a href="https://github.com/SynrgStudio/jolt/releases">Releases</a>
     <a href="https://github.com/SynrgStudio/jolt/issues">Issues</a>
+    <a href="https://seek.synrgs.tech">Seek</a>
   </div>
 </nav>
 
 <main><div class="wrap" id="top">
 
+<div class="top"><img src="media/jolt-256.png" alt=""> Jolt <a href="https://github.com/SynrgStudio/jolt">GitHub ↗</a></div>
+
 <section class="hero">
-  <img class="logo" src="media/jolt-256.png" alt="Jolt">
-  <h1>Jolt</h1>
-  <p class="tag"><strong>The file explorer for Windows that keeps up with you.</strong></p>
-  <p class="sub">Folders open instantly. One small file, no dependencies, no telemetry.</p>
-  <a class="btn" href="https://github.com/SynrgStudio/jolt/releases/latest/download/jolt.exe">Download jolt.exe</a>
-  &nbsp; <a class="btn ghost" href="https://github.com/SynrgStudio/jolt">Source on GitHub</a>
-  <p class="meta">Version {{VERSION}} · Windows 10 and 11 · free software, GPL v3</p>
-  <div class="tour">
-    <img src="media/tour.gif" alt="A tour of Jolt: tabs, preview, filter, command palette, split view and drive space">
-    <div class="cap">A scripted tour with demo files. The pacing is set by the script, so it doesn't show real speed.</div>
+  <div class="eyebrow"><span class="dot"></span> A fast file explorer for Windows</div>
+  <div class="hero-copy">
+    <h1>Every folder.<br><span>Instantly.</span></h1>
+    <div class="hero-side">
+      <p class="sub">The file explorer that keeps up with you. Folders open instantly, typing filters any of them, <kbd>Ctrl</kbd>+<kbd>P</kbd> finds anything on your drives, and the preview, tabs, split view and undo are one key away. One small file, no dependencies, no telemetry.</p>
+      <div class="hero-actions"><a class="button primary" href="https://github.com/SynrgStudio/jolt/releases/latest/download/jolt.exe">Download jolt.exe <span aria-hidden="true">↓</span></a><a class="button" href="https://github.com/SynrgStudio/jolt">Source on GitHub <span aria-hidden="true">↗</span></a></div>
+      <p class="meta">Version {{VERSION}} · Windows 10 and 11 · free software, GPL v3</p>
+    </div>
   </div>
 </section>
 
+<div class="tour">
+  <img src="media/tour.gif" alt="A tour of Jolt: tabs, preview, filter, command palette, split view and drive space">
+  <div class="cap">A scripted tour with demo files. The pacing is set by the script, so it doesn't show real speed.</div>
+</div>
+
+<div class="stats">
+  <div class="stat"><div class="k">Install <i>↓</i></div><div class="v">1 <small>file</small></div><div class="l"><code>jolt.exe</code> is the program and its installer, for your user, with no administrator rights</div></div>
+  <div class="stat"><div class="k">Commands <i>⌘</i></div><div class="v">{{COUNT}}</div><div class="l">in <kbd>Ctrl</kbd>+<kbd>K</kbd>, and any of them can take a shortcut of your own</div></div>
+  <div class="stat"><div class="k">Undo <i>↩</i></div><div class="v">100 <small>steps</small></div><div class="l">of <kbd>Ctrl</kbd>+<kbd>Z</kbd>: renames, moves, copies, deletes, new folders</div></div>
+  <div class="stat"><div class="k">Network <i>◇</i></div><div class="v">0 <small>requests</small></div><div class="l">no telemetry and no account; the update check stays off unless you turn it on</div></div>
+</div>
+
+<div class="strip">
+  <div><b>Native, not a web page</b>C++ with Direct2D and the Windows APIs underneath File Explorer. No runtime and nothing installed next to it.</div>
+  <div><b>Keyboard first</b>Every command is in the palette, every key can be changed, and <a href="#shortcuts">the table of shortcuts</a> is made from Jolt's own source, so it can't drift.</div>
+  <div><b>Checked before it ships</b>Every feature on this page is run in Jolt's <a href="#dev">test mode</a>, without a window, before it is released.</div>
+</div>
+
 <div class="cards">
-  <div class="card"><b>⚡ Instant folders</b><span>Reads folders with a low-level Windows API and keeps visited ones in memory, so going back takes no time.</span></div>
-  <div class="card"><b>🔎 Find anything</b><span><kbd>Ctrl</kbd>+<kbd>P</kbd> searches everything on your drives. Just start typing to fuzzy-filter any folder.</span></div>
-  <div class="card"><b>🖼️ Preview</b><span><kbd>Space</kbd> shows images, code, folder contents and thumbnails right next to the list.</span></div>
-  <div class="card"><b>🗂️ Tabs and split view</b><span>Simple tabs and two panes, each with its own, restored just as you left them.</span></div>
-  <div class="card"><b>🔥 Recents that learn</b><span>Folders rise by how much you really use them, not by what you opened last.</span></div>
-  <div class="card"><b>💽 Live drive space</b><span>Hover a drive to see its free and total space, updated every second.</span></div>
-  <div class="card"><b>🎛️ Views per folder</b><span>Sort, group and filter each folder its own way, with rules applied instantly.</span></div>
-  <div class="card"><b>⌨️ Keyboard first</b><span>A command palette, and any shortcut can be changed with one click.</span></div>
-  <div class="card"><b>↩️ Undo</b><span>Renamed, moved or sent something to the Recycle Bin by mistake? <kbd>Ctrl</kbd>+<kbd>Z</kbd>.</span></div>
-  <div class="card"><b>🎨 Yours to customize</b><span>Colors, font, sizes, columns and your own commands in one plain text file that reloads on save.</span></div>
-  <div class="card"><b>🧩 The real context menu</b><span>Windows' own menu with your extensions, which you can trim and reorder.</span></div>
-  <div class="card"><b>🔒 Private</b><span>Jolt doesn't connect to the network, unless you turn on update checks. Your files stay yours.</span></div>
+  <div class="card"><b>Instant folders</b><span>Reads folders with a low-level Windows API and keeps visited ones in memory, so going back takes no time.</span></div>
+  <div class="card"><b>Find anything</b><span><kbd>Ctrl</kbd>+<kbd>P</kbd> searches everything on your drives. Just start typing to fuzzy-filter any folder.</span></div>
+  <div class="card"><b>Preview</b><span><kbd>Space</kbd> shows images, code, folder contents and thumbnails right next to the list.</span></div>
+  <div class="card"><b>Tabs and split view</b><span>Simple tabs and two panes, each with its own, restored just as you left them.</span></div>
+  <div class="card"><b>Recents that learn</b><span>Folders rise by how much you really use them, not by what you opened last.</span></div>
+  <div class="card"><b>Live drive space</b><span>Hover a drive to see its free and total space, updated every second.</span></div>
+  <div class="card"><b>Views per folder</b><span>Sort, group and filter each folder its own way, with rules applied instantly.</span></div>
+  <div class="card"><b>Keyboard first</b><span>A command palette, and any shortcut can be changed with one click.</span></div>
+  <div class="card"><b>Undo</b><span>Renamed, moved or sent something to the Recycle Bin by mistake? <kbd>Ctrl</kbd>+<kbd>Z</kbd>.</span></div>
+  <div class="card"><b>Yours to customize</b><span>Colors, font, sizes, columns and your own commands in one plain text file that reloads on save.</span></div>
+  <div class="card"><b>The real context menu</b><span>Windows' own menu with your extensions, which you can trim and reorder.</span></div>
+  <div class="card"><b>Private</b><span>Jolt doesn't connect to the network, unless you turn on update checks. Your files stay yours.</span></div>
 </div>
 <div class="shots">
   <figure><img src="media/preview.png" alt="Image preview"><figcaption>Preview</figcaption></figure>
@@ -90,7 +118,7 @@
 <p>Updating is the same: open a newer <code>jolt.exe</code> and press <strong>Update</strong>. To uninstall, use <code>☰ → Install → Uninstall</code>, Windows Settings → Apps, or <code>jolt.exe --uninstall</code>. Your settings and favorites stay in <code>%APPDATA%\Jolt</code>.</p>
 <div class="note"><b>Win+E.</b> Windows doesn't give up its own shortcut, so Jolt installs a handler for it when it is the default explorer. The global shortcut <kbd>Win</kbd>+<kbd>J</kbd> works from anywhere regardless.</div>
 
-<h2 id="always">Always ready</h2>
+<h2 id="always"><span class="n"></span>Always ready</h2>
 <p class="lead">Closing the window hides it. Jolt stays open and comes back instantly.</p>
 <ul>
   <li><kbd>Win</kbd>+<kbd>J</kbd> from any app shows Jolt; if it is already in front, hides it. With File Explorer in front, it opens that folder in Jolt. Change the key with <code>global_hotkey</code>.</li>
@@ -100,10 +128,10 @@
 </ul>
 <p class="small dim">Options in <code>config.txt</code>: <code>run_in_background</code>, <code>global_hotkey</code>, <code>tray_icon</code>, <code>open_drives</code> (open USB sticks as soon as they are plugged in).</p>
 
-<h2 id="basics">The basics</h2>
+<h2 id="basics"><span class="n"></span>The basics</h2>
 <p class="lead">It works like a commander: the keyboard does everything, the mouse does the same.</p>
 <h3>Moving around</h3>
-<table class="keys">
+<div class="table-wrap"><table class="keys">
 <tr><td><kbd>↑</kbd> <kbd>↓</kbd> <kbd>PageUp</kbd> <kbd>PageDown</kbd> <kbd>Home</kbd> <kbd>End</kbd></td><td>move the cursor</td></tr>
 <tr><td><kbd>→</kbd> / <kbd>←</kbd></td><td>enter the highlighted folder / go up one level. In the tree, <kbd>←</kbd> collapses and returns to the folder above</td></tr>
 <tr><td><kbd>Enter</kbd> / double click</td><td>open (folders in Jolt, files with their program; the program starts in the file's folder)</td></tr>
@@ -119,9 +147,9 @@
 <tr><td>chevron ›, <kbd>Shift</kbd>+<kbd>→</kbd> / <kbd>Shift</kbd>+<kbd>←</kbd></td><td><strong>tree</strong>: expand or collapse subfolders inside the list. Remembered per folder</td></tr>
 <tr><td><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>E</kbd></td><td>open the folder containing the highlighted item (handy in search results and in the tree)</td></tr>
 <tr><td><kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>L</kbd></td><td>go to the real location of a shortcut, symbolic link or junction</td></tr>
-</table>
+</table></div>
 <h3>Selecting</h3>
-<table class="keys">
+<div class="table-wrap"><table class="keys">
 <tr><td><kbd>Shift</kbd>+arrows / <kbd>Shift</kbd>+click</td><td>select a range</td></tr>
 <tr><td><kbd>Ctrl</kbd>+click / <kbd>Ctrl</kbd>+<kbd>Space</kbd></td><td>add to or remove from the selection</td></tr>
 <tr><td><kbd>Ctrl</kbd>+<kbd>A</kbd> / <kbd>Esc</kbd></td><td>select all / keep only the cursor</td></tr>
@@ -129,9 +157,9 @@
 <tr><td><kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>X</kbd> / <kbd>Ctrl</kbd>+<kbd>I</kbd></td><td>select every file with the extension of the highlighted one (on a folder: every folder) / invert the selection</td></tr>
 <tr><td>checkbox</td><td><strong>selection checkboxes</strong>, with <code>checkboxes = hover</code> or <code>always</code> (Settings → General, or <kbd>Ctrl</kbd>+<kbd>K</kbd> → "checkboxes"): a click on a row's checkbox adds it to the selection or takes it out, without <kbd>Ctrl</kbd>; <kbd>Shift</kbd>+click checks the range. The one in the header selects all, or none when all are. The selection a folder opens with (just the cursor) goes with the first checkbox</td></tr>
 <tr><td>drag from empty space</td><td><strong>box select</strong>. <kbd>Shift</kbd> adds, <kbd>Ctrl</kbd> toggles, <kbd>Esc</kbd> cancels; near the edge the list scrolls. Dragging from an icon, a name or a multiple selection moves files instead</td></tr>
-</table>
+</table></div>
 <h3>Tabs and panes</h3>
-<table class="keys">
+<div class="table-wrap"><table class="keys">
 <tr><td><kbd>Ctrl</kbd>+<kbd>T</kbd> / <kbd>Ctrl</kbd>+<kbd>W</kbd> / <kbd>Ctrl</kbd>+<kbd>Tab</kbd></td><td>new tab / close / next tab. Middle click on a tab closes it</td></tr>
 <tr><td><kbd>Ctrl</kbd>+<kbd>Enter</kbd> / middle click</td><td>open the folder in a new tab</td></tr>
 <tr><td><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd></td><td>reopen the last closed tab, in its place and with its history</td></tr>
@@ -143,7 +171,7 @@
 <tr><td><kbd>F5</kbd> / <kbd>F6</kbd></td><td>in split view: copy / move the selection to the other pane's folder</td></tr>
 <tr><td><kbd>Shift</kbd>+<kbd>F5</kbd> / <kbd>Shift</kbd>+<kbd>F6</kbd></td><td><strong>copy to… / move to…</strong>: pick the destination with the Go to list (recents, favorites, drives, or a typed path), no dragging. <kbd>Ctrl</kbd>+<kbd>Z</kbd> undoes it</td></tr>
 <tr><td>drag the tab bar</td><td>move the window (double click maximizes; right click: system menu)</td></tr>
-</table>
+</table></div>
 <p>On close, Jolt saves each pane's tabs, the split, the preview, the window position, the sidebar and the sort order, and restores them next time.</p>
 <h3>Sidebar</h3>
 <p><kbd>Ctrl</kbd>+<kbd>B</kbd>, or the button left of the tabs, shows and hides it.</p>
@@ -154,7 +182,7 @@
   <li><strong>Recents:</strong> sorted by how much you use them, not by last opened. A folder earns a point when you stay at least 1.5 s, and its heat halves every 30 days. <code>recents = 0</code> in <code>config.txt</code> hides the section.</li>
 </ul>
 
-<h2 id="find">Find things</h2>
+<h2 id="find"><span class="n"></span>Find things</h2>
 <p class="lead">Three ways: type in the folder, search its subfolders, or search every drive.</p>
 <h3>Type to filter</h3>
 <p>Just start typing in any folder. It filters <strong>fuzzily</strong>, like fzf: <code>rpt</code> finds <em>report.pdf</em>, accents are ignored, and the best matches rise to the top. <kbd>Backspace</kbd> edits, <kbd>Esc</kbd> clears. Letters that are configured as shortcuts don't filter. See <a href="#filter">filter terms</a> for narrowing by extension, size or date.</p>
@@ -177,9 +205,9 @@
 <p><strong>It learns what you mean.</strong> Among results that match about as well, what you use most lately goes higher: every folder you stay in and every file you open counts, and that fades over the weeks. So does what is near the folder you're in, more the fewer folders lie between: inside a project, <code>config</code> finds that project's config before every other program's. And it remembers what you pick: after picking the same result three times for the same text, that one comes first for that text, even above names that match better; three picks of something else change it. Long paths are shortened in the middle (<code>C:\Users\…\project\file.txt</code>), so the drive and the last folders stay in sight.</p>
 <p>Behind it is an index of the fixed drives, saved in <code>%LOCALAPPDATA%\Jolt\index-X.bin</code>: available at once on startup, kept up to date while Jolt runs, and rebuilt in the background at low priority when it is older than 12 hours. Walking a large drive without elevated rights takes a few minutes the first time; <code>Ctrl+K → Reindex the drives now</code> asks for administrator rights once and reads the drive's own table (the MFT, like Everything does), which takes seconds.</p>
 
-<h2 id="filter">Filter terms</h2>
+<h2 id="filter"><span class="n"></span>Filter terms</h2>
 <p class="lead">Plain words stay the fuzzy pattern. The other terms narrow the list, in any folder and in subfolder search.</p>
-<table class="terms">
+<div class="table-wrap"><table class="terms">
 <tr><th>Term</th><th>Meaning</th></tr>
 <tr><td><code>.png</code> &nbsp; <code>*.png</code> &nbsp; <code>ext:png,jpg</code></td><td>extension (several: any of them)</td></tr>
 <tr><td><code>&gt;10mb</code> &nbsp; <code>&lt;500kb</code> &nbsp; <code>&gt;2gb</code></td><td>size. A bare number is MB. Folders have no size and are left out</td></tr>
@@ -189,12 +217,12 @@
 <tr><td><code>report*.pdf</code> &nbsp; <code>?.txt</code></td><td>wildcard pattern on the name</td></tr>
 <tr><td><code>content:word</code> &nbsp; <code>content:"two words"</code></td><td><strong>search inside the files</strong>: keeps the text files whose content has it, and shows the line around the match next to the name. Files are read in the background (UTF-8, UTF-16 or the system code page; binaries and files over 32 MB are skipped). With <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>F</kbd> it covers the subfolders too</td></tr>
 <tr><td><code>tag:urgent</code> &nbsp; <code>!tag:done</code></td><td>items with (or without) a <a href="#files">tag</a></td></tr>
-</table>
+</table></div>
 <p><strong>Typos are forgiven.</strong> Names close to what you typed appear under the real matches, with how close they are in grey next to the name: <code>filepocker</code> finds <code>filepicker</code> at 90%, and swapped letters stay at 100% (<code>filepikcer</code>). It works in subfolder search, <kbd>Ctrl</kbd>+<kbd>P</kbd> and <kbd>Ctrl</kbd>+<kbd>K</kbd> too. <code>filter_typos</code> in <code>config.txt</code> sets the lowest percentage, 75 by default, or <code>no</code> to turn it off.</p>
 <p class="ex">Examples: <code>content:TODO .cpp</code> — source files with a TODO. &nbsp; <code>invoice .pdf newer:30d</code> — the invoices of the last month. &nbsp; <code>&gt;500mb !.iso</code> — what is taking space, except disc images. &nbsp; <code>type:folder old</code> — folders with "old" in the name.</p>
 <p>Only the words light up in the names. The status bar shows how many match.</p>
 
-<h2 id="preview">Preview</h2>
+<h2 id="preview"><span class="n"></span>Preview</h2>
 <p class="lead"><kbd>Space</kbd> opens a panel on the right that follows the cursor. Held, it shows a big floating preview over the list instead, until you let go.</p>
 <p>While <kbd>Space</kbd> is held, the arrows move through the files and the floating preview follows them; letting go hides it and leaves the panel as it was. A quick tap opens or closes the panel as always. How long counts as held is <code>preview_hold</code> in <code>config.txt</code> (150 ms by default, 50 to 1000), also in Settings: shorter is quicker, but then a slow tap may show the card for a moment instead of opening the panel.</p>
 <ul>
@@ -213,9 +241,9 @@
   <li>Wheel scrolls. Drag its left edge to change the width; double click the edge to reset it. The width is saved.</li>
 </ul>
 
-<h2 id="files">Working with files</h2>
+<h2 id="files"><span class="n"></span>Working with files</h2>
 <p class="lead">Everything goes through Windows' own machinery, so progress, conflicts and the Recycle Bin behave as in File Explorer. Then Jolt adds undo on top.</p>
-<table class="keys">
+<div class="table-wrap"><table class="keys">
 <tr><td><kbd>Ctrl</kbd>+<kbd>C</kbd> / <kbd>Ctrl</kbd>+<kbd>X</kbd> / <kbd>Ctrl</kbd>+<kbd>V</kbd></td><td>copy, cut and paste, compatible with File Explorer both ways. Pasting in the same folder makes a copy with another name</td></tr>
 <tr><td><kbd>Ctrl</kbd>+<kbd>V</kbd> with an image or text on the clipboard</td><td>saves it in the folder as a PNG (keeping transparency) or a UTF-8 <code>.txt</code>, named by the moment and ready to rename</td></tr>
 <tr><td>drag and drop</td><td>between Jolt's folders, panes, tabs, favorites and drives, and from or to other apps. Same rules as File Explorer: <kbd>Ctrl</kbd> copies, <kbd>Shift</kbd> moves. Held over a tab for half a second, that tab comes to the front, so the drop can go into one of its folders; a quick drop on the tab goes into its folder</td></tr>
@@ -236,7 +264,7 @@
 <tr><td><kbd>Ctrl</kbd>+<kbd>K</kbd> → "checksums"</td><td><strong>MD5, SHA-1 and SHA-256</strong> of the selected files, and whether a hash you copied matches one of them</td></tr>
 <tr><td><kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>T</kbd> / <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>E</kbd></td><td>open a terminal (Windows Terminal, or cmd) / File Explorer in this folder</td></tr>
 <tr><td>right click / <kbd>Shift</kbd>+<kbd>F10</kbd> / Menu key</td><td>the Windows context menu for the file, the folder or the background; with <kbd>Shift</kbd>, the extended one. See <a href="#menu">context menu</a></td></tr>
-</table>
+</table></div>
 <h3>Tags and colors</h3>
 <p>Right click → <strong>Tags</strong>, or <kbd>Ctrl</kbd>+<kbd>K</kbd> → "tag", puts a label on the selection: pick a known one or type a new name. Each tag gets a color and shows as a little tag-shaped label after the name, with its name inside while there is room (a dot when there isn't, and in the grid's corner), and in the preview's info; an item can have several. <code>tag:urgent</code> in the filter keeps the tagged items, <code>!tag:done</code> leaves them out, in subfolder search too. They are saved in <code>%APPDATA%\Jolt\tags.txt</code>, which can be edited by hand (<code>name = RRGGBB</code> under <code>[tags]</code> sets a color), and they follow renames done from Jolt.</p>
 <p>Right click → <strong>Folder color</strong>, or <kbd>Ctrl</kbd>+<kbd>K</kbd> → "folder color", paints the icon of the selected folders: red, orange, green, teal, blue, purple, pink or gray, keeping its shading, in the list, the grid and the sidebar. It is Jolt's own: Windows and the folder's <code>desktop.ini</code> aren't touched. The colors are saved in <code>tags.txt</code> under <code>[folder_colors]</code> (<code>folder = RRGGBB</code>, any color by hand) and follow renames. A folder icon set in Windows (Properties → Customize, which writes <code>desktop.ini</code>) shows as it is.</p>
@@ -251,25 +279,25 @@ folders = E6B450</code></pre>
 <h3>Status bar</h3>
 <p>Item count and total size of the folder (folders count once their size has been calculated). With several items selected, their count and size too. While filtering, how many match.</p>
 
-<h2 id="rename">Rename</h2>
+<h2 id="rename"><span class="n"></span>Rename</h2>
 <p class="lead">One item inline, or many at once with a preview.</p>
 <h3><kbd>F2</kbd> — one item</h3>
 <p>The name without the extension is selected. <kbd>Tab</kbd> / <kbd>Shift</kbd>+<kbd>Tab</kbd> save and move on to renaming the next / previous item, so a column of files can be renamed without leaving the keyboard.</p>
 <h3><kbd>F2</kbd> with several selected, or <kbd>Ctrl</kbd>+<kbd>F2</kbd> — many at once</h3>
 <p>A panel shows every result before anything is renamed. Invalid names, names already taken and repeated results are marked in red, and Rename stays off until they are fixed. <kbd>Enter</kbd> renames, <kbd>Esc</kbd> cancels, <kbd>Tab</kbd> moves between the boxes, and <kbd>Ctrl</kbd>+<kbd>Z</kbd> takes the whole batch back in one step. Shifts like 1 → 2 → 3 go through temporary names, so nothing collides.</p>
 <p><strong>New name</strong> is a pattern:</p>
-<table class="terms">
+<div class="table-wrap"><table class="terms">
 <tr><td><code>{name}</code> &nbsp; <code>{name:lower}</code> &nbsp; <code>{name:upper}</code> &nbsp; <code>{name:title}</code></td><td>the name without its extension, as is or with its case changed (<code>{NAME}</code> and <code>{Name}</code> work too)</td></tr>
 <tr><td><code>{ext}</code> &nbsp; <code>{ext:upper}</code></td><td>the extension, with its dot</td></tr>
 <tr><td><code>{n}</code> &nbsp; <code>{n:3}</code> &nbsp; <code>{n:3:10}</code> &nbsp; <code>{n:3:10:5}</code></td><td>a counter: padding, start, step. <code>{n:3:10:5}</code> gives 010, 015, 020…</td></tr>
 <tr><td><code>{date}</code> &nbsp; <code>{date:YYYYMMDD_hhmm}</code> &nbsp; <code>{time}</code> &nbsp; <code>{created}</code></td><td>modified or created date, as YYYY-MM-DD or with a format made of YYYY YY MM DD hh mm ss</td></tr>
 <tr><td><code>{parent}</code></td><td>the folder's name</td></tr>
 <tr><td><code>{random}</code> &nbsp; <code>{random:12:letters}</code> &nbsp; <code>{random:6:digits}</code> &nbsp; <code>{uuid}</code></td><td>random text, drawn once per item so the preview holds still</td></tr>
-</table>
+</table></div>
 <p><strong>Find / Replace</strong> runs on the name before the pattern: plain text replaces every occurrence, ignoring case; <code>/regex/</code> uses a regular expression, with <code>$1</code> <code>$2</code> for its groups in Replace.</p>
 <p class="ex">Examples: <code>Trip {n:2}{ext}</code> — Trip 01.jpg, Trip 02.jpg… &nbsp; <code>{date}-{name}{ext}</code> — the date in front. &nbsp; Find <code>/^IMG_(\d+)/</code>, Replace <code>photo-$1</code> — IMG_0042.jpg becomes photo-0042.jpg. &nbsp; <code>{name:title}{ext}</code> — Title Case.</p>
 
-<h2 id="views">Views</h2>
+<h2 id="views"><span class="n"></span>Views</h2>
 <p class="lead">Sort, group and filter each folder its own way. Rules apply instantly and are remembered.</p>
 <p>The filter button left of "Name" (or <code>Ctrl+K → View for this folder</code>) opens the rules, Notion style: <strong>Sort by</strong> (name, date, size, type; several rules act as tiebreakers), <strong>Group</strong> (by day, month, type or extension: the list splits into titled sections you can collapse), <strong>Folders</strong> (first, last, mixed) and <strong>Show only / Hide</strong> (name contains, extension is, newer or older than N days, larger or smaller than N MB, folders, files, hidden). Rules are reordered by dragging their handle.</p>
 <p>At the top you choose <strong>All folders</strong> or <strong>Only this folder</strong> (with <em>and its subfolders</em> to apply it to everything inside). When a folder has its own view, the button turns blue. Clicking the column headers changes the sort order of that view. They are saved in <code>%APPDATA%\Jolt\views.txt</code>, which can be edited by hand and reloads itself:</p>
@@ -288,7 +316,7 @@ hide = extension tmp part crdownload</code></pre>
 <p><kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>M</kbd> turns a tab into <strong>Miller columns</strong>: the folder you are in is a column, the folders above it are columns to its left with the way down highlighted, and what the highlighted folder holds shows in the column to its right. <kbd>←</kbd> and <kbd>→</kbd> move between them, a click on another column goes there (the columns stay put, so what you clicked doesn't move), a double click opens, and the wheel scrolls the column under the mouse. The folder's own column is the usual list: selection, rename, drag and drop and typing to filter work as always. The columns share the pane, each about <code>miller_width</code> wide (240 by default), and the tab remembers the mode between sessions.</p>
 <p>Quick toggles in the palette (<kbd>Ctrl</kbd>+<kbd>K</kbd>): show or hide folders, files, hidden files (<kbd>Ctrl</kbd>+<kbd>H</kbd>) and extensions; group this folder by day or type; collapse or expand all groups; sort by type; more or less space between rows. Any of them can get a key with a click.</p>
 
-<h2 id="commands">Custom commands</h2>
+<h2 id="commands"><span class="n"></span>Custom commands</h2>
 <p class="lead">Your own entries in the palette and the context menu, from <code>config.txt</code>.</p>
 <pre><code><span class="k">[commands]</span>
 Open in VS Code = code "{dir}"
@@ -305,19 +333,19 @@ open in vs code = Ctrl+Alt+V</code></pre>
   <li>A <code>#</code> starts a comment anywhere in <code>config.txt</code>, so it can't be part of a command.</li>
 </ul>
 
-<h2 id="shortcuts">All shortcuts</h2>
+<h2 id="shortcuts"><span class="n"></span>All shortcuts</h2>
 <p class="lead">{{COUNT}} commands. Every one can be changed: click its shortcut in <kbd>Ctrl</kbd>+<kbd>K</kbd> and press the new key (<kbd>Del</kbd> removes it, <kbd>Esc</kbd> cancels), or edit <code>[shortcuts]</code> in <code>config.txt</code>.</p>
 <div class="search"><input id="q" type="search" placeholder="Search a command or a key…" autocomplete="off"><span id="qn"></span></div>
-<table class="keys" id="shortcuts-table">
+<div class="table-wrap"><table class="keys" id="shortcuts-table">
 <tr><th>Default keys</th><th>Command</th></tr>
 <!-- SHORTCUTS -->
-</table>
+</table></div>
 <p class="small dim">This table is generated from Jolt's source on every deploy, so it always matches the current version. Fixed keys that can't be changed: the arrows, PageUp/PageDown, Home/End, Esc, Ctrl+Space, Ctrl+1…9 (favorites) and Alt+1…9 (tabs). Mouse: see <a href="#basics">the basics</a>; <kbd>Ctrl</kbd>+<kbd>+</kbd> / <kbd>Ctrl</kbd>+<kbd>-</kbd> / <kbd>Ctrl</kbd>+<kbd>0</kbd> change the size of the whole interface.</p>
 
-<h2 id="config">Configuration</h2>
+<h2 id="config"><span class="n"></span>Configuration</h2>
 <p class="lead"><kbd>Ctrl</kbd>+<kbd>,</kbd> opens the settings. Underneath, plain text files in <code>%APPDATA%\Jolt</code>; each one reloads itself when saved.</p>
 <p>The settings are a panel over the window, in sections: <strong>General</strong> (hidden files, folders first, close names in searches, Recents, cloud status, columns, running in the background, the global shortcut), <strong>Appearance</strong> (font, interface size, row height, widths, and every color), <strong>Shortcuts</strong> (type to search; click one and press the new key, <kbd>Del</kbd> removes it), <strong>File colors</strong>, your own <strong>Commands</strong>, <strong>Tags</strong> (their colors), <strong>Favorites</strong> (their names), and <strong>More</strong> (the context menu editor, the view of this folder, and the files themselves). Every change is written to the files below as you make it, keeping their comments, and applies at once. Also in ☰ → Settings… and <kbd>Ctrl</kbd>+<kbd>K</kbd>.</p>
-<table>
+<div class="table-wrap"><table>
 <tr><td><code>config.txt</code></td><td>generated the first time with every value and a comment. <code>[general]</code>: font, size, row height, sidebar and preview width, hidden files, <code>folders_first</code> (yes / no / name), <code>recent_mark</code> (today / no / a number of hours: a thin bar at the left of the files changed lately, a dot in the grid, fading with the hours), background, hotkey, tray. <code>[columns]</code>: which columns, left to right, and their widths (in the app: right click the titles to pick them, drag a title to move its column, drag its edge to resize): <code>modified</code>, <code>size</code>, and also <code>dimensions</code> (images and videos), <code>duration</code> (songs and videos), <code>items</code> (how many a folder has) and <code>attributes</code> (R H S A C E, L for links). <code>size_bars = yes</code> draws a bar behind each size, as long as the item is next to the largest in the folder (folders count once their size is calculated with <kbd>Alt</kbd>+<kbd>R</kbd>); it is also in the titles' right-click menu. <code>[colors]</code>: every interface color in RRGGBB. <code>[shortcuts]</code>: one command per line with its keys. <code>[commands]</code>: <a href="#commands">your own commands</a>. Deleting an option returns it to its default</td></tr>
 <tr><td><code>favorites.txt</code></td><td><code>Name|Path</code>, one per line</td></tr>
 <tr><td><code>views.txt</code></td><td>the <a href="#views">views</a> per folder</td></tr>
@@ -325,10 +353,10 @@ open in vs code = Ctrl+Alt+V</code></pre>
 <tr><td><code>tags.txt</code></td><td>the <a href="#files">tags</a>: their colors and which items have them; and the folder colors</td></tr>
 <tr><td><code>session.txt</code>, <code>recents.txt</code></td><td>tabs and window, and the recent folders with their heat</td></tr>
 <tr><td><code>%LOCALAPPDATA%\Jolt</code></td><td>the installed program, the drive index, the calculated folder sizes (<code>sizes.bin</code>) and the thumbnail cache (<code>thumbs\</code>, safe to delete)</td></tr>
-</table>
+</table></div>
 <p><code>☰ → Configuration folder</code> opens it. With <code>JOLT_DEBUG=1</code> in the environment, Jolt writes a log to <code>%TEMP%\jolt.log</code>.</p>
 
-<h2 id="menu">Context menu</h2>
+<h2 id="menu"><span class="n"></span>Context menu</h2>
 <p class="lead">The real Windows menu, with your extensions, drawn by Jolt and trimmed by you.</p>
 <p><code>☰ → Context menu…</code> opens an editor that shows the menu for three contexts (folder background, file, folder) and lets you <strong>hide entries</strong> (checkbox) and <strong>reorder them</strong> (drag, or <kbd>Ctrl</kbd>+<kbd>↑</kbd>/<kbd>↓</kbd>). Saved in <code>menu.txt</code>:</p>
 <pre><code><span class="k">[background]</span>
@@ -341,8 +369,8 @@ properties</code></pre>
 <h3 id="templates">Templates</h3>
 <p>Every file or folder in <code>%APPDATA%\Jolt\Templates</code> is an entry at the top of the right-click <strong>New</strong> submenu, and in <kbd>Ctrl</kbd>+<kbd>K</kbd> as "New: name" (the <code>new_from_template</code> command lists just them). A copy lands in the folder, named like the template (or "name (2)"), ready to rename; a folder template is copied with everything in it. "Templates folder…" at the end of the submenu, and Settings → More, opens the folder, making it the first time.</p>
 
-<h2 id="cli">Command line</h2>
-<table>
+<h2 id="cli"><span class="n"></span>Command line</h2>
+<div class="table-wrap"><table>
 <tr><td><code>jolt.exe C:\folder</code></td><td>open the folder (in the running instance if there is one)</td></tr>
 <tr><td><code>jolt.exe --select "C:\folder\file.txt"</code></td><td>open the folder with that item highlighted, even if it was just created. What other apps' "Reveal in File Explorer" needs; Explorer's <code>/select,</code> form works too</td></tr>
 <tr><td><code>jolt.exe --hidden</code></td><td>start without showing the window</td></tr>
@@ -351,14 +379,14 @@ properties</code></pre>
 <tr><td><code>jolt.exe --panel</code></td><td>open with the install panel</td></tr>
 <tr><td><code>jolt.exe --uninstall</code></td><td>remove the installed copy and its registrations; settings are kept</td></tr>
 <tr><td><code>jolt.exe --test script.txt</code></td><td>run a test script without a window; see <a href="#dev">for developers</a></td></tr>
-</table>
+</table></div>
 
-<h2 id="privacy">Privacy &amp; signing</h2>
+<h2 id="privacy"><span class="n"></span>Privacy &amp; signing</h2>
 <p>Jolt doesn't connect to the network. It will not transfer any information to other systems unless you ask it to. There is no telemetry and no account. The update check is off unless you turn it on (<code>check_updates = yes</code>, Settings, or the offer the installed copy makes once in the status bar): then, at most once a day, it asks GitHub's public API which is the latest release of Jolt. Nothing about you or your files is sent; GitHub sees the request and your IP address, as with any web page. When there is a new version, a click on the note in the status bar downloads it, checks its size, SHA-256 and version against what GitHub published, puts it in place and offers to restart. This site makes no third-party requests either.</p>
 <p>Releases are built by <a href="https://github.com/SynrgStudio/jolt/blob/master/.github/workflows/build.yml">GitHub Actions</a> from the repository's source, on GitHub's machines, and each one lists its SHA-256. They aren't signed yet: the plan is to apply to the <a href="https://signpath.org">SignPath Foundation</a>, which offers free code signing to open source projects, once Jolt is more widely used. Until then SmartScreen may warn on first run.</p>
 <p>Jolt is free software under the <a href="https://github.com/SynrgStudio/jolt/blob/master/LICENSE">GNU GPL v3</a>: use it, change it, share it, as long as a modified version you distribute publishes its source under the same license.</p>
 
-<h2 id="dev">For developers</h2>
+<h2 id="dev"><span class="n"></span>For developers</h2>
 <p class="lead">C++20, Win32 and Direct2D/DirectWrite. No external dependencies, one executable.</p>
 <h3>How it stays fast</h3>
 <ul>
@@ -388,16 +416,18 @@ usage_set path | points | days            measure 300        quit</code></pre>
 <h3>Release</h3>
 <p>Bump <code>src/version.h</code> and push to master: GitHub Actions builds, tags and publishes the release, with the SHA-256 in the notes. The latest build is always at <code>github.com/SynrgStudio/jolt/releases/latest/download/jolt.exe</code>. This site is published from <code>site/</code> by the same kind of workflow.</p>
 
-<h2 id="roadmap">Roadmap</h2>
+<h2 id="roadmap"><span class="n"></span>Roadmap</h2>
 <p class="lead">Every planned feature is an <a href="https://github.com/SynrgStudio/jolt/issues">issue</a>, tagged by area. Each one lands as its own pull request.</p>
 <p>Coming up, among others: archives, a helper for Open/Save dialogs, more preview formats, and a light theme. If something you need isn't there, open an issue.</p>
 
-<h2 id="seek">Seek, for AI agents</h2>
+<h2 id="seek"><span class="n"></span>Seek, for AI agents</h2>
 <p class="lead">Jolt's search, for Claude Code, Codex, Cursor and any agent that speaks MCP.</p>
 <p><a href="https://seek.synrgs.tech">Seek</a> is an MCP server that lets AI agents find names on every drive in milliseconds, search text inside a folder's files and PDFs, and know what you changed lately. With Jolt installed it uses Jolt's index and fuzzy matching, and ranks the folders you open in Jolt higher. It only reads, never looks in private places, and logs every call. Its website has the benchmarks against Everything, fff and ripgrep, and how it works.</p>
 
-<hr>
-<footer>Made for people who open a lot of folders. &nbsp;·&nbsp; <a href="https://github.com/SynrgStudio/jolt">SynrgStudio/jolt</a></footer>
+<footer>
+  <span>Jolt is free software under the GPL v3, made by <a href="https://github.com/SynrgStudio">SynrgStudio</a> for people who open a lot of folders. Its index and fuzzy matching also serve <a href="https://seek.synrgs.tech">Seek</a>, for AI agents.</span>
+  <span><a href="https://github.com/SynrgStudio/jolt">Source</a> · <a href="https://github.com/SynrgStudio/jolt/releases">Releases</a> · <a href="https://github.com/SynrgStudio/jolt/issues">Issues</a></span>
+</footer>
 
 </div></main>
 </div>
