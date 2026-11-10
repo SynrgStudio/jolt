@@ -607,6 +607,10 @@ constexpr UINT kCmdFirst = 1, kCmdLast = 0x6FFF, kCmdFav = 0x7000, kCmdCustom = 
 constexpr UINT kCmdTemplate = 0x7200, kCmdTemplatesFolder = 0x72FF;                   // kCmdTemplate + index into Templates()
 constexpr UINT kCmdFolderColor = 0x7300;  // + 0: none; + 1 + index into kFolderColors
 constexpr UINT kCmdArchive = 0x7400;      // + 0 zip, 1 7z, 2 extract here, 3 extract to a folder, 4 browse inside (archive.inl)
+constexpr UINT kCmdCompare = 0x7500;      // + 0 compare, 1 checksums
+bool CompareFits(const Tab& t);           // cmpdir.inl
+void CompareCmd();
+void HashOpen();                          // hash.inl
 std::vector<MenuItem> ArchiveMenuItems(UINT firstId);  // archive.inl
 void ArchiveMenuPick(UINT what);                       // archive.inl
 void ArcItemMenu(POINT screenPt, int row);             // archive.inl: inside an archive
@@ -761,6 +765,45 @@ std::unique_ptr<ShellMenu> FinishShellMenu(std::unique_ptr<ShellMenu> m, bool ex
     UINT flags = CMF_NORMAL | CMF_EXPLORE | (extended ? CMF_EXTENDEDVERBS : 0);
     if (FAILED(m->cm->QueryContextMenu(m->hmenu, 0, kCmdFirst, kCmdLast, flags))) return nullptr;
     return m;
+}
+
+// The first menu a program asks Windows for loads every extension that adds to it (half a second, and over a second
+// with many): a moment after starting, a thread asks for one of each kind and throws it away, so that the first
+// right click finds them loaded.
+void ShellMenuWarmUp() {
+    Sleep(1500);  // after the window is up and the first folder is listed
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
+    if (FAILED(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE))) return;
+    wchar_t win[MAX_PATH] = {}, exe[MAX_PATH] = {};
+    GetWindowsDirectoryW(win, MAX_PATH);
+    GetModuleFileNameW(nullptr, exe, MAX_PATH);
+    auto warm = [](const std::wstring& item) {  // empty: the folder's background
+        ComPtr<IShellFolder> psf;
+        ComPtr<IContextMenu> cm;
+        PCUITEMID_CHILD child = nullptr;
+        PIDLIST_ABSOLUTE full = nullptr;
+        if (item.empty()) {
+            wchar_t dir[MAX_PATH] = {};
+            GetWindowsDirectoryW(dir, MAX_PATH);
+            if (BindFolder(dir, psf)) psf->CreateViewObject(nullptr, IID_PPV_ARGS(&cm));
+        } else if (SUCCEEDED(SHParseDisplayName(item.c_str(), nullptr, &full, 0, nullptr)) && full &&
+                   SUCCEEDED(SHBindToParent(full, IID_PPV_ARGS(&psf), &child))) {
+            psf->GetUIObjectOf(nullptr, 1, &child, IID_IContextMenu, nullptr, reinterpret_cast<void**>(cm.GetAddressOf()));
+        }
+        if (cm) {
+            if (const HMENU h = CreatePopupMenu()) {
+                cm->QueryContextMenu(h, 0, kCmdFirst, kCmdLast, CMF_NORMAL | CMF_EXPLORE);
+                DestroyMenu(h);
+            }
+        }
+        cm.Reset();
+        psf.Reset();
+        if (full) CoTaskMemFree(full);
+    };
+    warm(exe);  // a file
+    warm(win);  // a folder
+    warm(L"");
+    CoUninitialize();
 }
 
 void ShellInvoke(ShellMenu& m, UINT id, POINT pt) {
@@ -1287,6 +1330,20 @@ void OpenShellMenu(POINT screenPt, int row) {
         const auto sep1 = std::find_if(items.begin(), items.end(), [](const MenuItem& m) { return m.sep; });
         const std::vector<MenuItem> arc = ArchiveMenuItems(kCmdArchive);
         items.insert(sep1, arc.begin(), arc.end());
+        // compare (two selected, or one in split view) and checksums (files), right after
+        std::vector<MenuItem> more;
+        auto add = [&](const wchar_t* text, UINT id, const wchar_t* key, Cmd cmd) {
+            MenuItem m;
+            m.text = text;
+            m.id = kCmdCompare + id;
+            m.key = key;
+            m.shortcut = ShortcutFor(cmd);
+            more.push_back(std::move(m));
+        };
+        if (CompareFits(t)) add(L"Compare", 0, L"jolt:compare", Cmd::Compare);
+        if (ctx == L"file") add(L"Checksums", 1, L"jolt:checksums", Cmd::Checksums);
+        const auto sep2 = std::find_if(items.begin(), items.end(), [](const MenuItem& m) { return m.sep; });
+        items.insert(sep2, more.begin(), more.end());
     }
     std::wstring favPath;  // on a single folder, it can be added to favorites without entering it
     if (ctx == L"folder" && SelCount(t) == 1) {
@@ -1317,6 +1374,14 @@ void OpenShellMenu(POINT screenPt, int row) {
             if (FolderColorPick(id, SelectedFolders(T()))) return;
             if (id >= kCmdArchive && id < kCmdArchive + 5) {
                 ArchiveMenuPick(id - kCmdArchive);
+                return;
+            }
+            if (id == kCmdCompare) {
+                CompareCmd();
+                return;
+            }
+            if (id == kCmdCompare + 1) {
+                HashOpen();
                 return;
             }
             if (id == kCmdTemplatesFolder) {

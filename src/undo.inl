@@ -192,12 +192,13 @@ struct OpRecorder : IFileOperationProgressSink {
 
 void InUseAfterFailure(const std::wstring& what, const std::vector<std::wstring>& files, const std::wstring& reason, std::function<void()> retry);  // inuse.inl
 std::wstring HrText(HRESULT hr);
-bool FileOp(FileOpKind kind, const std::vector<std::wstring>& files, const std::wstring& dest, DWORD extraFlags, const std::vector<std::wstring>* newNames, OpRecorder* rec);
+bool FileOp(FileOpKind kind, const std::vector<std::wstring>& files, const std::wstring& dest, DWORD extraFlags, const std::vector<std::wstring>* newNames, OpRecorder* rec,
+            const std::vector<std::wstring>* dests);
 
 // What the engine couldn't do, without its dialogs (FOF_NOERRORUI): the reason on the status line, or the In use panel
 // when a program holds the file, with the same operation to go again.
 void OpFailed(FileOpKind kind, const std::vector<std::wstring>& files, const std::wstring& dest, DWORD extraFlags,
-              const std::vector<std::wstring>* newNames, const std::vector<std::pair<std::wstring, HRESULT>>& failed) {
+              const std::vector<std::wstring>* newNames, const std::vector<std::pair<std::wstring, HRESULT>>& failed, const std::vector<std::wstring>* dests) {
     std::vector<std::wstring> bad;
     HRESULT first = S_OK;
     for (const auto& [path, hr] : failed) {
@@ -210,21 +211,25 @@ void OpFailed(FileOpKind kind, const std::vector<std::wstring>& files, const std
     if (bad.empty()) return;
     const wchar_t* verb = kind == FileOpKind::Copy ? L"copy " : kind == FileOpKind::Move ? L"move " : L"delete ";
     const std::wstring what = L"Couldn't " + std::wstring(verb) + (bad.size() == 1 ? LeafOf(bad[0]) : Thousands(static_cast<int>(bad.size())) + L" items");
-    const std::vector<std::wstring> again = files, names = newNames ? *newNames : std::vector<std::wstring>{};
-    const bool hasNames = newNames != nullptr;
-    InUseAfterFailure(what, bad, HrText(first), [=] { FileOp(kind, again, dest, extraFlags, hasNames ? &names : nullptr, nullptr); });
+    const std::vector<std::wstring> again = files, names = newNames ? *newNames : std::vector<std::wstring>{}, where = dests ? *dests : std::vector<std::wstring>{};
+    const bool hasNames = newNames != nullptr, hasDests = dests != nullptr;
+    InUseAfterFailure(what, bad, HrText(first), [=] { FileOp(kind, again, dest, extraFlags, hasNames ? &names : nullptr, nullptr, hasDests ? &where : nullptr); });
 }
 
 // Copies, moves or deletes with IFileOperation: progress, conflicts and elevation like File Explorer. Errors don't get
 // its dialogs: OpFailed says why, and offers to close whatever holds a file.
 // newNames (optional, parallel to files): the name of each copy. rec: the caller keeps what
-// happened; otherwise it goes to the history.
+// happened; otherwise it goes to the history. dests (optional, parallel to files): the folder each one goes to, instead
+// of dest.
 bool FileOp(FileOpKind kind, const std::vector<std::wstring>& files, const std::wstring& dest, DWORD extraFlags = 0,
-            const std::vector<std::wstring>* newNames = nullptr, OpRecorder* rec = nullptr) {
+            const std::vector<std::wstring>* newNames = nullptr, OpRecorder* rec = nullptr, const std::vector<std::wstring>* dests = nullptr) {
     if (files.empty()) return false;
     for (const std::wstring& f : files)
         if (TestRefuses(f)) return false;
     if (kind != FileOpKind::Delete && TestRefuses(dest)) return false;
+    if (dests)
+        for (const std::wstring& dd : *dests)
+            if (TestRefuses(dd)) return false;
     ComPtr<IFileOperation> op;
     if (FAILED(CoCreateInstance(CLSID_FileOperation, nullptr, CLSCTX_ALL, IID_PPV_ARGS(&op)))) return false;
     op->SetOwnerWindow(g_hwnd);
@@ -235,6 +240,18 @@ bool FileOp(FileOpKind kind, const std::vector<std::wstring>& files, const std::
     op->SetOperationFlags(flags);
     ComPtr<IShellItem> d;
     if (kind != FileOpKind::Delete && FAILED(SHCreateItemFromParsingName(dest.c_str(), nullptr, IID_PPV_ARGS(&d)))) return false;
+    std::unordered_map<std::wstring, ComPtr<IShellItem>> dItems;  // with dests: each folder once
+    auto destOf = [&](size_t i) -> std::pair<const std::wstring*, IShellItem*> {
+        if (!dests || i >= dests->size()) return {&dest, d.Get()};
+        const std::wstring& p = (*dests)[i];
+        auto it = dItems.find(Key(p));
+        if (it == dItems.end()) {
+            ComPtr<IShellItem> x;
+            if (FAILED(SHCreateItemFromParsingName(p.c_str(), nullptr, IID_PPV_ARGS(&x)))) return {&p, nullptr};
+            it = dItems.emplace(Key(p), x).first;
+        }
+        return {&p, it->second.Get()};
+    };
     OpRecorder* own = rec ? nullptr : new OpRecorder();
     OpRecorder* r = rec ? rec : own;
     int added = 0;
@@ -242,9 +259,11 @@ bool FileOp(FileOpKind kind, const std::vector<std::wstring>& files, const std::
         ComPtr<IShellItem> src;
         if (FAILED(SHCreateItemFromParsingName(files[i].c_str(), nullptr, IID_PPV_ARGS(&src)))) continue;
         const wchar_t* nn = newNames && i < newNames->size() ? (*newNames)[i].c_str() : nullptr;
-        r->AddSource(files[i], kind == FileOpKind::Delete ? L"" : dest, nn);
-        if (kind == FileOpKind::Copy) op->CopyItem(src.Get(), d.Get(), nn, nullptr);
-        else if (kind == FileOpKind::Move) op->MoveItem(src.Get(), d.Get(), nn, nullptr);
+        const auto [where, to] = destOf(i);
+        if (kind != FileOpKind::Delete && !to) continue;
+        r->AddSource(files[i], kind == FileOpKind::Delete ? L"" : *where, nn);
+        if (kind == FileOpKind::Copy) op->CopyItem(src.Get(), to, nn, nullptr);
+        else if (kind == FileOpKind::Move) op->MoveItem(src.Get(), to, nn, nullptr);
         else op->DeleteItem(src.Get(), nullptr);
         ++added;
     }
@@ -254,12 +273,15 @@ bool FileOp(FileOpKind kind, const std::vector<std::wstring>& files, const std::
         ok = SUCCEEDED(op->PerformOperations());
         r->Detach(op.Get());
         if (own) own->Commit();
-        if (!r->failed.empty()) OpFailed(kind, files, dest, extraFlags, newNames, r->failed);
+        if (!r->failed.empty()) OpFailed(kind, files, dest, extraFlags, newNames, r->failed, dests);
         // the folders it touched are read again: whatever shows them catches up, subfolder search results too
         std::unordered_set<std::wstring> again;
         for (const std::wstring& f : files)
             if (const std::wstring dir = ParentOf(f); !dir.empty() && again.insert(Key(dir)).second) Enqueue(dir, JobKind::Revalidate);
         if (!dest.empty() && again.insert(Key(dest)).second) Enqueue(dest, JobKind::Revalidate);
+        if (dests)
+            for (const std::wstring& dd : *dests)
+                if (again.insert(Key(dd)).second) Enqueue(dd, JobKind::Revalidate);
     }
     if (own) own->Release();
     return ok;

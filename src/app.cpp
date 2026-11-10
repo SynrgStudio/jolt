@@ -30,6 +30,7 @@
 #include <wrl/client.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cmath>
 #include <condition_variable>
@@ -3728,6 +3729,9 @@ void DrawMenuEditor(float W, float H);    // menu.inl
 void DrawSettings(float W, float H);      // settings.inl
 void DrawAttrs(float W, float H);         // attrs.inl
 void DrawInUse(float W, float H);         // inuse.inl
+void DrawHash(float W, float H);          // hash.inl
+void DrawDiff(float W, float H);          // diff.inl
+void DrawDirDiff(float W, float H);       // cmpdir.inl
 
 // Milliseconds since the process started (includes loading the executable).
 double MsSinceProcessStart() {
@@ -3805,6 +3809,9 @@ void Render() {
     DrawSettings(W, H);
     DrawAttrs(W, H);
     DrawInUse(W, H);
+    DrawHash(W, H);
+    DrawDirDiff(W, H);
+    DrawDiff(W, H);  // over it: two of its files, compared
     if (g_rt->EndDraw() == D2DERR_RECREATE_TARGET) ReleaseTarget();
     if (g_firstFrameMs == 0) g_firstFrameMs = MsSinceProcessStart();
 
@@ -4184,6 +4191,9 @@ void ViewEditorOpen(int pane);
 #include "media.inl"
 #include "preview.inl"
 #include "archive.inl"
+#include "hash.inl"
+#include "diff.inl"
+#include "cmpdir.inl"
 void PreviewReleaseBitmap() {
     g_pv.d2d.Reset();
     g_media.d2d.Reset();
@@ -4628,6 +4638,8 @@ void RunCommand(Cmd cmd) {
         case Cmd::Properties: Properties(); break;
         case Cmd::Attributes: AttrsOpen(); break;
         case Cmd::InUse: InUseOpen(); break;
+        case Cmd::Checksums: HashOpen(); break;
+        case Cmd::Compare: CompareCmd(); break;
         case Cmd::Unblock: Unblock(); break;
         case Cmd::FolderSizes: ComputeFolderSizes(); break;
         case Cmd::ShowFolders:
@@ -5229,6 +5241,82 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return TRUE;
         }
     }
+    // comparing two files: a view over everything
+    if (g_df.open) {
+        if (msg == WM_KEYDOWN || (msg == WM_SYSKEYDOWN && wp != VK_F4)) {
+            DiffKey(wp);
+            return 0;
+        }
+        if (msg == WM_CHAR || msg == WM_SYSCHAR) return 0;
+        if (msg == WM_MOUSEMOVE) {
+            DiffMouseMove(DipX(lp), DipY(lp));
+            return 0;
+        }
+        if (msg == WM_LBUTTONDOWN || msg == WM_LBUTTONDBLCLK) {
+            DiffClick(DipX(lp), DipY(lp));
+            return 0;
+        }
+        if (msg == WM_MOUSEWHEEL || msg == WM_MOUSEHWHEEL) {
+            const int d = GET_WHEEL_DELTA_WPARAM(wp);
+            DiffWheel(msg == WM_MOUSEHWHEEL ? -d : d, msg == WM_MOUSEHWHEEL || (GET_KEYSTATE_WPARAM(wp) & MK_SHIFT));
+            return 0;
+        }
+        if (msg == WM_LBUTTONUP || msg == WM_RBUTTONDOWN || msg == WM_RBUTTONUP || msg == WM_MBUTTONDOWN) return 0;
+        if (msg == WM_SETCURSOR && LOWORD(lp) == HTCLIENT) {
+            SetCursor(LoadCursorW(nullptr, g_df.hovering ? IDC_HAND : IDC_ARROW));
+            return TRUE;
+        }
+    }
+    // comparing two folders: a view over everything
+    if (g_dd.open) {
+        if (msg == WM_KEYDOWN || (msg == WM_SYSKEYDOWN && wp != VK_F4)) {
+            DirDiffKey(wp);
+            return 0;
+        }
+        if (msg == WM_CHAR || msg == WM_SYSCHAR) return 0;
+        if (msg == WM_MOUSEMOVE) {
+            DirDiffMouseMove(DipX(lp), DipY(lp));
+            return 0;
+        }
+        if (msg == WM_LBUTTONDOWN || msg == WM_LBUTTONDBLCLK) {
+            DirDiffClick(DipX(lp), DipY(lp), msg == WM_LBUTTONDBLCLK);
+            return 0;
+        }
+        if (msg == WM_MOUSEWHEEL) {
+            DirDiffWheel(GET_WHEEL_DELTA_WPARAM(wp));
+            return 0;
+        }
+        if (msg == WM_LBUTTONUP || msg == WM_RBUTTONDOWN || msg == WM_RBUTTONUP || msg == WM_MBUTTONDOWN) return 0;
+        if (msg == WM_SETCURSOR && LOWORD(lp) == HTCLIENT) {
+            SetCursor(LoadCursorW(nullptr, g_dd.hovering && g_dd.hover.k != DdK::Overview ? IDC_HAND : IDC_ARROW));
+            return TRUE;
+        }
+    }
+    // checksums: a panel over everything
+    if (g_hs.open) {
+        if (msg == WM_KEYDOWN || (msg == WM_SYSKEYDOWN && wp != VK_F4)) {
+            HashKey(wp);
+            return 0;
+        }
+        if (msg == WM_CHAR || msg == WM_SYSCHAR) return 0;
+        if (msg == WM_MOUSEMOVE) {
+            HashMouseMove(DipX(lp), DipY(lp));
+            return 0;
+        }
+        if (msg == WM_LBUTTONDOWN || msg == WM_LBUTTONDBLCLK) {
+            HashClick(DipX(lp), DipY(lp));
+            return 0;
+        }
+        if (msg == WM_MOUSEWHEEL) {
+            HashWheel(GET_WHEEL_DELTA_WPARAM(wp));
+            return 0;
+        }
+        if (msg == WM_LBUTTONUP || msg == WM_RBUTTONDOWN || msg == WM_RBUTTONUP || msg == WM_MBUTTONDOWN) return 0;
+        if (msg == WM_SETCURSOR && LOWORD(lp) == HTCLIENT) {
+            SetCursor(LoadCursorW(nullptr, g_hs.hovering ? IDC_HAND : IDC_ARROW));
+            return TRUE;
+        }
+    }
     // in use: a panel over everything
     if (g_iu.open) {
         if (msg == WM_KEYDOWN || (msg == WM_SYSKEYDOWN && wp != VK_F4)) {
@@ -5457,6 +5545,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case WM_ACTIVATE:
             if (LOWORD(wp) == WA_INACTIVE) PopupClose();
             else RecRevalidateShown();  // something may have been done to the results elsewhere
+            if (LOWORD(wp) != WA_INACTIVE) DdActivated();  // and to the two folders being compared
             Invalidate();
             break;
         case WM_PAINT: {
@@ -5515,6 +5604,15 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return 0;
         case WM_APP_REC:
             ApplyRecBatch(reinterpret_cast<RecBatch*>(lp));
+            return 0;
+        case WM_APP_HASH:
+            HashApply(wp, lp);
+            return 0;
+        case WM_APP_DIFF:
+            DiffApply(wp, lp);
+            return 0;
+        case WM_APP_CMP:
+            DdApply(wp, lp);
             return 0;
         case WM_APP_DUP:
             DupApply(wp, lp);
@@ -5591,6 +5689,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (wp == kTimerHold) PreviewFloatShow();
             if (wp == kTimerSpring) SpringFire();
             if (wp == kTimerHint) HintStart();
+            if (wp == kTimerHashCopied) Invalidate();
+            if (wp == kTimerCmp) DdTimer();
             if (wp == kTimerUpdate) UpdTimer();
             if (wp == kTimerTest) {
                 if (g_testBlocking) SetTimer(hwnd, kTimerTest, 30, nullptr);  // a step is still waiting
@@ -5619,6 +5719,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 g_cutKeys.clear();
                 Invalidate();
             }
+            HsReadClipboard();  // a hash copied while the checksums are open
             return 0;
         case WM_KEYDOWN:
         case WM_SYSKEYDOWN: {
@@ -6368,6 +6469,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdLine, int show) {
     std::thread(WatcherMain).detach();
     std::thread(IconThreadMain).detach();
     std::thread(ConfigWatcherMain).detach();
+    std::thread(ShellMenuWarmUp).detach();  // menu.inl
     if (!g_test) {
         std::thread(LoadDirSizes).detach();  // folder sizes from previous sessions
         if (g_adminWindow) IdxStartReadOnly();
