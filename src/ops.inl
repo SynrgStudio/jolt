@@ -576,7 +576,7 @@ void ComputeFolderSizes() {
     if (dirs.empty()) return;
     DirSizeRequest(dirs);
     S.message = L"Calculating the size of " + Thousands(static_cast<int>(dirs.size())) +
-                (dirs.size() == 1 ? L" carpeta" : L" carpetas");
+                (dirs.size() == 1 ? L" folder" : L" folders");
     Invalidate();
 }
 

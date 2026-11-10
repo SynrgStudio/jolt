@@ -3730,6 +3730,7 @@ void DrawSettings(float W, float H);      // settings.inl
 void DrawAttrs(float W, float H);         // attrs.inl
 void DrawInUse(float W, float H);         // inuse.inl
 void DrawHash(float W, float H);          // hash.inl
+void DrawDiskUse(float W, float H);       // diskuse.inl
 void DrawDiff(float W, float H);          // diff.inl
 void DrawDirDiff(float W, float H);       // cmpdir.inl
 
@@ -3810,6 +3811,7 @@ void Render() {
     DrawAttrs(W, H);
     DrawInUse(W, H);
     DrawHash(W, H);
+    DrawDiskUse(W, H);
     DrawDirDiff(W, H);
     DrawDiff(W, H);  // over it: two of its files, compared
     if (g_rt->EndDraw() == D2DERR_RECREATE_TARGET) ReleaseTarget();
@@ -4195,6 +4197,7 @@ void ViewEditorOpen(int pane);
 #include "diff.inl"
 #include "cmpdir.inl"
 #include "tidy.inl"
+#include "diskuse.inl"
 void PreviewReleaseBitmap() {
     g_pv.d2d.Reset();
     g_media.d2d.Reset();
@@ -4645,6 +4648,7 @@ void RunCommand(Cmd cmd) {
         case Cmd::DeleteEmptyFolders: DeleteEmptyFolders(); break;
         case Cmd::Flatten: FlattenFolders(); break;
         case Cmd::FolderSizes: ComputeFolderSizes(); break;
+        case Cmd::DiskUsage: DiskUseOpen(); break;
         case Cmd::ShowFolders:
             g_hideDirs = !g_hideDirs;
             if (g_hideDirs) g_hideFiles = false;  // never both at once: the list would be empty
@@ -5295,6 +5299,31 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         if (msg == WM_LBUTTONUP || msg == WM_RBUTTONDOWN || msg == WM_RBUTTONUP || msg == WM_MBUTTONDOWN) return 0;
         if (msg == WM_SETCURSOR && LOWORD(lp) == HTCLIENT) {
             SetCursor(LoadCursorW(nullptr, g_dd.hovering && g_dd.hover.k != DdK::Overview ? IDC_HAND : IDC_ARROW));
+            return TRUE;
+        }
+    }
+    // disk usage: a panel over everything
+    if (g_du.open) {
+        if (msg == WM_KEYDOWN || (msg == WM_SYSKEYDOWN && wp != VK_F4)) {
+            DiskUseKey(wp);
+            return 0;
+        }
+        if (msg == WM_CHAR || msg == WM_SYSCHAR) return 0;
+        if (msg == WM_MOUSEMOVE) {
+            DiskUseMouseMove(DipX(lp), DipY(lp));
+            return 0;
+        }
+        if (msg == WM_LBUTTONDOWN || msg == WM_LBUTTONDBLCLK) {
+            DiskUseClick(DipX(lp), DipY(lp), msg == WM_LBUTTONDBLCLK);
+            return 0;
+        }
+        if (msg == WM_MOUSEWHEEL) {
+            DiskUseWheel(GET_WHEEL_DELTA_WPARAM(wp));
+            return 0;
+        }
+        if (msg == WM_LBUTTONUP || msg == WM_RBUTTONDOWN || msg == WM_RBUTTONUP || msg == WM_MBUTTONDOWN) return 0;
+        if (msg == WM_SETCURSOR && LOWORD(lp) == HTCLIENT) {
+            SetCursor(LoadCursorW(nullptr, g_du.hovering && g_du.hover.k != DuK::Row ? IDC_HAND : IDC_ARROW));
             return TRUE;
         }
     }
