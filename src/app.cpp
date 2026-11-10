@@ -4194,6 +4194,7 @@ void ViewEditorOpen(int pane);
 #include "hash.inl"
 #include "diff.inl"
 #include "cmpdir.inl"
+#include "tidy.inl"
 void PreviewReleaseBitmap() {
     g_pv.d2d.Reset();
     g_media.d2d.Reset();
@@ -4641,6 +4642,8 @@ void RunCommand(Cmd cmd) {
         case Cmd::Checksums: HashOpen(); break;
         case Cmd::Compare: CompareCmd(); break;
         case Cmd::Unblock: Unblock(); break;
+        case Cmd::DeleteEmptyFolders: DeleteEmptyFolders(); break;
+        case Cmd::Flatten: FlattenFolders(); break;
         case Cmd::FolderSizes: ComputeFolderSizes(); break;
         case Cmd::ShowFolders:
             g_hideDirs = !g_hideDirs;
@@ -5610,6 +5613,9 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return 0;
         case WM_APP_HASH:
             HashApply(wp, lp);
+            return 0;
+        case WM_APP_TIDY:
+            TidyApply(lp);
             return 0;
         case WM_APP_DIFF:
             DiffApply(wp, lp);
