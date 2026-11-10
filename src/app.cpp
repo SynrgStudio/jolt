@@ -6469,6 +6469,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdLine, int show) {
     std::thread(WatcherMain).detach();
     std::thread(IconThreadMain).detach();
     std::thread(ConfigWatcherMain).detach();
+    std::thread(ShellMenuWarmUp).detach();  // menu.inl
     if (!g_test) {
         std::thread(LoadDirSizes).detach();  // folder sizes from previous sessions
         if (g_adminWindow) IdxStartReadOnly();

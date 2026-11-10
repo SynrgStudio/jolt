@@ -767,6 +767,45 @@ std::unique_ptr<ShellMenu> FinishShellMenu(std::unique_ptr<ShellMenu> m, bool ex
     return m;
 }
 
+// The first menu a program asks Windows for loads every extension that adds to it (half a second, and over a second
+// with many): a moment after starting, a thread asks for one of each kind and throws it away, so that the first
+// right click finds them loaded.
+void ShellMenuWarmUp() {
+    Sleep(1500);  // after the window is up and the first folder is listed
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
+    if (FAILED(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE))) return;
+    wchar_t win[MAX_PATH] = {}, exe[MAX_PATH] = {};
+    GetWindowsDirectoryW(win, MAX_PATH);
+    GetModuleFileNameW(nullptr, exe, MAX_PATH);
+    auto warm = [](const std::wstring& item) {  // empty: the folder's background
+        ComPtr<IShellFolder> psf;
+        ComPtr<IContextMenu> cm;
+        PCUITEMID_CHILD child = nullptr;
+        PIDLIST_ABSOLUTE full = nullptr;
+        if (item.empty()) {
+            wchar_t dir[MAX_PATH] = {};
+            GetWindowsDirectoryW(dir, MAX_PATH);
+            if (BindFolder(dir, psf)) psf->CreateViewObject(nullptr, IID_PPV_ARGS(&cm));
+        } else if (SUCCEEDED(SHParseDisplayName(item.c_str(), nullptr, &full, 0, nullptr)) && full &&
+                   SUCCEEDED(SHBindToParent(full, IID_PPV_ARGS(&psf), &child))) {
+            psf->GetUIObjectOf(nullptr, 1, &child, IID_IContextMenu, nullptr, reinterpret_cast<void**>(cm.GetAddressOf()));
+        }
+        if (cm) {
+            if (const HMENU h = CreatePopupMenu()) {
+                cm->QueryContextMenu(h, 0, kCmdFirst, kCmdLast, CMF_NORMAL | CMF_EXPLORE);
+                DestroyMenu(h);
+            }
+        }
+        cm.Reset();
+        psf.Reset();
+        if (full) CoTaskMemFree(full);
+    };
+    warm(exe);  // a file
+    warm(win);  // a folder
+    warm(L"");
+    CoUninitialize();
+}
+
 void ShellInvoke(ShellMenu& m, UINT id, POINT pt) {
     if (TestRefuses(m.folder)) return;  // Windows' own commands can change anything
     CMINVOKECOMMANDINFOEX ici{};
