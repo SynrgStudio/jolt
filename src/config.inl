@@ -11,7 +11,7 @@ enum class Cmd {
     SortByType, ZoomIn, ZoomOut, ZoomReset, RowsTaller, RowsShorter, EmptyRecycleBin,
     Undo, Redo, OpenAsAdmin, PinTab, Restore,
     Install, Quit, RenameMany, FolderSiblings, ViewList, ViewGrid, ViewColumns, ViewBigger, ViewSmaller, Tag, FolderColor, Zen, SizeBars, PreviewWrap, PreviewMarkdown, PreviewPlay, PreviewRotate, PreviewRotateLeft, PreviewZoom, PreviewZoomIn,
-    PreviewZoomOut, PreviewChecker, PreviewCopyImage, Compress, Compress7z, Extract, ExtractTo, ArchiveStop,
+    PreviewZoomOut, PreviewChecker, PreviewCopyImage, Compress, Compress7z, Extract, ExtractTo, ArchiveStop, CheckUpdates, UpdateJolt,
     FindDuplicates, SelectExtraCopies, SelectPattern, SelectSameExtension, InvertSelection, Settings, Checkboxes, NewFromTemplate, CopyTo, MoveTo, Attributes, InUse, Unblock,
     CustomFirst = 1000  // + index into g_cfg.custom: the user's own commands
 };
@@ -38,6 +38,7 @@ struct Config {
     bool previewWrap = true;  // long lines wrap in the text preview
     bool previewMarkdown = true;  // Markdown rendered in the preview (no: its source, highlighted)
     bool browseArchives = true;   // Enter goes into zip, 7z, rar, tar and cab like a folder (no: they open with their program)
+    bool checkUpdates = false;    // ask GitHub once a day if there's a new Jolt (off: Jolt never touches the network by itself)
     bool checkerDark = false;     // the checkerboard behind see-through images and SVG: light, or dark
     int previewHold = 150;        // ms the preview's key is held before the floating preview shows (50 to 1000)
     bool cloudStatus = true;  // marks the files of cloud folders that are online only, or always on this PC
@@ -114,6 +115,8 @@ const CmdDef kCommands[] = {
     {L"preview_zoom", Cmd::PreviewZoom, L"", L"the image in the preview at its real size, or fitting (toggle)"},
     {L"preview_zoom_in", Cmd::PreviewZoomIn, L"", L"zoom in on the image in the preview (also Ctrl+wheel over it)"},
     {L"preview_zoom_out", Cmd::PreviewZoomOut, L"", L"zoom out of the image in the preview"},
+    {L"check_updates", Cmd::CheckUpdates, L"", L"check for updates: ask GitHub now if there's a new Jolt"},
+    {L"update_jolt", Cmd::UpdateJolt, L"", L"update Jolt to the new version, when there is one"},
     {L"compress", Cmd::Compress, L"", L"compress the selection into a zip next to it"},
     {L"compress_7z", Cmd::Compress7z, L"", L"compress the selection into a 7z next to it (needs 7-Zip)"},
     {L"extract", Cmd::Extract, L"", L"extract the selected archives here (into a folder of their own unless they hold one thing)"},
@@ -340,6 +343,9 @@ void WriteDefaultConfig() {
         "preview_markdown = yes\n"
         "# Enter goes into zip, 7z, rar, tar and cab archives like a folder: yes / no (no: they open with their program)\n"
         "browse_archives = yes\n"
+        "# Ask GitHub once a day if there's a new Jolt, and say so in the status bar: yes / no. It is the only thing Jolt\n"
+        "# does on the internet by itself; nothing about you or your files is sent.\n"
+        "check_updates = no\n"
         "# The checkerboard behind see-through images and SVG in the preview: light / dark\n"
         "preview_checker = light\n"
         "# How long Space is held before the big floating preview shows, in milliseconds (50 to 1000). Shorter is\n"
@@ -478,6 +484,7 @@ void LoadConfig() {
             else if (key == L"preview_wrap") g_cfg.previewWrap = ParseBool(val);
             else if (key == L"preview_markdown") g_cfg.previewMarkdown = ParseBool(val);
             else if (key == L"browse_archives") g_cfg.browseArchives = ParseBool(val);
+            else if (key == L"check_updates") g_cfg.checkUpdates = ParseBool(val);
             else if (key == L"preview_checker") g_cfg.checkerDark = Lower(Trim(val)) == L"dark";
             else if (key == L"preview_hold") g_cfg.previewHold = std::clamp(_wtoi(val.c_str()), 50, 1000);
             else if (key == L"cloud_status") g_cfg.cloudStatus = ParseBool(val);
