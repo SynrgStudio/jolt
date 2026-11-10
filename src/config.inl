@@ -72,7 +72,7 @@ const CmdDef kCommands[] = {
     {L"enter", Cmd::Enter, L"Right", L"enter the highlighted folder (does not open files)"},
     {L"open", Cmd::Open, L"Enter", L"open the highlighted item (folder or file)"},
     {L"open_tab", Cmd::OpenTab, L"Ctrl+Enter", L"open the highlighted folder in a new tab"},
-    {L"open_as_admin", Cmd::OpenAsAdmin, L"Ctrl+Shift+Enter", L"open the highlighted folder (or this one) in a window as administrator"},
+    {L"open_as_admin", Cmd::OpenAsAdmin, L"Ctrl+Shift+Enter", L"run the highlighted program as administrator; on a folder (or anything else), open it (or this one) in a window as administrator"},
     {L"back", Cmd::Back, L"Alt+Left", L"back"},
     {L"forward", Cmd::Forward, L"Alt+Right", L"forward"},
     {L"rename", Cmd::Rename, L"F2", L"rename (several selected: the rename panel)"},
