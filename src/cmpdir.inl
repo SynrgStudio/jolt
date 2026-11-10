@@ -1,69 +1,52 @@
 // Comparing two folders (Ctrl+K → "compare" with two folders selected, or in split view the two panes' folders; also in
-// the right-click menu). Both are walked with all their subfolders at once, and the tab lists what differs, one row
-// for each thing, with its two sides where the columns are: its date and size in the first folder, its date and size
-// in the second, a dash where it isn't, and between them an arrow from the side that has it, or has it newer, to the
-// other (≠ when neither is newer). A folder only on one side shows as that folder alone. Files with the same size and
-// date count as the same without being read; with the same size and another date they're read, and if the bytes are
-// the same they count as the same too (files only in the cloud aren't read: that would download them). A row is the
-// item on the side the arrow leaves from, and everything that works on search results works on it; F5 and F6 copy and
-// move it the way the arrow points, and Ctrl+K → "compare" on a file that is on both sides compares the two. When
-// something in either folder changes, it compares again.
-// Included from app.cpp after diff.inl.
+// the right-click menu). Both are walked with all their subfolders at once, and a view over the window shows them as
+// two lists side by side that scroll together, each thing on the same line on both sides: what is only on one side
+// has a dark gap on the other, and what differs has the date and the size that differ lit up, with an arrow from the
+// newer one to the older one between the two (≠ when neither is newer). Long runs of things that are the same are
+// folded away. Files with the same size and date count as the same without being read; with the same size and another
+// date they're read, and if the bytes are the same they count as the same too (files only in the cloud aren't read:
+// that would download them). A folder only on one side shows as that folder alone.
+// The cursor is on a line and on one of the sides: F5 and F6 copy and move what is selected there to the same place
+// on the other side, and Enter compares the two files. After that, and when Jolt comes back to the front, it compares
+// again. Included from app.cpp after diff.inl.
 
 constexpr UINT WM_APP_CMP = WM_APP + 24;
 constexpr UINT_PTR kTimerCmp = 23;
 constexpr int64_t kCmpSameTime = 20000000;  // two seconds: FAT drives and some network drives keep dates to two seconds
 
-enum CmpGroup { CmpOnlyA, CmpNewerA, CmpOnlyB, CmpNewerB, CmpDiffer, CmpGroups };
+enum DdState { DdSame, DdOnlyA, DdOnlyB, DdNewerA, DdNewerB, DdDiffer, DdStates };
 
-struct CmpItem {
-    int group = 0;
-    std::wstring dirKey, name;  // where it is: its folder's key, and its name
-    std::wstring rel;           // its path below its side's folder
-    int hint = -1;              // its index in the folder's listing last time
-    std::wstring odirKey, oname;  // the same on the other side, when it is there too
-    int ohint = -1;
+struct DdRow {
+    const Listing* l[2] = {nullptr, nullptr};  // the folder it is in, on each side
+    int e[2] = {-1, -1};                       // its entry there; -1: it isn't on that side
+    int depth = 0;
+    int parent = -1;  // the row of the folder it is in
+    int state = DdSame;
+    int inside = 0;  // a folder on both sides: how many differences there are below it
 };
 
-// What a row's other side is, next to the row itself (which is the side the arrow leaves from).
-struct CmpOther {
-    const Listing* l = nullptr;
-    int e = -1;
-    int group = 0;
-};
-
-// What a running comparison and the tab share: the comparison stops when gen moves on.
-struct CmpLive {
-    std::atomic<uint64_t> gen{0};
-    std::atomic<int> dirs{0}, reading{0};
-    std::atomic<bool> notify{false};
-};
-
-struct CmpState {
-    std::wstring root[2], label[2];
-    std::shared_ptr<CmpLive> live = std::make_shared<CmpLive>();
+struct DdResult {
     uint64_t gen = 0;
-    bool busy = false, again = false, dirty = false;
-    std::vector<CmpItem> items;   // by folder, then by name
-    std::vector<CmpOther> other;  // one for each row
-    int shown[CmpGroups]{};       // how many rows of each kind
-    int same = 0, sameBytes = 0;  // files the same on both sides; of those, the ones with another date and the same bytes
-    int failed = 0;               // folders that couldn't be read
+    std::vector<std::shared_ptr<Listing>> lists;
+    std::vector<DdRow> rows;  // as a tree: each folder's things right below it
+    int count[DdStates]{};    // how many of each (the same: files only)
+    int failed = 0;           // folders that couldn't be read
+    std::wstring error;       // one of the two couldn't be read at all
 };
 
-struct CmpOut {
-    const CmpLive* live = nullptr;
-    uint64_t gen = 0;
-    std::vector<std::shared_ptr<const Listing>> lists;
-    std::vector<CmpItem> items;
-    int same = 0, sameBytes = 0, dirs = 0, failed = 0;
-    std::wstring error;  // one of the folders couldn't be read at all
-};
-
+std::atomic<uint64_t> g_ddGen{0};
+std::atomic<int> g_ddDirs{0}, g_ddReading{0};
+std::atomic<bool> g_ddNotify{false};
 std::mutex g_cmpCacheM;
 std::unordered_map<std::wstring, bool> g_cmpCache;  // two files with their size and dates -> the same bytes
 
-bool CmpSameBytes(const std::wstring& a, const std::wstring& b, const CmpLive& live, uint64_t gen) {
+const Entry* DdEntry(const DdRow& r, int s) { return r.e[s] >= 0 ? &r.l[s]->entries[r.e[s]] : nullptr; }
+std::wstring DdPath(const DdRow& r, int s) {
+    const Entry* e = DdEntry(r, s);
+    return e ? Join(r.l[s]->path, r.l[s]->name(*e)) : std::wstring();
+}
+
+bool CmpSameBytes(const std::wstring& a, const std::wstring& b, uint64_t gen) {
     HANDLE f[2];
     const std::wstring p[2] = {a, b};
     for (int s = 0; s < 2; ++s)
@@ -71,7 +54,7 @@ bool CmpSameBytes(const std::wstring& a, const std::wstring& b, const CmpLive& l
                            FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
     bool same = f[0] != INVALID_HANDLE_VALUE && f[1] != INVALID_HANDLE_VALUE;
     static thread_local std::vector<uint8_t> ba(1 << 20), bb(1 << 20);
-    while (same && live.gen == gen) {
+    while (same && g_ddGen == gen) {
         DWORD ga = 0, gb = 0;
         if (!ReadFile(f[0], ba.data(), static_cast<DWORD>(ba.size()), &ga, nullptr) || !ReadFile(f[1], bb.data(), static_cast<DWORD>(bb.size()), &gb, nullptr) ||
             ga != gb) {
@@ -83,163 +66,302 @@ bool CmpSameBytes(const std::wstring& a, const std::wstring& b, const CmpLive& l
     }
     for (HANDLE h : f)
         if (h != INVALID_HANDLE_VALUE) CloseHandle(h);
-    return same && live.gen == gen;
+    return same && g_ddGen == gen;
 }
 
-void CmpThread(std::wstring rootA, std::wstring rootB, std::shared_ptr<CmpLive> live, uint64_t gen, bool showHidden, SortBy by, bool asc, bool ff) {
-    auto out = std::make_unique<CmpOut>();
-    out->live = live.get();
+void DdThread(std::wstring rootA, std::wstring rootB, uint64_t gen, bool showHidden) {
+    auto out = std::make_unique<DdResult>();
     out->gen = gen;
     const std::wstring root[2] = {rootA, rootB};
-    struct Check {
-        std::wstring path[2], dirKey[2], name[2], rel;
-        uint64_t size;
-        int64_t time[2];
-    };
-    std::vector<Check> checks;
+    std::vector<int> checks;  // rows whose bytes tell, later
     double last = NowMs();
     auto progress = [&] {
         if (NowMs() - last < 150) return;
         last = NowMs();
-        if (!live->notify.exchange(true)) PostMessageW(g_hwnd, WM_APP_CMP, 0, 0);
+        if (!g_ddNotify.exchange(true)) PostMessageW(g_hwnd, WM_APP_CMP, 0, 0);
     };
     auto shown = [&](const Entry& e) { return showHidden || !(e.attrs & (FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM)); };
-    auto add = [&](int group, const Listing& l, const Entry& e, const std::wstring& rel, const Listing* ol = nullptr, const Entry* oe = nullptr) {
-        CmpItem it;
-        it.group = group;
-        it.dirKey = Key(l.path);
-        it.name.assign(l.name(e), e.nameLen);
-        it.rel = rel.empty() ? it.name : rel + L"\\" + it.name;
-        if (ol) {
-            it.odirKey = Key(ol->path);
-            it.oname.assign(ol->name(*oe), oe->nameLen);
-        }
-        out->items.push_back(std::move(it));
-    };
-    std::deque<std::wstring> q{L""};
-    while (!q.empty() && live->gen == gen) {
-        const std::wstring rel = std::move(q.front());
-        q.pop_front();
+    // a folder that is on both sides: its things, folders first, and each folder's own right below it
+    std::function<void(const std::wstring&, int, int)> walk = [&](const std::wstring& rel, int depth, int parent) {
+        if (g_ddGen != gen) return;
         std::shared_ptr<Listing> l[2];
         for (int s = 0; s < 2; ++s) {
             l[s] = std::make_shared<Listing>();
             EnumerateDir(rel.empty() ? root[s] : Join(root[s], rel.c_str()), EnumMethod::Nt, *l[s]);
         }
-        live->dirs += 2;
+        g_ddDirs += 2;
         if (l[0]->error || l[1]->error) {
             if (rel.empty()) {
                 const int s = l[0]->error ? 0 : 1;
                 out->error = LeafOf(root[s]) + L": " + ErrorText(l[s]->error);
-                break;
+            } else {
+                ++out->failed;  // what is in it can't be told apart
             }
-            ++out->failed;  // what is in it can't be told apart: neither side is listed
-            continue;
+            return;
         }
-        for (auto& x : l) SortListing(*x, by, asc, ff);
+        out->lists.push_back(l[0]);
+        out->lists.push_back(l[1]);
         std::unordered_map<std::wstring, int> inB;
         for (size_t j = 0; j < l[1]->entries.size(); ++j) {
             const Entry& e = l[1]->entries[j];
             if (shown(e)) inB.emplace(Key(std::wstring(l[1]->name(e), e.nameLen)), static_cast<int>(j));
         }
+        std::vector<std::pair<int, int>> pairs;
         std::vector<uint8_t> matched(l[1]->entries.size(), 0);
-        for (const Entry& ea : l[0]->entries) {
+        for (size_t i = 0; i < l[0]->entries.size(); ++i) {
+            const Entry& ea = l[0]->entries[i];
             if (!shown(ea)) continue;
-            const std::wstring name(l[0]->name(ea), ea.nameLen);
-            const auto it = inB.find(Key(name));
-            if (it == inB.end()) {
-                add(CmpOnlyA, *l[0], ea, rel);
-                continue;
-            }
-            matched[it->second] = 1;
-            const Entry& eb = l[1]->entries[it->second];
-            if (ea.isDir() && eb.isDir()) {
-                if (!(ea.attrs & FILE_ATTRIBUTE_REPARSE_POINT) && !(eb.attrs & FILE_ATTRIBUTE_REPARSE_POINT)) q.push_back(rel.empty() ? name : rel + L"\\" + name);
-                continue;  // links to folders: being on both sides is enough
-            }
-            if (ea.isDir() != eb.isDir()) {  // a folder on one side, a file on the other
-                add(CmpDiffer, *l[0], ea, rel, l[1].get(), &eb);
-                continue;
-            }
-            const int64_t dt = ea.mtime - eb.mtime;
-            const bool sameTime = dt <= kCmpSameTime && dt >= -kCmpSameTime;
-            if (ea.size == eb.size && sameTime) {
-                ++out->same;
-                continue;
-            }
-            if (ea.size == eb.size && !OnlineOnly(ea.attrs) && !OnlineOnly(eb.attrs)) {  // the bytes tell, later
-                Check c;
-                for (int s = 0; s < 2; ++s) {
-                    const Entry& e = s ? eb : ea;
-                    c.name[s].assign(l[s]->name(e), e.nameLen);
-                    c.path[s] = Join(l[s]->path, c.name[s].c_str());
-                    c.dirKey[s] = Key(l[s]->path);
-                    c.time[s] = e.mtime;
-                }
-                c.rel = rel;
-                c.size = ea.size;
-                checks.push_back(std::move(c));
-                continue;
-            }
-            if (sameTime) add(CmpDiffer, *l[0], ea, rel, l[1].get(), &eb);
-            else if (dt > 0) add(CmpNewerA, *l[0], ea, rel, l[1].get(), &eb);
-            else add(CmpNewerB, *l[1], eb, rel, l[0].get(), &ea);
+            const auto it = inB.find(Key(std::wstring(l[0]->name(ea), ea.nameLen)));
+            if (it != inB.end()) matched[it->second] = 1;
+            pairs.push_back({static_cast<int>(i), it == inB.end() ? -1 : it->second});
         }
         for (size_t j = 0; j < l[1]->entries.size(); ++j)
-            if (!matched[j] && shown(l[1]->entries[j])) add(CmpOnlyB, *l[1], l[1]->entries[j], rel);
-        out->lists.push_back(std::move(l[0]));
-        out->lists.push_back(std::move(l[1]));
+            if (!matched[j] && shown(l[1]->entries[j])) pairs.push_back({-1, static_cast<int>(j)});
+        auto one = [&](const std::pair<int, int>& p) -> const Entry& { return p.first >= 0 ? l[0]->entries[p.first] : l[1]->entries[p.second]; };
+        auto name = [&](const std::pair<int, int>& p) { return p.first >= 0 ? l[0]->name(l[0]->entries[p.first]) : l[1]->name(l[1]->entries[p.second]); };
+        std::stable_sort(pairs.begin(), pairs.end(), [&](const std::pair<int, int>& x, const std::pair<int, int>& y) {
+            if (one(x).isDir() != one(y).isDir()) return one(x).isDir();
+            return StrCmpLogicalW(name(x), name(y)) < 0;
+        });
+        for (const auto& p : pairs) {
+            DdRow r;
+            r.l[0] = l[0].get();
+            r.l[1] = l[1].get();
+            r.e[0] = p.first;
+            r.e[1] = p.second;
+            r.depth = depth;
+            r.parent = parent;
+            const Entry *ea = DdEntry(r, 0), *eb = DdEntry(r, 1);
+            bool into = false, check = false;
+            if (!eb) {
+                r.state = DdOnlyA;
+            } else if (!ea) {
+                r.state = DdOnlyB;
+            } else if (ea->isDir() && eb->isDir()) {  // links to folders: being on both sides is enough
+                into = !(ea->attrs & FILE_ATTRIBUTE_REPARSE_POINT) && !(eb->attrs & FILE_ATTRIBUTE_REPARSE_POINT);
+            } else if (ea->isDir() != eb->isDir()) {  // a folder on one side, a file on the other
+                r.state = DdDiffer;
+            } else {
+                const int64_t dt = ea->mtime - eb->mtime;
+                const bool sameTime = dt <= kCmpSameTime && dt >= -kCmpSameTime;
+                if (ea->size == eb->size && sameTime) {
+                } else if (ea->size == eb->size && !OnlineOnly(ea->attrs) && !OnlineOnly(eb->attrs)) {
+                    check = true;
+                } else {
+                    r.state = sameTime ? DdDiffer : dt > 0 ? DdNewerA : DdNewerB;
+                }
+            }
+            const int at = static_cast<int>(out->rows.size());
+            out->rows.push_back(r);
+            if (check) checks.push_back(at);
+            if (into) walk(rel.empty() ? std::wstring(name(p)) : rel + L"\\" + name(p), depth + 1, at);
+        }
         progress();
-    }
-    live->reading = static_cast<int>(checks.size());
-    for (const Check& c : checks) {
-        if (live->gen != gen) break;
-        const std::wstring key = Key(c.path[0]) + L"|" + Key(c.path[1]) + L"|" + std::to_wstring(c.size) + L"|" + std::to_wstring(c.time[0]) + L"|" +
-                                 std::to_wstring(c.time[1]);
+    };
+    walk(L"", 0, -1);
+    g_ddReading = static_cast<int>(checks.size());
+    for (int at : checks) {
+        if (g_ddGen != gen) break;
+        DdRow& r = out->rows[at];
+        const Entry &ea = *DdEntry(r, 0), &eb = *DdEntry(r, 1);
+        const std::wstring pa = DdPath(r, 0), pb = DdPath(r, 1);
+        const std::wstring key = Key(pa) + L"|" + Key(pb) + L"|" + std::to_wstring(ea.size) + L"|" + std::to_wstring(ea.mtime) + L"|" + std::to_wstring(eb.mtime);
         int known = -1;
         {
             std::lock_guard<std::mutex> lock(g_cmpCacheM);
             if (auto it = g_cmpCache.find(key); it != g_cmpCache.end()) known = it->second;
         }
-        const bool same = known >= 0 ? known == 1 : CmpSameBytes(c.path[0], c.path[1], *live, gen);
-        if (live->gen != gen) break;
+        const bool same = known >= 0 ? known == 1 : CmpSameBytes(pa, pb, gen);
+        if (g_ddGen != gen) break;
         if (known < 0) {
             std::lock_guard<std::mutex> lock(g_cmpCacheM);
             if (g_cmpCache.size() > 20000) g_cmpCache.clear();
             g_cmpCache[key] = same;
         }
-        --live->reading;
+        --g_ddReading;
         progress();
-        if (same) {
-            ++out->same;
-            ++out->sameBytes;
+        if (!same) r.state = ea.mtime > eb.mtime ? DdNewerA : DdNewerB;
+    }
+    if (g_ddGen != gen) return;
+    for (const DdRow& r : out->rows) {
+        if (r.state == DdSame) {
+            if (!DdEntry(r, 0)->isDir()) ++out->count[DdSame];
             continue;
         }
-        const int s = c.time[0] > c.time[1] ? 0 : 1;
-        CmpItem it;
-        it.group = s ? CmpNewerB : CmpNewerA;
-        it.dirKey = c.dirKey[s];
-        it.name = c.name[s];
-        it.rel = c.rel.empty() ? c.name[s] : c.rel + L"\\" + c.name[s];
-        it.odirKey = c.dirKey[1 - s];
-        it.oname = c.name[1 - s];
-        out->items.push_back(std::move(it));
+        ++out->count[r.state];
+        for (int p = r.parent; p >= 0; p = out->rows[p].parent) ++out->rows[p].inside;
     }
-    if (live->gen != gen) return;
-    // each folder's things together, the top folder's first
-    std::stable_sort(out->items.begin(), out->items.end(), [](const CmpItem& a, const CmpItem& b) {
-        const size_t da = a.rel.size() - a.name.size(), db = b.rel.size() - b.name.size();
-        if (da != db || _wcsnicmp(a.rel.c_str(), b.rel.c_str(), da) != 0)
-            if (const int c = StrCmpLogicalW(a.rel.substr(0, da).c_str(), b.rel.substr(0, db).c_str())) return c < 0;
-        return StrCmpLogicalW(a.name.c_str(), b.name.c_str()) < 0;
-    });
-    out->dirs = live->dirs;
-    CmpOut* raw = out.release();
+    DdResult* raw = out.release();
     if (!PostMessageW(g_hwnd, WM_APP_CMP, 1, reinterpret_cast<LPARAM>(raw))) delete raw;
 }
 
-// How each side is called in the titles: the folder's name, or more of its path when both have the same name.
-void CmpLabels(CmpState& st) {
-    std::wstring a = st.root[0], b = st.root[1];
+// ---- the view
+struct DdShow {
+    int row;
+    int fold;  // > 0: instead, this many things that are the same folded away, from row on
+};
+enum class DdK { None, Close, Prev, Next, All, Fold, Overview };
+struct DdHit {
+    D2D1_RECT_F r;
+    DdK k;
+    int idx = 0;
+};
+
+struct DirDiffView {
+    bool open = false, busy = false, again = false;
+    std::wstring root[2], label[2];
+    std::unique_ptr<DdResult> r;
+    std::vector<DdShow> show;
+    std::vector<int> rowAt;                   // where each row is in show; -1: folded away
+    std::vector<int> diffs;                   // the rows that differ, in order
+    std::unordered_set<std::wstring> opened;  // folds opened by a click (by where their first row is)
+    bool all = false;                         // everything, nothing folded
+    float scroll = 0, viewH = 0;
+    int cur = -1, side = 0, anchor = -1;  // the cursor's row and side; where a Shift selection starts
+    std::vector<uint8_t> sel;             // by row
+    bool goFirst = false;                 // to the first difference once the view's height is known
+    D2D1_RECT_F box{}, body{}, overview{};
+    float mid = 0;  // where the two sides meet
+    std::vector<DdHit> hits;
+    DdHit hover{};
+    bool hovering = false;
+} g_dd;
+constexpr int kDdContext = 2;
+constexpr float kDdRow = 24.f, kDdGutter = 30.f;
+
+// Where a row is below the two folders, the same on both sides: what it is known by from one comparison to the next.
+std::wstring DdRel(const DdRow& r) {
+    const int s = r.e[0] >= 0 ? 0 : 1;
+    std::wstring p = DdPath(r, s).substr(g_dd.root[s].size());
+    while (!p.empty() && p[0] == L'\\') p.erase(0, 1);
+    return Key(p);
+}
+
+void DdBuild() {
+    g_dd.show.clear();
+    g_dd.diffs.clear();
+    g_dd.rowAt.clear();
+    if (!g_dd.r) return;
+    const std::vector<DdRow>& rows = g_dd.r->rows;
+    const int n = static_cast<int>(rows.size());
+    g_dd.rowAt.assign(n, -1);
+    auto put = [&](int k) {
+        g_dd.rowAt[k] = static_cast<int>(g_dd.show.size());
+        g_dd.show.push_back({k, 0});
+    };
+    for (int i = 0; i < n;) {
+        if (rows[i].state != DdSame || rows[i].inside > 0) {  // a difference, or a folder with some below
+            if (rows[i].state != DdSame) g_dd.diffs.push_back(i);
+            put(i++);
+            continue;
+        }
+        int j = i;
+        while (j < n && rows[j].state == DdSame && rows[j].inside == 0) ++j;
+        const int top = i == 0 ? 0 : kDdContext, bot = j == n ? 0 : kDdContext;
+        if (g_dd.all || j - i <= top + bot + 2 || g_dd.opened.count(DdRel(rows[i + top]))) {
+            for (int k = i; k < j; ++k) put(k);
+        } else {
+            for (int k = i; k < i + top; ++k) put(k);
+            g_dd.show.push_back({i + top, j - i - top - bot});
+            for (int k = j - bot; k < j; ++k) put(k);
+        }
+        i = j;
+    }
+}
+
+void DdClamp() {
+    const float total = g_dd.show.size() * kDdRow;
+    g_dd.scroll = std::clamp(g_dd.scroll, 0.f, std::max(0.f, total - g_dd.viewH + kDdRow));
+}
+
+void DdSee(int row) {  // the row in sight
+    if (row < 0 || row >= static_cast<int>(g_dd.rowAt.size()) || g_dd.rowAt[row] < 0) return;
+    const float y = g_dd.rowAt[row] * kDdRow;
+    if (y < g_dd.scroll) g_dd.scroll = y;
+    else if (y + kDdRow > g_dd.scroll + g_dd.viewH) g_dd.scroll = y + kDdRow - g_dd.viewH;
+    DdClamp();
+}
+
+// The cursor to a row: alone, or selecting from where Shift was first held.
+void DdCursor(int row, bool extend, bool toggle = false) {
+    if (!g_dd.r || row < 0 || row >= static_cast<int>(g_dd.rowAt.size()) || g_dd.rowAt[row] < 0) return;
+    if (toggle) {
+        g_dd.sel[row] = !g_dd.sel[row];
+        g_dd.anchor = row;
+    } else {
+        std::fill(g_dd.sel.begin(), g_dd.sel.end(), uint8_t(0));
+        if (!extend || g_dd.anchor < 0 || g_dd.rowAt[g_dd.anchor] < 0) g_dd.anchor = row;
+        const int a = std::min(g_dd.rowAt[g_dd.anchor], g_dd.rowAt[row]), b = std::max(g_dd.rowAt[g_dd.anchor], g_dd.rowAt[row]);
+        for (int i = a; i <= b; ++i)
+            if (!g_dd.show[i].fold) g_dd.sel[g_dd.show[i].row] = 1;
+    }
+    g_dd.cur = row;
+    DdSee(row);
+    Invalidate();
+}
+
+// The side a difference is told from: the one that has it, or has it newer.
+int DdFrom(const DdRow& r) { return r.state == DdOnlyB || r.state == DdNewerB ? 1 : 0; }
+
+// Which difference the cursor is on, or the one before it; -1 before them all.
+int DdDiffAt() {
+    return static_cast<int>(std::upper_bound(g_dd.diffs.begin(), g_dd.diffs.end(), g_dd.cur) - g_dd.diffs.begin()) - 1;
+}
+
+// To difference k: the cursor on it, on its side, a third of the way down.
+void DdGo(int k) {
+    const int n = static_cast<int>(g_dd.diffs.size());
+    if (n == 0) return;
+    const int row = g_dd.diffs[std::clamp(k, 0, n - 1)];
+    g_dd.side = DdFrom(g_dd.r->rows[row]);
+    DdCursor(row, false);
+    const float y = g_dd.rowAt[row] * kDdRow;
+    if (y < g_dd.scroll + kDdRow || y > g_dd.scroll + g_dd.viewH - 2 * kDdRow) g_dd.scroll = y - g_dd.viewH / 3;
+    DdClamp();
+}
+
+void DdStep(int dir) {
+    if (g_dd.diffs.empty()) return;
+    const int at = DdDiffAt();
+    const bool on = at >= 0 && g_dd.diffs[at] == g_dd.cur;
+    DdGo(dir > 0 ? at + 1 : on ? at - 1 : at);
+}
+
+void DdRun() {
+    g_dd.busy = true;
+    g_ddDirs = 0;
+    g_ddReading = 0;
+    std::thread(DdThread, g_dd.root[0], g_dd.root[1], ++g_ddGen, g_cfg.showHidden).detach();
+}
+
+void DirDiffClose() {
+    if (!g_dd.open) return;
+    ++g_ddGen;
+    KillTimer(g_hwnd, kTimerCmp);
+    g_dd = DirDiffView{};
+    Invalidate();
+}
+
+// Compares again: now, or as soon as the comparison going on is done.
+void DdAgain() {
+    if (!g_dd.open) return;
+    if (g_dd.busy) g_dd.again = true;
+    else DdRun();
+    Invalidate();
+}
+void DdSoon() { SetTimer(g_hwnd, kTimerCmp, 300, nullptr); }
+void DdTimer() {
+    KillTimer(g_hwnd, kTimerCmp);
+    DdAgain();
+}
+// Jolt comes back to the front: what changed meanwhile shows.
+void DdActivated() {
+    if (g_dd.open && g_dd.r && !g_dd.busy) DdRun();
+}
+
+// How each side is called: the folder's name, or more of its path when both have the same name.
+void DdLabels() {
+    std::wstring a = g_dd.root[0], b = g_dd.root[1];
     std::wstring la = LeafOf(a), lb = LeafOf(b);
     for (int up = 0; up < 3 && Key(la) == Key(lb); ++up) {
         a = ParentOf(a);
@@ -249,32 +371,14 @@ void CmpLabels(CmpState& st) {
         lb = LeafOf(b) + L"\\" + lb;
     }
     if (Key(la) == Key(lb)) {
-        la = st.root[0];
-        lb = st.root[1];
+        la = g_dd.root[0];
+        lb = g_dd.root[1];
     }
-    st.label[0] = la;
-    st.label[1] = lb;
+    g_dd.label[0] = la;
+    g_dd.label[1] = lb;
 }
 
-void CmpRun(Tab& t) {
-    CmpState& st = *t.cmpState;
-    st.gen = ++st.live->gen;
-    st.busy = true;
-    st.dirty = false;
-    st.live->dirs = 0;
-    st.live->reading = 0;
-    const SortBy by = static_cast<SortBy>(g_sortBy.load());
-    std::thread(CmpThread, st.root[0], st.root[1], st.live, st.gen, g_cfg.showHidden, by, g_sortAsc.load(), FoldersFirstFor(by)).detach();
-}
-
-// Stops a comparison and forgets it (the tab goes back to its folder through StopRecursive).
-void CmpStop(Tab& t) {
-    if (t.cmpState) ++t.cmpState->live->gen;
-    t.cmp = false;
-    t.cmpState.reset();
-}
-
-void CompareFolders(Tab& t, const std::wstring& a, const std::wstring& b) {
+void CompareFolders(const std::wstring& a, const std::wstring& b) {
     const std::wstring ka = Key(a), kb = Key(b);
     if (ka == kb) {
         S.message = L"That's the same folder twice";
@@ -283,326 +387,497 @@ void CompareFolders(Tab& t, const std::wstring& a, const std::wstring& b) {
     } else if (a.empty() || b.empty() || IsVirtual(a) || IsVirtual(b) || InArchive(a) || InArchive(b)) {
         S.message = L"Only folders on a drive can be compared";
     } else {
-        if (t.recursive) StopRecursive(t, false);
+        PopupClose();
+        PaletteClose();
+        ViewEditorClose();
+        MenuEditorClose();
+        SettingsClose();
         CancelRename();
-        t.recursive = true;
-        t.recDone = false;
-        t.recDirs = 0;
-        t.recGen = 0;
-        t.rec.clear();
-        t.recKeys.clear();
-        t.filter.clear();
-        t.cmp = true;
-        t.cmpState = std::make_shared<CmpState>();
-        t.cmpState->root[0] = a;
-        t.cmpState->root[1] = b;
-        CmpLabels(*t.cmpState);
-        Rebuild(t, nullptr, L"");
-        CmpRun(t);
+        ++g_ddGen;
+        g_dd = DirDiffView{};
+        g_dd.open = true;
+        g_dd.root[0] = a;
+        g_dd.root[1] = b;
+        DdLabels();
+        DdRun();
         S.message.clear();
     }
     Invalidate();
 }
 
-void CmpApply(WPARAM wp, LPARAM lp) {
+void DdApply(WPARAM wp, LPARAM lp) {
     if (wp == 0) {  // progress
-        for (auto& tp : g_tabs)
-            if (tp->cmp && tp->cmpState) tp->cmpState->live->notify = false;
+        g_ddNotify = false;
         Invalidate();
         return;
     }
-    std::unique_ptr<CmpOut> out(reinterpret_cast<CmpOut*>(lp));
-    for (auto& tp : g_tabs) {
-        Tab& t = *tp;
-        if (!t.cmp || !t.cmpState || t.cmpState->live.get() != out->live || t.cmpState->gen != out->gen) continue;
-        CmpState& st = *t.cmpState;
-        st.busy = false;
-        if (!out->error.empty()) {
-            S.message = L"Couldn't compare: " + out->error;
-            StopRecursive(t, true);
-            break;
-        }
-        const bool had = t.recDone;
-        Place p = SavePlace(t);  // before the listings go: the rows point to them
-        t.rec = std::move(out->lists);
-        t.recKeys.clear();
-        for (const auto& l : t.rec) t.recKeys[Key(l->path)] = l.get();
-        st.items = std::move(out->items);
-        st.same = out->same;
-        st.sameBytes = out->sameBytes;
-        st.failed = out->failed;
-        t.recDirs = out->dirs;
-        t.recDone = true;
-        Rebuild(t, had ? &p : nullptr, L"");
-        if (!had) {
-            t.scroll = 0;
-            EnsureVisible(t);
-        }
-        if (st.again) {
-            st.again = false;
-            CmpRun(t);
-        }
-        Invalidate();
-        break;
+    std::unique_ptr<DdResult> r(reinterpret_cast<DdResult*>(lp));
+    if (!g_dd.open || r->gen != g_ddGen) return;
+    g_dd.busy = false;
+    if (!r->error.empty()) {
+        S.message = L"Couldn't compare: " + r->error;
+        DirDiffClose();
+        return;
     }
-}
-
-// The rows: one for each thing that differs, as it is now (one deleted or moved away leaves the list), with what it is
-// on the other side next to it. With a filter, only the ones that match it.
-void BuildCmpRows(Tab& t) {
-    CmpState* st = t.cmpState.get();
-    if (!st) return;
-    st->other.clear();
-    for (int& n : st->shown) n = 0;
-    if (!t.recDone) return;
-    const bool filtered = !t.filter.empty();
-    const FilterSpec spec = filtered ? ParseFilter(t.filter) : FilterSpec{};
-    const NearPattern close(spec.fuzzy, g_cfg.typoMin);
-    auto find = [&](const std::wstring& dirKey, const std::wstring& name, int& hint, const Listing*& l) {
-        auto at = t.recKeys.find(dirKey);
-        if (at == t.recKeys.end()) return -1;
-        l = at->second;
-        const bool hinted = hint >= 0 && hint < static_cast<int>(l->entries.size()) && l->entries[hint].nameLen == name.size() &&
-                            _wcsnicmp(l->name(l->entries[hint]), name.c_str(), name.size()) == 0;
-        if (!hinted) hint = FindName(*l, name);
-        return hint;
-    };
-    for (CmpItem& it : st->items) {
-        const Listing* l = nullptr;
-        const int e = find(it.dirKey, it.name, it.hint, l);
-        if (e < 0) continue;
-        if (filtered) {
-            int sc = 0, pc = 0;
-            const Entry& en = l->entries[e];
-            if (!FilterPass(spec, en, l->name(en), en.nameLen, sc, nullptr, close, pc) || pc) continue;
+    // The cursor and the selection stay on what they were on. A difference that is gone or the same now (it was just
+    // copied over) hands the cursor to the difference that follows.
+    const bool first = !g_dd.r;
+    const int was = g_dd.cur;
+    std::wstring on;
+    std::unordered_set<std::wstring> selected;
+    bool wasDiff = false;
+    if (!first) {
+        const std::vector<DdRow>& old = g_dd.r->rows;
+        if (was >= 0 && was < static_cast<int>(old.size())) {
+            on = DdRel(old[was]);
+            wasDiff = old[was].state != DdSame;
         }
-        CmpOther o;
-        o.group = it.group;
-        if (!it.odirKey.empty()) {
-            o.e = find(it.odirKey, it.oname, it.ohint, o.l);
-            if (o.e < 0) o.l = nullptr;
-        }
-        t.rows.push_back({l, e, 1});
-        st->other.push_back(o);
-        ++st->shown[it.group];
+        for (size_t i = 0; i < old.size(); ++i)
+            if (g_dd.sel[i]) selected.insert(DdRel(old[i]));
     }
-}
-
-// A row's two sides: the entry on each (null where it isn't), the side the row itself is, and whether neither is newer.
-struct CmpSides {
-    const Entry* e[2] = {nullptr, nullptr};
-    int from = 0;
-    bool differ = false;
-};
-CmpSides CmpSidesOf(const Tab& t, int row) {
-    CmpSides sd;
-    const CmpState* st = t.cmpState.get();
-    if (!st || row < 0 || row >= static_cast<int>(st->other.size()) || row >= static_cast<int>(t.rows.size())) return sd;
-    const CmpOther& o = st->other[row];
-    const Row& r = t.rows[row];
-    sd.from = o.group == CmpOnlyB || o.group == CmpNewerB ? 1 : 0;
-    sd.differ = o.group == CmpDiffer;
-    sd.e[sd.from] = &r.l->entries[r.e];
-    if (o.l && o.e >= 0 && o.e < static_cast<int>(o.l->entries.size())) sd.e[1 - sd.from] = &o.l->entries[o.e];
-    return sd;
-}
-
-// Over the two sides, each folder's name.
-void DrawCmpTitles(const Tab& t, const CmpCols& z, float y0, float y1) {
-    const CmpState* st = t.cmpState.get();
-    if (!st || z.detail < 0) return;
-    Color(cText);
-    for (int s = 0; s < 2; ++s) Text(st->label[s], g_fmtRight.Get(), z.l[s], y0, z.r[s], y1);
-}
-
-// A row's two sides, and between them the way it goes. The side that has it, or has it newer, is the brighter one.
-void DrawCmpSides(const Tab& t, int row, const CmpCols& z, float y, float a, bool onSel) {
-    const CmpSides sd = CmpSidesOf(t, row);
-    if (!sd.e[0] && !sd.e[1]) return;
-    const UINT32 strong = onSel ? 0xFFFFFF : cText, weak = onSel ? 0xC6D4EE : cDim, none = onSel ? 0x9FB3D9 : cFaint;
-    const float date = z.date;
-    wchar_t buf[64];
-    for (int s = 0; z.detail >= 0 && s < 2; ++s) {
-        const Entry* e = sd.e[s];
-        if (!e) {  // not on this side
-            Color(none, a);
-            Text(L"—", g_fmtCenter.Get(), z.l[s], y, z.r[s], y + kRow);
-            continue;
-        }
-        const bool lead = s == sd.from && !sd.differ;
-        if (z.detail == 0) {  // no room for more than a word
-            Color(lead ? strong : weak, a);
-            Text(sd.differ ? (e->isDir() ? L"folder" : sd.e[1 - s] && sd.e[1 - s]->isDir() ? L"file" : L"differs") : !lead ? L"older" : sd.e[1 - s] ? L"newer" : L"only here",
-                 g_fmtRight.Get(), z.l[s], y, z.r[s], y + kRow);
-            continue;
-        }
-        if (e->mtime) {
-            FormatDate(e->mtime, buf, 64);
-            Color(lead ? strong : weak, a);
-            Text(buf, g_fmtRight.Get(), z.l[s], y, z.detail == 2 ? z.l[s] + date : z.r[s], y + kRow);
-        }
-        if (z.detail == 2) {  // what differs with the same date is the size
-            if (e->isDir()) wcscpy_s(buf, L"folder");
-            else FormatSize(e->size, buf, 64);
-            Color(lead || (sd.differ && !e->isDir()) ? strong : weak, a);
-            Text(buf, g_fmtRight.Get(), z.l[s] + date + 14, y, z.r[s], y + kRow);
-        }
-    }
-    if (sd.differ) {
-        Color(onSel ? 0xFFFFFF : kDfAmber, a);
-        Text(L"≠", g_fmtCenter.Get(), z.mid - 14, y, z.mid + 14, y + kRow);
+    g_dd.r = std::move(r);
+    const std::vector<DdRow>& rows = g_dd.r->rows;
+    const int n = static_cast<int>(rows.size());
+    g_dd.sel.assign(n, 0);
+    g_dd.anchor = g_dd.cur = -1;
+    DdBuild();
+    if (first) {
+        g_dd.goFirst = true;
     } else {
-        Color(onSel ? 0xFFFFFF : cAccent, a);
-        Glyph(sd.from == 0 ? gFwd : gBack, g_fmtCap.Get(), z.mid - 12, y, z.mid + 12, y + kRow);
+        int found = -1;
+        for (int i = 0; i < n && (!on.empty() || !selected.empty()); ++i) {
+            if (g_dd.rowAt[i] < 0) continue;
+            const std::wstring k = DdRel(rows[i]);
+            if (k == on) found = i;
+            if (selected.count(k)) g_dd.sel[i] = 1;
+        }
+        if (wasDiff && !g_dd.diffs.empty() && (found < 0 || rows[found].state == DdSame)) {
+            const auto it = std::lower_bound(g_dd.diffs.begin(), g_dd.diffs.end(), found >= 0 ? found : was);
+            g_dd.cur = it == g_dd.diffs.end() ? g_dd.diffs.back() : *it;
+            g_dd.side = DdFrom(rows[g_dd.cur]);
+            std::fill(g_dd.sel.begin(), g_dd.sel.end(), uint8_t(0));
+            g_dd.sel[g_dd.cur] = 1;
+            DdSee(g_dd.cur);
+        } else {
+            g_dd.cur = found;
+        }
+        g_dd.anchor = g_dd.cur;
+        DdClamp();
     }
-}
-
-// For the tests. Which way a row goes: A+ and B+ only on that side, A>B and A<B newer on A and on B, A!=B neither.
-std::wstring CmpRowMark(const Tab& t, int row) {
-    const CmpSides sd = CmpSidesOf(t, row);
-    if (sd.differ) return L"A!=B";
-    if (!sd.e[1 - sd.from]) return sd.from ? L"B+" : L"A+";
-    return sd.from ? L"A<B" : L"A>B";
-}
-// And what its two sides show: each one's size.
-std::wstring CmpRowText(const Tab& t, int row) {
-    const CmpSides sd = CmpSidesOf(t, row);
-    auto side = [&](int s) -> std::wstring {
-        if (!sd.e[s]) return L"—";
-        if (sd.e[s]->isDir()) return L"folder";
-        wchar_t buf[64];
-        FormatSize(sd.e[s]->size, buf, 64);
-        return buf;
-    };
-    return RowName(t, row) + L": " + side(0) + (sd.differ ? L" ≠ " : sd.from == 0 ? L" → " : L" ← ") + side(1);
-}
-
-// Which side a folder is on: 0, 1, or -1.
-int CmpSide(const CmpState& st, const std::wstring& dir) {
-    const std::wstring k = Key(dir);
-    for (int s = 0; s < 2; ++s)
-        if (RecUnder(k, Key(st.root[s]))) return s;
-    return -1;
-}
-
-// Where a folder is below its side's folder ("" at the top), for the rows.
-std::wstring CmpRelDir(const Tab& t, const std::wstring& dir) {
-    if (!t.cmpState) return L"";
-    const int s = CmpSide(*t.cmpState, dir);
-    if (s < 0 || dir.size() <= t.cmpState->root[s].size()) return L"";
-    std::wstring rel = dir.substr(t.cmpState->root[s].size());
-    while (!rel.empty() && rel[0] == L'\\') rel.erase(0, 1);
-    return rel;
-}
-
-// The same place on the other side.
-std::wstring CmpPartner(const CmpState& st, const std::wstring& path, int* side = nullptr) {
-    const int s = CmpSide(st, path);
-    if (side) *side = s;
-    if (s < 0 || Key(path) == Key(st.root[s])) return L"";
-    std::wstring rel = path.substr(st.root[s].size());
-    while (!rel.empty() && rel[0] == L'\\') rel.erase(0, 1);
-    return Join(st.root[1 - s], rel.c_str());
-}
-
-std::wstring CmpStatus(const Tab& t) {
-    const CmpState* st = t.cmpState.get();
-    if (!st) return L"";
-    if (!t.recDone) {
-        const int reading = st->live->reading.load();
-        return L"Comparing   ·   " + Thousands(st->live->dirs.load()) + L" folders read" + (reading ? L"   ·   " + Thousands(reading) + L" files to read" : L"") + L"…";
-    }
-    int differ = 0;
-    for (int g = 0; g < CmpGroups; ++g) differ += st->shown[g];
-    const std::wstring s = Thousands(differ) + (differ == 1 ? L" difference" : L" differences");
-    const std::wstring same = Thousands(st->same) + (st->same == 1 ? L" file" : L" files") + L" the same";
-    const std::wstring busy = st->busy ? L"   ·   comparing again…" : L"";
-    const std::wstring failed = st->failed ? L"   ·   " + Thousands(st->failed) + (st->failed == 1 ? L" folder couldn't be read" : L" folders couldn't be read") : L"";
-    if (!differ)
-        return (t.filter.empty() ? L"No differences: " + same : L"No differences match") + failed + busy + L"   ·   Esc goes back";
-    return s + L"  ·  " + same + failed + busy + L"   ·   " + ShortcutFor(Cmd::CopyToOther) + L" copies the way the arrow points   ·   Esc goes back";
-}
-
-// A folder Jolt read again: if it is one of the compared ones, it shows as it is now, and the comparison runs again.
-void CmpSoon(Tab& t) {
-    if (!t.cmpState) return;
-    t.cmpState->dirty = true;
-    SetTimer(g_hwnd, kTimerCmp, 400, nullptr);
-}
-
-bool CmpTake(Tab& t, const std::shared_ptr<const Listing>& l) {
-    CmpState* st = t.cmpState.get();
-    if (!st || !t.recDone || IsVirtual(l->path)) return false;
-    const std::wstring k = Key(l->path);
-    if (CmpSide(*st, l->path) < 0) return false;
-    auto at = t.recKeys.count(k) ? RecFind(t, l->path) : t.rec.end();
-    if (at != t.rec.end() && !l->error && SameContent(**at, *l)) return false;
-    CmpSoon(t);
-    if (at == t.rec.end() || l->error) return false;  // the next comparison will see it
-    Place p = SavePlace(t);
-    *at = l;
-    t.recKeys[k] = l.get();
-    Rebuild(t, &p, L"");
-    return true;
-}
-
-void CmpTimer() {
-    for (auto& tp : g_tabs) {
-        Tab& t = *tp;
-        if (!t.cmp || !t.cmpState || !t.cmpState->dirty || !t.recDone) continue;
-        if (t.cmpState->busy) t.cmpState->again = true;
-        else CmpRun(t);
-        t.cmpState->dirty = false;
+    if (g_dd.again) {
+        g_dd.again = false;
+        DdRun();
     }
     Invalidate();
 }
 
-// F5 / F6 in a comparison: each selected item to the same place on the other side, the way its arrow points.
-bool CmpTransfer(bool move) {
-    Tab& t = T();
-    if (!t.cmp || !t.cmpState) return false;
-    const CmpState& st = *t.cmpState;
+// What it found, in a line.
+std::wstring DdStatus() {
+    if (!g_dd.r) {
+        const int reading = g_ddReading.load();
+        return L"Comparing   ·   " + Thousands(g_ddDirs.load()) + L" folders read" + (reading ? L"   ·   " + Thousands(reading) + L" files to read" : L"") + L"…";
+    }
+    const DdResult& r = *g_dd.r;
+    const int differ = static_cast<int>(g_dd.diffs.size());
+    const std::wstring same = Thousands(r.count[DdSame]) + (r.count[DdSame] == 1 ? L" file" : L" files") + L" the same";
+    const std::wstring failed = r.failed ? L"   ·   " + Thousands(r.failed) + (r.failed == 1 ? L" folder couldn't be read" : L" folders couldn't be read") : L"";
+    const std::wstring busy = g_dd.busy ? L"   ·   comparing again…" : L"";
+    if (!differ) return L"No differences: " + same + failed + busy;
+    return Thousands(differ) + (differ == 1 ? L" difference" : L" differences") + L"   ·   " + same + failed + busy;
+}
+
+// ---- drawing
+void DdHeader(float x0, float y0, float R) {
+    const float mid = std::floor((x0 + R) / 2);
+    for (int s = 0; s < 2; ++s) {
+        const float l = s ? mid + 14 : x0 + 18, rr = s ? R - 48 : mid - 14;
+        Fill(D2D1::RectF(l, y0 + 12, l + 3, y0 + 46), s ? kDfGreen : kDfRed, 0.8f);
+        Color(cText);
+        Text(LeafOf(g_dd.root[s]), g_fmtNameBold.Get(), l + 12, y0 + 8, rr, y0 + 28);
+        std::wstring info;
+        if (g_dd.r) {
+            const int only = g_dd.r->count[s ? DdOnlyB : DdOnlyA], newer = g_dd.r->count[s ? DdNewerB : DdNewerA];
+            if (only) info = Thousands(only) + L" only here";
+            if (newer) info += (info.empty() ? L"" : L"  ·  ") + Thousands(newer) + L" newer";
+        }
+        const float iw = info.empty() ? 0 : MeasureW(info, g_fmtStatus.Get());
+        Color(cFaint);
+        Text(ParentOf(g_dd.root[s]), g_fmtStatus.Get(), l + 12, y0 + 28, std::max(l + 40, rr - iw - 14), y0 + 48);
+        if (!info.empty()) {
+            Color(cDim);
+            Text(info, g_fmtStatusR.Get(), rr - iw - 4, y0 + 28, rr, y0 + 48);
+        }
+    }
+    Fill(D2D1::RectF(mid, y0 + 10, mid + 1, y0 + 48), cBorder);
+}
+
+void DrawDirDiff(float W, float H) {
+    if (!g_dd.open) return;
+    g_dd.hits.clear();
+    Fill(D2D1::RectF(0, 0, W, H), 0x000000, 0.45f);
+    const float x0 = 12, y0 = kTabH + 6, R = W - 12, B = H - 12;
+    g_dd.box = D2D1::RectF(x0, y0, R, B);
+    Round(g_dd.box, 10, cBg);
+    Color(cBorder);
+    g_rt->DrawRoundedRectangle(D2D1::RoundedRect(g_dd.box, 10, 10), g_brush.Get(), 1.f);
+    auto isHover = [&](DdK k, int idx = 0) { return g_dd.hovering && g_dd.hover.k == k && g_dd.hover.idx == idx; };
+    DdHeader(x0, y0, R);
+    const D2D1_RECT_F cb = D2D1::RectF(R - 40, y0 + 13, R - 12, y0 + 41);
+    if (isHover(DdK::Close)) Round(cb, 6, 0xFFFFFF, 0.08f);
+    Color(isHover(DdK::Close) ? cText : cDim);
+    Glyph(0xE711, g_fmtIconSm.Get(), cb.left, cb.top, cb.right, cb.bottom);
+    g_dd.hits.push_back({cb, DdK::Close});
+    HLine(x0, R, y0 + 56);
+
+    const float by = y0 + 57, bb = by + 36;
+    g_dd.body = D2D1::RectF(x0 + 1, bb + 1, R - 1, B - 26);
+    g_dd.viewH = g_dd.body.bottom - g_dd.body.top;
+    if (g_dd.goFirst && g_dd.viewH > 0) {
+        g_dd.goFirst = false;
+        DdGo(0);
+    }
+    DdClamp();
+
+    // the bar: what it found, and the buttons
+    Color(cText);
+    Text(DdStatus(), g_fmtStatus.Get(), x0 + 18, by, R - 380, bb);
+    const int n = static_cast<int>(g_dd.diffs.size());
+    float bx = R - 14;
+    auto button = [&](DdK k, const std::wstring& label, bool on = true) {
+        const float w = MeasureW(label, g_fmtStatus.Get()) + 22;
+        const D2D1_RECT_F b = D2D1::RectF(bx - w, by + 5, bx, bb - 5);
+        Round(b, 6, isHover(k) && on ? 0x3A3A44 : cTop);
+        Color(on ? cText : cFaint);
+        Text(label, g_fmtCenter.Get(), b.left, b.top, b.right, b.bottom);
+        if (on) g_dd.hits.push_back({b, k});
+        bx = b.left - 6;
+    };
+    button(DdK::Next, L"Next  ↓", n > 0);
+    button(DdK::Prev, L"↑  Previous", n > 0);
+    if (n) {
+        const int at = DdDiffAt();
+        const bool on = at >= 0 && g_dd.diffs[at] == g_dd.cur;
+        const std::wstring where = (on ? Thousands(at + 1) + L" of " : L"") + Thousands(n);
+        const float w = MeasureW(where, g_fmtStatus.Get());
+        Color(cDim);
+        Text(where, g_fmtStatusR.Get(), bx - w - 8, by, bx - 4, bb);
+        bx -= w + 18;
+    }
+    if (g_dd.r) button(DdK::All, g_dd.all ? L"Fold what is the same" : L"Show everything");
+    HLine(x0, R, bb);
+
+    const D2D1_RECT_F& body = g_dd.body;
+    const float ovW = 12;
+    g_dd.overview = D2D1::RectF(body.right - ovW, body.top, body.right, body.bottom);
+    const float L = body.left, Rt = body.right - ovW - 2, colW = std::floor((Rt - L - kDdGutter) / 2);
+    g_dd.mid = L + colW + kDdGutter / 2;
+    if (!g_dd.r) {
+        Color(cDim);
+        Text(DdStatus(), g_fmtCenter.Get(), L, body.top + 30, Rt, body.top + 60);
+    } else {
+        const DdResult& res = *g_dd.r;
+        const int detail = colW >= 430 ? 2 : colW >= 300 ? 1 : 0;  // the date and the size, the date, or only the name
+        g_rt->PushAxisAlignedClip(body, D2D1_ANTIALIAS_MODE_ALIASED);
+        const int first = std::max(0, static_cast<int>(g_dd.scroll / kDdRow));
+        for (int i = first; i < static_cast<int>(g_dd.show.size()); ++i) {
+            const float y = body.top + i * kDdRow - g_dd.scroll;
+            if (y >= body.bottom) break;
+            const DdShow& sh = g_dd.show[i];
+            if (sh.fold) {
+                const D2D1_RECT_F fr = D2D1::RectF(L, y, Rt, y + kDdRow);
+                Fill(fr, 0xFFFFFF, isHover(DdK::Fold, i) ? 0.07f : 0.025f);
+                Color(isHover(DdK::Fold, i) ? cDim : cFaint);
+                Text(L"⋯   " + Thousands(sh.fold) + L" the same   ⋯", g_fmtCenter.Get(), L, y, Rt, y + kDdRow);
+                g_dd.hits.push_back({fr, DdK::Fold, i});
+                continue;
+            }
+            const DdRow& r = res.rows[sh.row];
+            const Entry* e[2] = {DdEntry(r, 0), DdEntry(r, 1)};
+            const bool differ = r.state != DdSame, both = e[0] && e[1], files = both && !e[0]->isDir() && !e[1]->isDir();
+            const int64_t dt = both ? e[0]->mtime - e[1]->mtime : 0;
+            const bool sizeDiffers = files && e[0]->size != e[1]->size, dateDiffers = files && differ && (dt > kCmpSameTime || dt < -kCmpSameTime);
+            const bool selected = g_dd.sel[sh.row] != 0;
+            for (int s = 0; s < 2; ++s) {
+                const float cx = s ? L + colW + kDdGutter : L, cr = cx + colW;
+                const UINT32 tint = s ? kDfGreen : kDfRed;
+                const D2D1_RECT_F cell = D2D1::RectF(cx, y, cr, y + kDdRow);
+                if (differ && !e[s]) Fill(cell, 0x000000, 0.22f);  // it isn't on this side
+                else if (differ) Fill(cell, tint, both ? 0.09f : 0.16f);
+                if (selected) Fill(cell, 0xFFFFFF, s == g_dd.side ? 0.09f : 0.04f);
+                if (selected && s == g_dd.side) Fill(D2D1::RectF(cx, y, cx + 3, y + kDdRow), cAccent);
+                if (sh.row == g_dd.cur && s == g_dd.side) {
+                    Color(cAccent, 0.9f);
+                    g_rt->DrawRectangle(D2D1::RectF(cx + 0.5f, y + 0.5f, cr - 0.5f, y + kDdRow - 0.5f), g_brush.Get(), 1.f);
+                }
+                if (!e[s]) continue;
+                const wchar_t* name = r.l[s]->name(*e[s]);
+                const float ix = cx + 12 + r.depth * 16.f, a = differ ? 1.f : 0.75f;
+                DrawIcon(Join(r.l[s]->path, name), e[s], name, e[s]->nameLen, false, ix, y + (kDdRow - kIcon) / 2, a);
+                const float sizeR = cr - 12, sizeL = sizeR - 62, dateR = detail == 2 ? sizeL - 14 : sizeR, dateL = dateR - 102;
+                const float nameR = (detail == 0 ? cr : dateL) - 12;
+                Color(differ ? cText : cDim);
+                Text(name, e[s]->nameLen, g_fmtName.Get(), ix + 24, y, nameR, y + kDdRow);
+                wchar_t buf[64];
+                if (detail >= 1 && e[s]->mtime) {
+                    if (dateDiffers) Round(D2D1::RectF(dateL - 5, y + 3, dateR + 5, y + kDdRow - 3), 3, tint, 0.30f);
+                    FormatDate(e[s]->mtime, buf, 64);
+                    Color(dateDiffers ? cText : differ ? cDim : cFaint);
+                    Text(buf, g_fmtRight.Get(), dateL, y, dateR, y + kDdRow);
+                }
+                if (detail == 2 && !e[s]->isDir()) {
+                    if (sizeDiffers) Round(D2D1::RectF(sizeL - 5, y + 3, sizeR + 5, y + kDdRow - 3), 3, tint, 0.30f);
+                    FormatSize(e[s]->size, buf, 64);
+                    Color(sizeDiffers ? cText : differ ? cDim : cFaint);
+                    Text(buf, g_fmtRight.Get(), sizeL, y, sizeR, y + kDdRow);
+                }
+            }
+            // between the two: from the newer one to the older one
+            if (r.state == DdNewerA || r.state == DdNewerB) {
+                Color(cAccent);
+                Glyph(r.state == DdNewerA ? gFwd : gBack, g_fmtCap.Get(), g_dd.mid - 12, y, g_dd.mid + 12, y + kDdRow);
+            } else if (r.state == DdDiffer) {
+                Color(kDfAmber);
+                Text(L"≠", g_fmtCenter.Get(), g_dd.mid - 12, y, g_dd.mid + 12, y + kDdRow);
+            }
+        }
+        g_rt->PopAxisAlignedClip();
+        Fill(D2D1::RectF(L + colW, body.top, L + colW + 1, body.bottom), cBorder);
+        Fill(D2D1::RectF(L + colW + kDdGutter - 1, body.top, L + colW + kDdGutter, body.bottom), cBorder);
+        // the overview: where the differences are in the whole, and what is on screen
+        const D2D1_RECT_F& ov = g_dd.overview;
+        const float total = std::max({1.f, static_cast<float>(g_dd.show.size()), std::floor(g_dd.viewH / kDdRow)});  // short ones: as on screen
+        const float oh = ov.bottom - ov.top;
+        Fill(ov, 0xFFFFFF, 0.03f);
+        auto shade = [&](size_t i) -> UINT32 {  // 0: nothing to mark
+            const int st = g_dd.show[i].fold ? DdSame : res.rows[g_dd.show[i].row].state;
+            return st == DdSame ? 0 : st == DdOnlyA ? kDfRed : st == DdOnlyB ? kDfGreen : kDfAmber;
+        };
+        for (size_t i = 0; i < g_dd.show.size();) {
+            const UINT32 c = shade(i);
+            if (!c) {
+                ++i;
+                continue;
+            }
+            size_t j = i;
+            while (j < g_dd.show.size() && shade(j) == c) ++j;
+            const float t0 = ov.top + oh * i / total, t1 = std::max(t0 + 2, ov.top + oh * j / total);
+            Fill(D2D1::RectF(ov.left + 2, t0, ov.right - 2, t1), c, 0.85f);
+            i = j;
+        }
+        const float vt = ov.top + oh * (g_dd.scroll / kDdRow) / total, vb = std::min(ov.bottom, vt + oh * (g_dd.viewH / kDdRow) / total);
+        Fill(D2D1::RectF(ov.left, vt, ov.right, std::max(vt + 4, vb)), 0xFFFFFF, 0.10f);
+        g_dd.hits.push_back({ov, DdK::Overview});
+    }
+    HLine(x0, R, B - 26);
+    Color(S.message.empty() ? cFaint : cText);
+    Text(!S.message.empty() ? S.message
+                            : ShortcutFor(Cmd::CopyToOther) + L" copies what is selected to the other side, " + ShortcutFor(Cmd::MoveToOther) +
+                                  L" moves it   ·   ← → pick the side   ·   Enter compares the two files   ·   F7 next difference   ·   A shows everything   ·   Esc closes",
+         g_fmtStatus.Get(), x0 + 18, B - 25, R - 18, B - 2);
+}
+
+// ---- what it does
+// F5 / F6: what is selected, from the cursor's side to the same place on the other.
+void DdTransfer(bool move) {
+    if (!g_dd.r) return;
+    const int s = g_dd.side;
     std::vector<std::wstring> files, dests;
-    int nowhere = 0;
-    for (int i = 0; i < RowCount(t); ++i) {
-        if (!IsSel(t, i) || IsHeader(t, i)) continue;
-        const std::wstring path = RowPath(t, i), there = CmpPartner(st, path);
-        if (there.empty()) continue;
-        const std::wstring dir = ParentOf(there);
-        if (!PathExists(dir)) {
-            ++nowhere;
+    int missing = 0;
+    for (size_t i = 0; i < g_dd.r->rows.size(); ++i) {
+        const DdRow& r = g_dd.r->rows[i];
+        if (!g_dd.sel[i] || r.state == DdSame) continue;
+        if (!DdEntry(r, s)) {
+            ++missing;
             continue;
         }
-        files.push_back(path);
-        dests.push_back(dir);
+        files.push_back(DdPath(r, s));
+        dests.push_back(r.l[1 - s]->path);
     }
     if (files.empty()) {
-        S.message = nowhere ? L"Its folder isn't on the other side anymore" : L"Select what to copy to the other side";
+        S.message = missing ? std::wstring(missing == 1 ? L"It isn't" : L"They aren't") + L" on this side: ← → pick the side to copy from" : L"Select a difference to copy it to the other side";
         Invalidate();
-        return true;
+        return;
     }
     if (FileOp(move ? FileOpKind::Move : FileOpKind::Copy, files, dests[0], 0, nullptr, nullptr, &dests)) {
         const int n = static_cast<int>(files.size());
-        S.message = (move ? L"Moved " : L"Copied ") + (n == 1 ? LeafOf(files[0]) : Thousands(n) + L" items") + L" to the other side";
-        if (nowhere) S.message += L"; " + Thousands(nowhere) + L" had no folder to go to there";
+        S.message = (move ? L"Moved " : L"Copied ") + (n == 1 ? LeafOf(files[0]) : Thousands(n) + L" items") + L" to " + g_dd.label[1 - s];
+        if (missing) S.message += L"; " + Thousands(missing) + (missing == 1 ? L" isn't" : L" aren't") + L" on this side";
     }
-    CmpSoon(t);
+    DdSoon();
     Invalidate();
-    return true;
 }
 
-// Ctrl+K → "compare" on one row of a comparison: that file with the one on the other side.
-bool CmpComparePartner(Tab& t) {
-    if (!t.cmp || !t.cmpState || t.sel < 0 || t.sel >= RowCount(t) || IsHeader(t, t.sel)) return false;
-    int side = -1;
-    const std::wstring path = RowPath(t, t.sel), there = CmpPartner(*t.cmpState, path, &side);
-    if (there.empty()) return false;
-    const DWORD a = GetFileAttributesW(ToExtendedPath(there).c_str());
-    if (a == INVALID_FILE_ATTRIBUTES) S.message = LeafOf(path) + L" is only on one side: there's nothing to compare it with";
-    else if (EntryAt(t, t.sel).isDir() || (a & FILE_ATTRIBUTE_DIRECTORY)) S.message = L"A folder: open it, or compare its files one by one";
-    else CompareFiles(side == 0 ? path : there, side == 0 ? there : path);
+// Enter: the cursor's file with its other copy.
+void DdEnter() {
+    if (!g_dd.r || g_dd.cur < 0) return;
+    const DdRow& r = g_dd.r->rows[g_dd.cur];
+    const Entry *a = DdEntry(r, 0), *b = DdEntry(r, 1);
+    const std::wstring name = LeafOf(DdPath(r, a ? 0 : 1));
+    if (!a || !b) S.message = name + L" is only on one side: " + ShortcutFor(Cmd::CopyToOther) + L" copies it to the other";
+    else if (a->isDir() && b->isDir()) S.message = name + L" is a folder on both sides: what differs in it is below";
+    else if (a->isDir() || b->isDir()) S.message = name + L" is a folder on one side and a file on the other";
+    else CompareFiles(DdPath(r, 0), DdPath(r, 1));
     Invalidate();
-    return true;
+}
+
+void DdToggleAll() {
+    if (!g_dd.r) return;
+    // the row at the top of the view stays there
+    const int top = std::clamp(static_cast<int>(g_dd.scroll / kDdRow), 0, std::max(0, static_cast<int>(g_dd.show.size()) - 1));
+    const int row = g_dd.show.empty() ? 0 : g_dd.show[top].row;
+    g_dd.all = !g_dd.all;
+    DdBuild();
+    for (size_t i = 0; i < g_dd.show.size(); ++i)
+        if (g_dd.show[i].row >= row || (g_dd.show[i].fold && g_dd.show[i].row + g_dd.show[i].fold > row)) {
+            g_dd.scroll = i * kDdRow;
+            break;
+        }
+    if (g_dd.cur >= 0 && g_dd.rowAt[g_dd.cur] < 0) g_dd.cur = g_dd.anchor = -1;
+    for (size_t i = 0; i < g_dd.sel.size(); ++i)
+        if (g_dd.rowAt[i] < 0) g_dd.sel[i] = 0;
+    DdClamp();
+    Invalidate();
+}
+
+// The cursor up or down by so many lines, over the folds.
+void DdMove(int by, bool extend) {
+    if (!g_dd.r || g_dd.show.empty()) return;
+    const int n = static_cast<int>(g_dd.show.size()), dir = by < 0 ? -1 : 1;
+    const int at = g_dd.cur >= 0 && g_dd.rowAt[g_dd.cur] >= 0 ? g_dd.rowAt[g_dd.cur] : std::clamp(static_cast<int>(g_dd.scroll / kDdRow), 0, n - 1) - dir;
+    int to = -1;
+    for (int left = std::abs(by), i = at + dir; i >= 0 && i < n; i += dir) {
+        if (g_dd.show[i].fold) continue;
+        to = i;
+        if (--left <= 0) break;
+    }
+    if (to >= 0) DdCursor(g_dd.show[to].row, extend);
+}
+
+// ---- mouse and keyboard
+int DdHitAt(float x, float y) {
+    for (int i = static_cast<int>(g_dd.hits.size()) - 1; i >= 0; --i)
+        if (InRect(g_dd.hits[i].r, x, y)) return i;
+    return -1;
+}
+
+void DirDiffMouseMove(float x, float y) {
+    const int h = DdHitAt(x, y);
+    const bool was = g_dd.hovering;
+    const DdHit old = g_dd.hover;
+    g_dd.hovering = h >= 0;
+    g_dd.hover = h >= 0 ? g_dd.hits[h] : DdHit{};
+    if (was != g_dd.hovering || old.k != g_dd.hover.k || old.idx != g_dd.hover.idx) Invalidate();
+}
+
+void DirDiffClick(float x, float y, bool twice) {
+    if (!InRect(g_dd.box, x, y)) return;  // the view fills the window: a click outside it is on the tabs
+    S.message.clear();
+    Invalidate();
+    const int hi = DdHitAt(x, y);
+    if (hi >= 0 && g_dd.hits[hi].k != DdK::None) {
+        const DdHit h = g_dd.hits[hi];
+        switch (h.k) {
+            case DdK::Close: DirDiffClose(); return;
+            case DdK::Next: DdStep(1); return;
+            case DdK::Prev: DdStep(-1); return;
+            case DdK::All: DdToggleAll(); return;
+            case DdK::Fold:
+                if (g_dd.r && h.idx >= 0 && h.idx < static_cast<int>(g_dd.show.size()) && g_dd.show[h.idx].fold) {
+                    g_dd.opened.insert(DdRel(g_dd.r->rows[g_dd.show[h.idx].row]));
+                    DdBuild();
+                    DdClamp();
+                }
+                return;
+            case DdK::Overview: {
+                const float f = (y - g_dd.overview.top) / std::max(1.f, g_dd.overview.bottom - g_dd.overview.top);
+                const float total = std::max(static_cast<float>(g_dd.show.size()), std::floor(g_dd.viewH / kDdRow));
+                g_dd.scroll = f * total * kDdRow - g_dd.viewH / 2;
+                DdClamp();
+                return;
+            }
+            default: return;
+        }
+    }
+    if (!g_dd.r || !InRect(g_dd.body, x, y)) return;
+    const int i = static_cast<int>(std::floor((y - g_dd.body.top + g_dd.scroll) / kDdRow));
+    if (i < 0 || i >= static_cast<int>(g_dd.show.size()) || g_dd.show[i].fold) return;
+    g_dd.side = x >= g_dd.mid ? 1 : 0;
+    DdCursor(g_dd.show[i].row, KeyDown(VK_SHIFT), KeyDown(VK_CONTROL));
+    if (twice) DdEnter();
+}
+
+void DirDiffWheel(int delta) {
+    g_dd.scroll -= delta / 120.f * 3 * kDdRow;
+    DdClamp();
+    Invalidate();
+}
+
+void DirDiffKey(WPARAM vk) {
+    const bool alt = KeyDown(VK_MENU), shift = KeyDown(VK_SHIFT), ctrl = KeyDown(VK_CONTROL);
+    const int page = std::max(1, static_cast<int>(g_dd.viewH / kDdRow) - 2);
+    S.message.clear();
+    Invalidate();
+    const Cmd cmd = FindCommand((ctrl ? ModCtrl : 0) | (shift ? ModShift : 0) | (alt ? ModAlt : 0), static_cast<UINT>(vk));
+    if (cmd == Cmd::CopyToOther || cmd == Cmd::MoveToOther) {
+        DdTransfer(cmd == Cmd::MoveToOther);
+        return;
+    }
+    if (cmd == Cmd::Reload) {
+        DdAgain();
+        return;
+    }
+    switch (vk) {
+        case VK_ESCAPE: DirDiffClose(); break;
+        case VK_F7: DdStep(shift ? -1 : 1); break;
+        case 'N': DdStep(1); break;
+        case 'P': DdStep(-1); break;
+        case 'A':
+            if (!ctrl) {
+                DdToggleAll();
+            } else if (g_dd.r) {  // every difference
+                std::fill(g_dd.sel.begin(), g_dd.sel.end(), uint8_t(0));
+                for (int row : g_dd.diffs) g_dd.sel[row] = 1;
+            }
+            break;
+        case VK_DOWN: alt ? DdStep(1) : DdMove(1, shift); break;
+        case VK_UP: alt ? DdStep(-1) : DdMove(-1, shift); break;
+        case VK_NEXT: DdMove(page, shift); break;
+        case VK_PRIOR: DdMove(-page, shift); break;
+        case VK_HOME: DdMove(-INT_MAX / 2, shift); break;
+        case VK_END: DdMove(INT_MAX / 2, shift); break;
+        case VK_LEFT: g_dd.side = 0; break;
+        case VK_RIGHT: g_dd.side = 1; break;
+        case VK_TAB: g_dd.side = 1 - g_dd.side; break;
+        case VK_RETURN: DdEnter(); break;
+        default: break;
+    }
+}
+
+// For the tests: what the view shows, line by line. > the cursor (and its side), * selected.
+std::wstring DdDump() {
+    if (!g_dd.open) return L"closed";
+    std::wstring out = DdStatus();
+    if (!g_dd.r) return out;
+    const wchar_t* states[DdStates] = {L"=", L"only A", L"only B", L"A newer", L"B newer", L"differ"};
+    auto side = [&](const DdRow& r, int s) -> std::wstring {
+        const Entry* e = DdEntry(r, s);
+        if (!e) return L"—";
+        if (e->isDir()) return L"folder";
+        wchar_t buf[64];
+        FormatSize(e->size, buf, 64);
+        return buf;
+    };
+    for (size_t i = 0; i < g_dd.show.size() && i < 60; ++i) {
+        const DdShow& sh = g_dd.show[i];
+        if (sh.fold) {
+            out += L"\n     [" + std::to_wstring(sh.fold) + L" the same]";
+            continue;
+        }
+        const DdRow& r = g_dd.r->rows[sh.row];
+        out += L"\n " + std::wstring(sh.row == g_dd.cur ? (g_dd.side ? L">B" : L">A") : L"  ") + (g_dd.sel[sh.row] ? L"* " : L"  ") + std::wstring(r.depth * 2, L' ') +
+               LeafOf(DdPath(r, r.e[0] >= 0 ? 0 : 1)) + L" [" + states[r.state] + L"]: " + side(r, 0) + L" | " + side(r, 1);
+    }
+    return out;
 }
 
 // Would "compare" do something with what is selected? (For the right-click menu.)
@@ -615,7 +890,7 @@ bool CompareFits(const Tab& t) {
             dirs += EntryAt(t, i).isDir();
         }
     if (n == 2) return dirs != 1;
-    return n == 1 && (t.cmp || g_split);
+    return n == 1 && g_split;
 }
 
 // ---- Ctrl+K → "compare": what it works on
@@ -623,7 +898,6 @@ bool CompareFits(const Tab& t) {
 // pane's folder (or else the one selected there), and otherwise the two panes' folders, the left one first.
 void CompareCmd() {
     Tab& t = T();
-    if (SelCount(t) <= 1 && CmpComparePartner(t)) return;
     if (IsBin(t.path) || InArchive(t.path)) {
         S.message = InArchive(t.path) ? L"Inside an archive: extract it first to compare" : L"Things in the Recycle Bin can't be compared";
         Invalidate();
@@ -636,7 +910,7 @@ void CompareCmd() {
         const bool da = EntryAt(t, sel[0]).isDir(), db = EntryAt(t, sel[1]).isDir();
         const std::wstring a = RowPath(t, sel[0]), b = RowPath(t, sel[1]);
         if (da != db) S.message = L"One is a folder and the other a file: select two files, or two folders";
-        else if (da) CompareFolders(t, a, b);
+        else if (da) CompareFolders(a, b);
         else if (EntryAt(t, sel[1]).mtime < EntryAt(t, sel[0]).mtime) CompareFiles(b, a);  // the older one on the left
         else CompareFiles(a, b);
         Invalidate();
@@ -671,7 +945,7 @@ void CompareCmd() {
             else CompareFiles(there, here);
             return;
         }
-        CompareFolders(t, PT(0).path, PT(1).path);
+        CompareFolders(PT(0).path, PT(1).path);
         return;
     }
     S.message = L"Select two files or two folders to compare them, or open the other one in the other pane (split view, " + ShortcutFor(Cmd::Split) + L")";

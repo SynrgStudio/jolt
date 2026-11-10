@@ -598,9 +598,6 @@ struct Tab {
     uint64_t dupGen = 0;
     std::vector<DupSet> dupSets;
     std::shared_ptr<Listing> dupHead;  // its groups are the sets' titles
-    // folder comparison (cmpdir.inl): a subfolder search of two folders at once whose rows are what differs
-    bool cmp = false;
-    std::shared_ptr<struct CmpState> cmpState;
     float scroll = 0;
     // grid view: one rect per row in content coordinates (see RowRect), rebuilt when the rows or the width change
     std::vector<D2D1_RECT_F> cells;
@@ -939,9 +936,6 @@ bool FilterPass(const FilterSpec& s, const Entry& e, const wchar_t* name, size_t
 
 void BuildDupRows(Tab& t);  // dups.inl
 std::wstring DupStatus(const Tab& t);
-void BuildCmpRows(Tab& t);  // cmpdir.inl
-std::wstring CmpStatus(const Tab& t);
-std::wstring CmpRelDir(const Tab& t, const std::wstring& dir);
 
 void BuildRows(Tab& t) {
     t.rows.clear();
@@ -950,10 +944,6 @@ void BuildRows(Tab& t) {
     if (!t.list) return;
     if (t.recursive && t.dups) {
         BuildDupRows(t);
-        return;
-    }
-    if (t.recursive && t.cmp) {
-        BuildCmpRows(t);
         return;
     }
     if (t.recursive) {
@@ -3053,35 +3043,6 @@ struct Columns {
     float dx[ColKinds];              // and how far from there it is drawn: sliding to its place, or being dragged
     bool sliding = false;
 };
-
-// A folder comparison shows each row's two sides where the columns are: its date and size in each folder, and between
-// them which way the difference goes (cmpdir.inl).
-constexpr float kCmpMark = 46.f;
-struct CmpCols {
-    float l[2], r[2];  // each side's cell
-    float mid;         // the middle of the mark between them
-    float nameR;       // where the name ends
-    float date;        // how wide the date is in a cell
-    int detail;        // what fits in a cell: 2 date and size, 1 the date, 0 a word, -1 nothing (only the mark)
-};
-CmpCols CmpColsFor(float L, float right) {
-    CmpCols z;
-    // as wide as the columns, but no wider than those start out: one made wide for its bars would push the name away
-    const float room = right - L, date = std::min(g_colW[ColDate], kColDefs[ColDate].def), size = std::min(g_colW[ColSize], kColDefs[ColSize].def);
-    z.date = date;
-    z.detail = room >= 2 * (date + size + 14) + kCmpMark + 250 ? 2 : room >= 2 * date + kCmpMark + 190 ? 1 : room >= 2 * 70 + kCmpMark + 150 ? 0 : -1;
-    const float side = z.detail == 2 ? date + size + 14 : z.detail == 1 ? date : z.detail == 0 ? 70 : 0;
-    z.r[1] = right;
-    z.l[1] = right - side;
-    z.r[0] = z.l[1] - kCmpMark;
-    z.l[0] = z.r[0] - side;
-    z.mid = z.l[1] - kCmpMark / 2;
-    z.nameR = z.l[0] - 18;
-    return z;
-}
-void DrawCmpTitles(const Tab& t, const CmpCols& z, float y0, float y1);
-void DrawCmpSides(const Tab& t, int row, const CmpCols& z, float y, float a, bool onSel);
-
 Columns Cols(int pane) {
     Columns c;
     const PaneX g = PaneGeo(pane);
@@ -3093,8 +3054,8 @@ Columns Cols(int pane) {
     // laid out from the right edge: on a narrow pane, the leftmost ones give way first and the name keeps ~290
     int ks[ColKinds], m = 0;
     float x = c.right, used = 0, ls[ColKinds];
-    const bool millerCols = LayoutOf(PT(pane)) == kMiller, cmp = PT(pane).cmp;  // a comparison: its two sides instead
-    for (size_t i = g_cfg.cols.size(); !millerCols && !cmp && i-- > 0 && m < ColKinds;) {
+    const bool millerCols = LayoutOf(PT(pane)) == kMiller;
+    for (size_t i = g_cfg.cols.size(); !millerCols && i-- > 0 && m < ColKinds;) {
         const int k = g_cfg.cols[i];
         used += g_colW[k] + 18;
         if (g.R - g.L < used + 290) break;
@@ -3108,7 +3069,7 @@ Columns Cols(int pane) {
         c.l[j] = ls[m - 1 - j];
         c.r[j] = c.l[j] + g_colW[c.kind[j]];
     }
-    c.nameR = cmp ? CmpColsFor(c.L, c.right).nameR : m ? c.l[0] - 18 : c.right;
+    c.nameR = m ? c.l[0] - 18 : c.right;
     for (int j = 0; j < m; ++j) {
         c.dx[j] = ColSlide(c.kind[j]);
         c.sliding |= c.dx[j] != 0;
@@ -3274,7 +3235,6 @@ void DrawHeader(int pane) {
         return;
     }
     g_hits.push_back({title(L"Name", 0, c.nameL, c.nameR, false, IsHover(HitKind::Header, pane * 3), false), HitKind::Header, pane * 3});
-    if (PT(pane).cmp) DrawCmpTitles(PT(pane), CmpColsFor(c.L, c.right), y0, y1);  // each side's folder
     // The other titles sort on release and can be dragged to another place (HeadCol: pane * ColKinds + kind).
     // Their hits stay where they end up, even while they slide there.
     int lifted = -1;
@@ -3442,7 +3402,7 @@ void DrawList(int pane, float H) {
         DrawFolderError(t, mL, mR, listTop);
     } else if (t.list && n == 0) {
         Color(cDim);
-        Text(t.dups && !t.dupDone ? L"Looking for duplicates…" : t.cmp && !t.recDone ? L"Comparing…" : t.recursive && !t.recDone ? L"Searching…" : t.dups && t.filter.empty() ? L"No duplicates" : t.cmp && t.filter.empty() ? L"No differences: the two folders are the same" : !t.filter.empty() ? L"No matches" : IsServerPath(t.path) ? L"No shared folders" : L"Empty folder",
+        Text(t.dups && !t.dupDone ? L"Looking for duplicates…" : t.recursive && !t.recDone ? L"Searching…" : t.dups && t.filter.empty() ? L"No duplicates" : !t.filter.empty() ? L"No matches" : IsServerPath(t.path) ? L"No shared folders" : L"Empty folder",
              g_fmtCenter.Get(), mL, listTop, mR, listTop + 80);
         DrawFilterHint(t, mL, mR, listTop + 58);
     } else if (t.list) {
@@ -3593,10 +3553,10 @@ void DrawList(int pane, float H) {
                 afterName += 16;
             }
             if (e.isDir() && !drives && !g_folderNotes.empty()) afterName = DrawFolderNote(full, afterName, nameEnd, y, a, selected && focused);
-            if (flat && row.depth > 0 && (t.cmp || row.l->path.size() > t.path.size())) {
-                std::wstring rel = t.cmp ? CmpRelDir(t, row.l->path) : row.l->path.substr(t.path.size());
+            if (flat && row.depth > 0 && row.l->path.size() > t.path.size()) {
+                std::wstring rel = row.l->path.substr(t.path.size());
                 while (!rel.empty() && rel[0] == L'\\') rel.erase(0, 1);
-                if (!rel.empty() && afterName < nameEnd - 30) {
+                if (afterName < nameEnd - 30) {
                     Color(selected && focused ? 0x9FB3D9 : cFaint, a);
                     Text(rel, g_fmtName.Get(), afterName, y, nameEnd, y + kRow);
                     afterName += MeasureW(rel, g_fmtName.Get()) + 14;
@@ -3635,7 +3595,6 @@ void DrawList(int pane, float H) {
                 Color(faint ? cFaint : selected && focused ? 0xC6D4EE : cDim, a);
                 Text(s, g_fmtRight.Get(), c.l[j] + c.dx[j], y, c.r[j] + c.dx[j], y + kRow);
             }
-            if (t.cmp) DrawCmpSides(t, i, CmpColsFor(c.L, c.right), y, a, selected && focused);
         }
         // thin scrollbar, only when needed
         const float contentH = ContentHeight(t), viewH = listBot - listTop;
@@ -3703,13 +3662,13 @@ void DrawStatus(int pane, float H) {
     float lx = g.TL + kPad + 2;
     if (!t.filter.empty() || t.recursive) {
         // filter box, File Pilot style: magnifier + text + count
-        std::wstring label = t.dups ? L"duplicates:" : t.cmp ? L"differences:" : t.recursive ? L"in subfolders:" : L"";
+        std::wstring label = t.dups ? L"duplicates:" : t.recursive ? L"in subfolders:" : L"";
         float lw = label.empty() ? 0 : MeasureW(label, g_fmtName.Get()) + 6;
         float tw = MeasureW(t.filter, g_fmtName.Get());
         D2D1_RECT_F box = D2D1::RectF(lx - 4, y0 + 3, lx + 30 + lw + tw + 12, H - 3);
         Round(box, 5, cAccent, 0.18f);
         Color(cAccent);
-        Glyph(t.dups ? 0xE8C8 : t.cmp ? 0xE8AB : t.recursive ? 0xE8B7 : 0xE721, g_fmtIconSm.Get(), box.left + 4, box.top, box.left + 24, box.bottom);
+        Glyph(t.dups ? 0xE8C8 : t.recursive ? 0xE8B7 : 0xE721, g_fmtIconSm.Get(), box.left + 4, box.top, box.left + 24, box.bottom);
         if (!label.empty()) {
             Color(0x9FB3D9);
             Text(label, g_fmtName.Get(), box.left + 26, box.top, box.right, box.bottom);
@@ -3721,8 +3680,6 @@ void DrawStatus(int pane, float H) {
         const std::wstring close = t.nearRows ? L", " + Thousands(t.nearRows) + L" close" : L"";
         if (t.dups) {
             left = DupStatus(t);
-        } else if (t.cmp) {
-            left = CmpStatus(t);
         } else if (t.recursive) {
             left = (t.filter.empty() ? Thousands(n) + L" items" : Thousands(n) + L" matches" + close) + L" in " +
                    Thousands(t.recDirs) + (t.recDirs == 1 ? L" folder" : L" folders") +
@@ -3774,6 +3731,7 @@ void DrawAttrs(float W, float H);         // attrs.inl
 void DrawInUse(float W, float H);         // inuse.inl
 void DrawHash(float W, float H);          // hash.inl
 void DrawDiff(float W, float H);          // diff.inl
+void DrawDirDiff(float W, float H);       // cmpdir.inl
 
 // Milliseconds since the process started (includes loading the executable).
 double MsSinceProcessStart() {
@@ -3852,7 +3810,8 @@ void Render() {
     DrawAttrs(W, H);
     DrawInUse(W, H);
     DrawHash(W, H);
-    DrawDiff(W, H);
+    DrawDirDiff(W, H);
+    DrawDiff(W, H);  // over it: two of its files, compared
     if (g_rt->EndDraw() == D2DERR_RECREATE_TARGET) ReleaseTarget();
     if (g_firstFrameMs == 0) g_firstFrameMs = MsSinceProcessStart();
 
@@ -5308,6 +5267,31 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return TRUE;
         }
     }
+    // comparing two folders: a view over everything
+    if (g_dd.open) {
+        if (msg == WM_KEYDOWN || (msg == WM_SYSKEYDOWN && wp != VK_F4)) {
+            DirDiffKey(wp);
+            return 0;
+        }
+        if (msg == WM_CHAR || msg == WM_SYSCHAR) return 0;
+        if (msg == WM_MOUSEMOVE) {
+            DirDiffMouseMove(DipX(lp), DipY(lp));
+            return 0;
+        }
+        if (msg == WM_LBUTTONDOWN || msg == WM_LBUTTONDBLCLK) {
+            DirDiffClick(DipX(lp), DipY(lp), msg == WM_LBUTTONDBLCLK);
+            return 0;
+        }
+        if (msg == WM_MOUSEWHEEL) {
+            DirDiffWheel(GET_WHEEL_DELTA_WPARAM(wp));
+            return 0;
+        }
+        if (msg == WM_LBUTTONUP || msg == WM_RBUTTONDOWN || msg == WM_RBUTTONUP || msg == WM_MBUTTONDOWN) return 0;
+        if (msg == WM_SETCURSOR && LOWORD(lp) == HTCLIENT) {
+            SetCursor(LoadCursorW(nullptr, g_dd.hovering && g_dd.hover.k != DdK::Overview ? IDC_HAND : IDC_ARROW));
+            return TRUE;
+        }
+    }
     // checksums: a panel over everything
     if (g_hs.open) {
         if (msg == WM_KEYDOWN || (msg == WM_SYSKEYDOWN && wp != VK_F4)) {
@@ -5561,6 +5545,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case WM_ACTIVATE:
             if (LOWORD(wp) == WA_INACTIVE) PopupClose();
             else RecRevalidateShown();  // something may have been done to the results elsewhere
+            if (LOWORD(wp) != WA_INACTIVE) DdActivated();  // and to the two folders being compared
             Invalidate();
             break;
         case WM_PAINT: {
@@ -5627,7 +5612,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             DiffApply(wp, lp);
             return 0;
         case WM_APP_CMP:
-            CmpApply(wp, lp);
+            DdApply(wp, lp);
             return 0;
         case WM_APP_DUP:
             DupApply(wp, lp);
@@ -5705,7 +5690,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (wp == kTimerSpring) SpringFire();
             if (wp == kTimerHint) HintStart();
             if (wp == kTimerHashCopied) Invalidate();
-            if (wp == kTimerCmp) CmpTimer();
+            if (wp == kTimerCmp) DdTimer();
             if (wp == kTimerUpdate) UpdTimer();
             if (wp == kTimerTest) {
                 if (g_testBlocking) SetTimer(hwnd, kTimerTest, 30, nullptr);  // a step is still waiting

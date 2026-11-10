@@ -267,9 +267,7 @@ void GroupInFolder() {
 }
 
 // F5 / F6 with split view: copy / move the selection to the other pane's folder.
-bool CmpTransfer(bool move);  // cmpdir.inl
 void TransferToOther(bool move) {
-    if (CmpTransfer(move)) return;  // in a folder comparison: to the same place on the other side
     if (!g_split) {
         S.message = L"Open split view to copy or move to the other pane";
         Invalidate();

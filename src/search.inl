@@ -48,8 +48,6 @@ void RecThread(std::wstring root, uint64_t gen, bool showHidden, SortBy by, bool
 
 void DupStart(Tab& t);  // dups.inl
 extern std::atomic<uint64_t> g_dupActive;
-void CmpStop(Tab& t);  // cmpdir.inl
-bool CmpTake(Tab& t, const std::shared_ptr<const Listing>& l);
 
 // dups: look for duplicate files instead (dups.inl)
 void StartRecursive(Tab& t, bool dups = false) {
@@ -62,7 +60,6 @@ void StartRecursive(Tab& t, bool dups = false) {
     for (auto& tp : g_tabs)
         if (tp->recursive && tp->recGen != gen) tp->recDone = true;  // the previous one stays as it is
     Place p = SavePlace(t);
-    CmpStop(t);
     t.recursive = true;
     t.recDone = false;
     t.recDirs = 0;
@@ -87,7 +84,6 @@ void StopRecursive(Tab& t, bool rebuild) {
     if (rebuild) p = SavePlace(t);
     t.recursive = false;
     t.dups = t.dupHashing = t.dupDone = false;
-    CmpStop(t);
     t.filter.clear();
     if (rebuild) {
         // what was selected may be in a subfolder: it's lost, unless it's here
@@ -152,7 +148,6 @@ std::vector<std::shared_ptr<const Listing>>::iterator RecFind(Tab& t, const std:
 // A folder Jolt read again (after a delete, a move, a rename...) replaces its old listing in the results.
 // Subfolders that appeared are searched too, and the ones that are gone take what they held with them.
 bool RecTake(Tab& t, const std::shared_ptr<const Listing>& l) {
-    if (t.cmp) return CmpTake(t, l);  // two folders: their own rules
     const std::wstring k = Key(l->path), root = Key(t.path);
     if (!RecUnder(k, root) || IsVirtual(l->path)) return false;
     auto at = t.recKeys.count(k) ? RecFind(t, l->path) : t.rec.end();
@@ -262,7 +257,7 @@ bool HintPlainWords(const FilterSpec& s) {
 
 // Is the tab showing "No matches" for its filter (in the folder, or after a subfolder search that has ended)?
 bool HintApplies(const Tab& t) {
-    return t.list && !t.list->error && !t.loading && !t.filter.empty() && RowCount(t) == 0 && !t.dups && !t.cmp && (!t.recursive || t.recDone);
+    return t.list && !t.list->error && !t.loading && !t.filter.empty() && RowCount(t) == 0 && !t.dups && (!t.recursive || t.recDone);
 }
 
 void HintPost(uint64_t gen, bool drives, uint64_t count, bool capped) {
