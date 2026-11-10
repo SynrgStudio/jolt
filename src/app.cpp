@@ -569,6 +569,7 @@ struct Tab {
     mutable std::wstring millerFor;                  // the path millerChain was made for
     mutable std::vector<std::wstring> millerChain;   // from the top down to path
     std::wstring pendingSelect;  // name (in the folder) or full path to select when it appears
+    std::vector<std::wstring> pendingMore;  // and these too, when it does (what landed along with it)
     int sel = 0;                 // cursor
     int anchor = 0;              // start of the Shift range
     std::vector<uint8_t> selMask;  // parallel to rows
@@ -1353,10 +1354,15 @@ void Rebuild(Tab& t, const Place* keep, const std::wstring& prefer) {
     BuildRows(t);
     const int n = RowCount(t);
     int idx = -1;
+    bool landed = false;  // pendingSelect is here now: it is what was just put here
     if (!t.pendingSelect.empty()) {
         idx = FindRow(t, t.pendingSelect);
+        landed = idx >= 0;
         if (idx >= 0 || !keep) t.pendingSelect.clear();
     }
+    std::vector<std::wstring> more;
+    if (landed) more.swap(t.pendingMore);
+    else if (t.pendingSelect.empty()) t.pendingMore.clear();
     if (idx < 0 && keep && !keep->cur.empty() && !t.recursive) {
         // if the item is gone (e.g. its folder was collapsed), the nearest visible ancestor
         for (std::wstring p = keep->cur; idx < 0 && !p.empty() && Key(p) != Key(t.path); p = ParentOf(p)) {
@@ -1383,10 +1389,16 @@ void Rebuild(Tab& t, const Place* keep, const std::wstring& prefer) {
     t.anchor = t.sel;
     if (n > 0) t.selMask[t.sel] = 1;
     if (!keep) t.implicitSel = true;
-    if (keep && keep->sel.size() > 1) {
+    if (keep && keep->sel.size() > 1 && !landed) {
         std::unordered_set<std::wstring> ks(keep->sel.begin(), keep->sel.end());
         for (int i = 0; i < n; ++i)
             if (ks.count(RowKey(t, i))) t.selMask[i] = 1;
+    }
+    if (landed) {  // all of what landed selected, and the cursor in view (not where the old one was on screen)
+        for (const std::wstring& m : more)
+            if (const int i = FindRow(t, m); i >= 0) t.selMask[i] = 1;
+        t.implicitSel = false;
+        EnsureVisible(t);
     }
 }
 
@@ -1396,6 +1408,33 @@ void ShowListing(Tab& t, std::shared_ptr<const Listing> l, const std::wstring& p
     t.list = Prepared(std::move(l));
     t.loading = false;
     Rebuild(t, keepPlace ? &p : nullptr, prefer);
+}
+
+// Something just landed in dir (dropped, copied, moved, extracted): a tab showing dir selects all of it, the cursor on
+// the first and scrolled into view, as soon as it shows up; a tab showing the folder above selects dir itself (it went
+// in there).
+void SelectLanded(const std::wstring& dir, const std::vector<std::wstring>& names) {
+    if (dir.empty()) return;
+    const std::wstring up = ParentOf(dir);
+    for (auto& tp : g_tabs) {
+        Tab& t = *tp;
+        if (t.recursive) continue;
+        if (Key(t.path) == Key(dir) && !names.empty()) {
+            t.pendingSelect = names[0];
+            t.pendingMore.assign(names.begin() + 1, names.end());
+        } else if (!up.empty() && Key(t.path) == Key(up)) {
+            t.pendingSelect = LeafOf(dir);
+            t.pendingMore.clear();
+        } else {
+            continue;
+        }
+        if (t.list) {  // maybe already there (a move on the same drive is instant)
+            Place p = SavePlace(t);
+            Rebuild(t, &p, L"");
+        }
+    }
+    Enqueue(dir, JobKind::Revalidate);
+    Invalidate();
 }
 
 std::wstring TabTitle(const Tab& t) {
@@ -5515,6 +5554,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (wp == kTimerPreview) PreviewLoad();
             if (wp == kTimerMedia) MediaTick();
             if (wp == kTimerHold) PreviewFloatShow();
+            if (wp == kTimerSpring) SpringFire();
             if (wp == kTimerTest) {
                 if (g_testBlocking) SetTimer(hwnd, kTimerTest, 30, nullptr);  // a step is still waiting
                 else TestRunStep();
