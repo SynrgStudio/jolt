@@ -13,7 +13,7 @@ enum class Cmd {
     Install, Quit, RenameMany, FolderSiblings, ViewList, ViewGrid, ViewColumns, ViewBigger, ViewSmaller, Tag, FolderColor, Zen, SizeBars, PreviewWrap, PreviewMarkdown, PreviewPlay, PreviewRotate, PreviewRotateLeft, PreviewZoom, PreviewZoomIn,
     PreviewZoomOut, PreviewChecker, PreviewCopyImage, Compress, Compress7z, Extract, ExtractTo, ArchiveStop, CheckUpdates, UpdateJolt,
     FindDuplicates, SelectExtraCopies, SelectPattern, SelectSameExtension, InvertSelection, Settings, Checkboxes, NewFromTemplate, CopyTo, MoveTo, Attributes, InUse, Unblock,
-    Compare, Checksums, DeleteEmptyFolders, Flatten,
+    Compare, Checksums, DeleteEmptyFolders, Flatten, DiskUsage,
     CustomFirst = 1000  // + index into g_cfg.custom: the user's own commands
 };
 inline bool IsCustom(Cmd c) { return static_cast<int>(c) >= static_cast<int>(Cmd::CustomFirst); }
@@ -148,6 +148,7 @@ const CmdDef kCommands[] = {
     {L"compare", Cmd::Compare, L"", L"compare two files or two folders: the two selected, or what is in each pane of the split view"},
     {L"checksums", Cmd::Checksums, L"", L"checksums of the selected files (MD5, SHA-1, SHA-256), to copy them or check a copied one"},
     {L"folder_sizes", Cmd::FolderSizes, L"Alt+R", L"calculate folder sizes"},
+    {L"disk_usage", Cmd::DiskUsage, L"", L"what takes the space here: the folders by size, biggest first, to go down into"},
     {L"show_folders", Cmd::ShowFolders, L"", L"show or hide folders (toggle folders)"},
     {L"show_files", Cmd::ShowFiles, L"", L"show or hide files (toggle files)"},
     {L"show_hidden", Cmd::ShowHidden, L"Ctrl+H", L"show or hide hidden files (toggle hidden files)"},

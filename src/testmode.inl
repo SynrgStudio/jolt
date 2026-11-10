@@ -689,6 +689,9 @@ void TestRunStep() {
                         out += L"\n  fold @" + std::to_wstring(static_cast<int>((h.r.left + h.r.right) / 2)) + L"," + std::to_wstring(static_cast<int>((h.r.top + h.r.bottom) / 2));
                 TestLog(out);
             }
+        } else if (s.cmd == L"diskuse") {  // the disk usage panel: the folder, and its rows by size
+            if (g_du.open) Render();
+            TestLog(L"disk usage: " + DuDump());
         } else if (s.cmd == L"compared") {  // the comparison of two folders: what it found, and the lines it shows
             if (g_dd.open) Render();
             TestLog(L"compared: " + DdDump());
