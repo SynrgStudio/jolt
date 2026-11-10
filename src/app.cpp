@@ -942,7 +942,6 @@ std::wstring DupStatus(const Tab& t);
 void BuildCmpRows(Tab& t);  // cmpdir.inl
 std::wstring CmpStatus(const Tab& t);
 std::wstring CmpRelDir(const Tab& t, const std::wstring& dir);
-int CmpShown(const Tab& t, size_t g);
 
 void BuildRows(Tab& t) {
     t.rows.clear();
@@ -3054,6 +3053,35 @@ struct Columns {
     float dx[ColKinds];              // and how far from there it is drawn: sliding to its place, or being dragged
     bool sliding = false;
 };
+
+// A folder comparison shows each row's two sides where the columns are: its date and size in each folder, and between
+// them which way the difference goes (cmpdir.inl).
+constexpr float kCmpMark = 46.f;
+struct CmpCols {
+    float l[2], r[2];  // each side's cell
+    float mid;         // the middle of the mark between them
+    float nameR;       // where the name ends
+    float date;        // how wide the date is in a cell
+    int detail;        // what fits in a cell: 2 date and size, 1 the date, 0 a word, -1 nothing (only the mark)
+};
+CmpCols CmpColsFor(float L, float right) {
+    CmpCols z;
+    // as wide as the columns, but no wider than those start out: one made wide for its bars would push the name away
+    const float room = right - L, date = std::min(g_colW[ColDate], kColDefs[ColDate].def), size = std::min(g_colW[ColSize], kColDefs[ColSize].def);
+    z.date = date;
+    z.detail = room >= 2 * (date + size + 14) + kCmpMark + 250 ? 2 : room >= 2 * date + kCmpMark + 190 ? 1 : room >= 2 * 70 + kCmpMark + 150 ? 0 : -1;
+    const float side = z.detail == 2 ? date + size + 14 : z.detail == 1 ? date : z.detail == 0 ? 70 : 0;
+    z.r[1] = right;
+    z.l[1] = right - side;
+    z.r[0] = z.l[1] - kCmpMark;
+    z.l[0] = z.r[0] - side;
+    z.mid = z.l[1] - kCmpMark / 2;
+    z.nameR = z.l[0] - 18;
+    return z;
+}
+void DrawCmpTitles(const Tab& t, const CmpCols& z, float y0, float y1);
+void DrawCmpSides(const Tab& t, int row, const CmpCols& z, float y, float a, bool onSel);
+
 Columns Cols(int pane) {
     Columns c;
     const PaneX g = PaneGeo(pane);
@@ -3065,8 +3093,8 @@ Columns Cols(int pane) {
     // laid out from the right edge: on a narrow pane, the leftmost ones give way first and the name keeps ~290
     int ks[ColKinds], m = 0;
     float x = c.right, used = 0, ls[ColKinds];
-    const bool millerCols = LayoutOf(PT(pane)) == kMiller;
-    for (size_t i = g_cfg.cols.size(); !millerCols && i-- > 0 && m < ColKinds;) {
+    const bool millerCols = LayoutOf(PT(pane)) == kMiller, cmp = PT(pane).cmp;  // a comparison: its two sides instead
+    for (size_t i = g_cfg.cols.size(); !millerCols && !cmp && i-- > 0 && m < ColKinds;) {
         const int k = g_cfg.cols[i];
         used += g_colW[k] + 18;
         if (g.R - g.L < used + 290) break;
@@ -3080,7 +3108,7 @@ Columns Cols(int pane) {
         c.l[j] = ls[m - 1 - j];
         c.r[j] = c.l[j] + g_colW[c.kind[j]];
     }
-    c.nameR = m ? c.l[0] - 18 : c.right;
+    c.nameR = cmp ? CmpColsFor(c.L, c.right).nameR : m ? c.l[0] - 18 : c.right;
     for (int j = 0; j < m; ++j) {
         c.dx[j] = ColSlide(c.kind[j]);
         c.sliding |= c.dx[j] != 0;
@@ -3246,6 +3274,7 @@ void DrawHeader(int pane) {
         return;
     }
     g_hits.push_back({title(L"Name", 0, c.nameL, c.nameR, false, IsHover(HitKind::Header, pane * 3), false), HitKind::Header, pane * 3});
+    if (PT(pane).cmp) DrawCmpTitles(PT(pane), CmpColsFor(c.L, c.right), y0, y1);  // each side's folder
     // The other titles sort on release and can be dragged to another place (HeadCol: pane * ColKinds + kind).
     // Their hits stay where they end up, even while they slide there.
     int lifted = -1;
@@ -3454,7 +3483,6 @@ void DrawList(int pane, float H) {
                     const int copies = t.dupSets[-1 - row.e].shown;
                     cnt = copies == 1 ? L"only copy left" : Thousands(copies) + L" copies";
                 }
-                if (t.cmp) cnt = Thousands(CmpShown(t, static_cast<size_t>(-1 - row.e)));
                 float tw = MeasureW(gr.second, g_fmtSection.Get());
                 const bool gfold = GroupFolded(t, row.l, static_cast<size_t>(-1 - row.e));
                 const bool ghov = hoverHeader == i && pane == g_hoverPane;
@@ -3607,6 +3635,7 @@ void DrawList(int pane, float H) {
                 Color(faint ? cFaint : selected && focused ? 0xC6D4EE : cDim, a);
                 Text(s, g_fmtRight.Get(), c.l[j] + c.dx[j], y, c.r[j] + c.dx[j], y + kRow);
             }
+            if (t.cmp) DrawCmpSides(t, i, CmpColsFor(c.L, c.right), y, a, selected && focused);
         }
         // thin scrollbar, only when needed
         const float contentH = ContentHeight(t), viewH = listBot - listTop;

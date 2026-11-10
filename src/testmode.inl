@@ -689,8 +689,10 @@ void TestRunStep() {
                         out += L"\n  fold @" + std::to_wstring(static_cast<int>((h.r.left + h.r.right) / 2)) + L"," + std::to_wstring(static_cast<int>((h.r.top + h.r.bottom) / 2));
                 TestLog(out);
             }
-        } else if (s.cmd == L"compared") {  // a folder comparison: its status line
-            TestLog(L"compared: " + (T().cmp ? CmpStatus(T()) : std::wstring(L"no comparison")));
+        } else if (s.cmd == L"compared") {  // a folder comparison: its status line, and each row's two sides
+            std::wstring out = L"compared: " + (T().cmp ? CmpStatus(T()) : std::wstring(L"no comparison"));
+            for (int i = 0; T().cmp && i < RowCount(T()) && i < 40; ++i) out += L"\n  " + CmpRowText(T(), i);
+            TestLog(out);
         } else if (s.cmd == L"hint") {  // the note under "No matches"
             TestLog(L"hint: filter \"" + g_hint.filter + L"\" started " + std::to_wstring(g_hint.started) + L", subfolders " +
                     (g_hint.sub ? (g_hint.subDone ? std::to_wstring(g_hint.inSub) + (g_hint.capped ? L"+" : L"") : L"…") : L"-") + L", drives " +
@@ -822,10 +824,9 @@ void TestRunStep() {
             for (int i = 0; i < RowCount(T()) && i < 40; ++i) {
                 const Row& r = T().rows[i];
                 std::wstring n = IsHeader(T(), i) ? L"[" + r.l->groups[static_cast<size_t>(-1 - r.e)].second + L"]" : RowName(T(), i);
-                if (T().cmp && T().cmpState && !IsHeader(T(), i)) {  // a comparison: the side, and where it is below it
-                    const int side = CmpSide(*T().cmpState, RowDir(T(), i));
+                if (T().cmp && T().cmpState && !IsHeader(T(), i)) {  // a comparison: the way it goes, and where it is below its side
                     const std::wstring rel = CmpRelDir(T(), RowDir(T(), i));
-                    n = (side == 1 ? L"B:" : L"A:") + (rel.empty() ? n : rel + L"\\" + n);
+                    n = CmpRowMark(T(), i) + L":" + (rel.empty() ? n : rel + L"\\" + n);
                 } else if (T().recursive && !IsHeader(T(), i) && Key(RowDir(T(), i)) != Key(T().path) && RecUnder(Key(RowDir(T(), i)), Key(T().path))) {
                     n = RowPath(T(), i).substr(T().path.size() + (T().path.back() == L'\\' ? 0 : 1));  // results: where it is, below the root
                 }

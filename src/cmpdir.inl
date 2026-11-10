@@ -1,11 +1,13 @@
 // Comparing two folders (Ctrl+K → "compare" with two folders selected, or in split view the two panes' folders; also in
-// the right-click menu). Both are walked with all their subfolders at once, and the tab lists what differs, in groups:
-// what is only on one side (a folder only on one side shows as that folder alone), and the files on both sides that
-// differ, under the side where they are newer. Files with the same size and date count as the same without being read;
-// with the same size and another date they're read, and if the bytes are the same they count as the same too (files
-// only in the cloud aren't read: that would download them). Everything that works on search results works on these
-// rows; F5 and F6 copy and move the selection to the same place on the other side, and Ctrl+K → "compare" on a file
-// that is on both sides compares the two. When something in either folder changes, it compares again.
+// the right-click menu). Both are walked with all their subfolders at once, and the tab lists what differs, one row
+// for each thing, with its two sides where the columns are: its date and size in the first folder, its date and size
+// in the second, a dash where it isn't, and between them an arrow from the side that has it, or has it newer, to the
+// other (≠ when neither is newer). A folder only on one side shows as that folder alone. Files with the same size and
+// date count as the same without being read; with the same size and another date they're read, and if the bytes are
+// the same they count as the same too (files only in the cloud aren't read: that would download them). A row is the
+// item on the side the arrow leaves from, and everything that works on search results works on it; F5 and F6 copy and
+// move it the way the arrow points, and Ctrl+K → "compare" on a file that is on both sides compares the two. When
+// something in either folder changes, it compares again.
 // Included from app.cpp after diff.inl.
 
 constexpr UINT WM_APP_CMP = WM_APP + 24;
@@ -19,6 +21,15 @@ struct CmpItem {
     std::wstring dirKey, name;  // where it is: its folder's key, and its name
     std::wstring rel;           // its path below its side's folder
     int hint = -1;              // its index in the folder's listing last time
+    std::wstring odirKey, oname;  // the same on the other side, when it is there too
+    int ohint = -1;
+};
+
+// What a row's other side is, next to the row itself (which is the side the arrow leaves from).
+struct CmpOther {
+    const Listing* l = nullptr;
+    int e = -1;
+    int group = 0;
 };
 
 // What a running comparison and the tab share: the comparison stops when gen moves on.
@@ -33,9 +44,9 @@ struct CmpState {
     std::shared_ptr<CmpLive> live = std::make_shared<CmpLive>();
     uint64_t gen = 0;
     bool busy = false, again = false, dirty = false;
-    std::vector<CmpItem> items;     // by group, then by path
-    std::shared_ptr<Listing> head;  // its groups are the titles
-    int shown[CmpGroups]{};
+    std::vector<CmpItem> items;   // by folder, then by name
+    std::vector<CmpOther> other;  // one for each row
+    int shown[CmpGroups]{};       // how many rows of each kind
     int same = 0, sameBytes = 0;  // files the same on both sides; of those, the ones with another date and the same bytes
     int failed = 0;               // folders that couldn't be read
 };
@@ -93,12 +104,16 @@ void CmpThread(std::wstring rootA, std::wstring rootB, std::shared_ptr<CmpLive> 
         if (!live->notify.exchange(true)) PostMessageW(g_hwnd, WM_APP_CMP, 0, 0);
     };
     auto shown = [&](const Entry& e) { return showHidden || !(e.attrs & (FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM)); };
-    auto add = [&](int group, const Listing& l, const Entry& e, const std::wstring& rel) {
+    auto add = [&](int group, const Listing& l, const Entry& e, const std::wstring& rel, const Listing* ol = nullptr, const Entry* oe = nullptr) {
         CmpItem it;
         it.group = group;
         it.dirKey = Key(l.path);
         it.name.assign(l.name(e), e.nameLen);
         it.rel = rel.empty() ? it.name : rel + L"\\" + it.name;
+        if (ol) {
+            it.odirKey = Key(ol->path);
+            it.oname.assign(ol->name(*oe), oe->nameLen);
+        }
         out->items.push_back(std::move(it));
     };
     std::deque<std::wstring> q{L""};
@@ -142,8 +157,7 @@ void CmpThread(std::wstring rootA, std::wstring rootB, std::shared_ptr<CmpLive> 
                 continue;  // links to folders: being on both sides is enough
             }
             if (ea.isDir() != eb.isDir()) {  // a folder on one side, a file on the other
-                add(CmpDiffer, *l[0], ea, rel);
-                add(CmpDiffer, *l[1], eb, rel);
+                add(CmpDiffer, *l[0], ea, rel, l[1].get(), &eb);
                 continue;
             }
             const int64_t dt = ea.mtime - eb.mtime;
@@ -166,9 +180,9 @@ void CmpThread(std::wstring rootA, std::wstring rootB, std::shared_ptr<CmpLive> 
                 checks.push_back(std::move(c));
                 continue;
             }
-            if (sameTime) add(CmpDiffer, *l[0], ea, rel);
-            else if (dt > 0) add(CmpNewerA, *l[0], ea, rel);
-            else add(CmpNewerB, *l[1], eb, rel);
+            if (sameTime) add(CmpDiffer, *l[0], ea, rel, l[1].get(), &eb);
+            else if (dt > 0) add(CmpNewerA, *l[0], ea, rel, l[1].get(), &eb);
+            else add(CmpNewerB, *l[1], eb, rel, l[0].get(), &ea);
         }
         for (size_t j = 0; j < l[1]->entries.size(); ++j)
             if (!matched[j] && shown(l[1]->entries[j])) add(CmpOnlyB, *l[1], l[1]->entries[j], rel);
@@ -206,12 +220,17 @@ void CmpThread(std::wstring rootA, std::wstring rootB, std::shared_ptr<CmpLive> 
         it.dirKey = c.dirKey[s];
         it.name = c.name[s];
         it.rel = c.rel.empty() ? c.name[s] : c.rel + L"\\" + c.name[s];
+        it.odirKey = c.dirKey[1 - s];
+        it.oname = c.name[1 - s];
         out->items.push_back(std::move(it));
     }
     if (live->gen != gen) return;
+    // each folder's things together, the top folder's first
     std::stable_sort(out->items.begin(), out->items.end(), [](const CmpItem& a, const CmpItem& b) {
-        if (a.group != b.group) return a.group < b.group;
-        return StrCmpLogicalW(a.rel.c_str(), b.rel.c_str()) < 0;
+        const size_t da = a.rel.size() - a.name.size(), db = b.rel.size() - b.name.size();
+        if (da != db || _wcsnicmp(a.rel.c_str(), b.rel.c_str(), da) != 0)
+            if (const int c = StrCmpLogicalW(a.rel.substr(0, da).c_str(), b.rel.substr(0, db).c_str())) return c < 0;
+        return StrCmpLogicalW(a.name.c_str(), b.name.c_str()) < 0;
     });
     out->dirs = live->dirs;
     CmpOut* raw = out.release();
@@ -313,11 +332,6 @@ void CmpApply(WPARAM wp, LPARAM lp) {
         st.sameBytes = out->sameBytes;
         st.failed = out->failed;
         t.recDirs = out->dirs;
-        auto head = std::make_shared<Listing>();
-        const std::wstring titles[CmpGroups] = {L"Only in " + st.label[0], L"Newer in " + st.label[0], L"Only in " + st.label[1], L"Newer in " + st.label[1],
-                                                L"Different, same date"};
-        for (const std::wstring& title : titles) head->groups.push_back({0, title});
-        st.head = head;
         t.recDone = true;
         Rebuild(t, had ? &p : nullptr, L"");
         if (!had) {
@@ -333,43 +347,135 @@ void CmpApply(WPARAM wp, LPARAM lp) {
     }
 }
 
-// The rows: each group under its title, its items as they are now (one deleted or moved away leaves the list).
-// With a filter, only the items that match it.
+// The rows: one for each thing that differs, as it is now (one deleted or moved away leaves the list), with what it is
+// on the other side next to it. With a filter, only the ones that match it.
 void BuildCmpRows(Tab& t) {
     CmpState* st = t.cmpState.get();
-    if (!st || !st->head || !t.recDone) return;
+    if (!st) return;
+    st->other.clear();
+    for (int& n : st->shown) n = 0;
+    if (!t.recDone) return;
     const bool filtered = !t.filter.empty();
     const FilterSpec spec = filtered ? ParseFilter(t.filter) : FilterSpec{};
     const NearPattern close(spec.fuzzy, g_cfg.typoMin);
-    std::vector<Row> members;
-    size_t i = 0;
-    for (int g = 0; g < CmpGroups; ++g) {
-        members.clear();
-        for (; i < st->items.size() && st->items[i].group == g; ++i) {
-            CmpItem& it = st->items[i];
-            auto at = t.recKeys.find(it.dirKey);
-            if (at == t.recKeys.end()) continue;
-            const Listing* l = at->second;
-            const bool hinted = it.hint >= 0 && it.hint < static_cast<int>(l->entries.size()) && l->entries[it.hint].nameLen == it.name.size() &&
-                                _wcsnicmp(l->name(l->entries[it.hint]), it.name.c_str(), it.name.size()) == 0;
-            const int e = hinted ? it.hint : FindName(*l, it.name);
-            it.hint = e;
-            if (e < 0) continue;
-            if (filtered) {
-                int sc = 0, pc = 0;
-                const Entry& en = l->entries[e];
-                if (!FilterPass(spec, en, l->name(en), en.nameLen, sc, nullptr, close, pc) || pc) continue;
-            }
-            members.push_back({l, e, 1});
+    auto find = [&](const std::wstring& dirKey, const std::wstring& name, int& hint, const Listing*& l) {
+        auto at = t.recKeys.find(dirKey);
+        if (at == t.recKeys.end()) return -1;
+        l = at->second;
+        const bool hinted = hint >= 0 && hint < static_cast<int>(l->entries.size()) && l->entries[hint].nameLen == name.size() &&
+                            _wcsnicmp(l->name(l->entries[hint]), name.c_str(), name.size()) == 0;
+        if (!hinted) hint = FindName(*l, name);
+        return hint;
+    };
+    for (CmpItem& it : st->items) {
+        const Listing* l = nullptr;
+        const int e = find(it.dirKey, it.name, it.hint, l);
+        if (e < 0) continue;
+        if (filtered) {
+            int sc = 0, pc = 0;
+            const Entry& en = l->entries[e];
+            if (!FilterPass(spec, en, l->name(en), en.nameLen, sc, nullptr, close, pc) || pc) continue;
         }
-        st->shown[g] = static_cast<int>(members.size());
-        if (members.empty()) continue;
-        t.rows.push_back({st->head.get(), -1 - g, 0});
-        if (!GroupFolded(t, st->head.get(), static_cast<size_t>(g))) t.rows.insert(t.rows.end(), members.begin(), members.end());
+        CmpOther o;
+        o.group = it.group;
+        if (!it.odirKey.empty()) {
+            o.e = find(it.odirKey, it.oname, it.ohint, o.l);
+            if (o.e < 0) o.l = nullptr;
+        }
+        t.rows.push_back({l, e, 1});
+        st->other.push_back(o);
+        ++st->shown[it.group];
     }
 }
 
-int CmpShown(const Tab& t, size_t g) { return t.cmpState && g < CmpGroups ? t.cmpState->shown[g] : 0; }
+// A row's two sides: the entry on each (null where it isn't), the side the row itself is, and whether neither is newer.
+struct CmpSides {
+    const Entry* e[2] = {nullptr, nullptr};
+    int from = 0;
+    bool differ = false;
+};
+CmpSides CmpSidesOf(const Tab& t, int row) {
+    CmpSides sd;
+    const CmpState* st = t.cmpState.get();
+    if (!st || row < 0 || row >= static_cast<int>(st->other.size()) || row >= static_cast<int>(t.rows.size())) return sd;
+    const CmpOther& o = st->other[row];
+    const Row& r = t.rows[row];
+    sd.from = o.group == CmpOnlyB || o.group == CmpNewerB ? 1 : 0;
+    sd.differ = o.group == CmpDiffer;
+    sd.e[sd.from] = &r.l->entries[r.e];
+    if (o.l && o.e >= 0 && o.e < static_cast<int>(o.l->entries.size())) sd.e[1 - sd.from] = &o.l->entries[o.e];
+    return sd;
+}
+
+// Over the two sides, each folder's name.
+void DrawCmpTitles(const Tab& t, const CmpCols& z, float y0, float y1) {
+    const CmpState* st = t.cmpState.get();
+    if (!st || z.detail < 0) return;
+    Color(cText);
+    for (int s = 0; s < 2; ++s) Text(st->label[s], g_fmtRight.Get(), z.l[s], y0, z.r[s], y1);
+}
+
+// A row's two sides, and between them the way it goes. The side that has it, or has it newer, is the brighter one.
+void DrawCmpSides(const Tab& t, int row, const CmpCols& z, float y, float a, bool onSel) {
+    const CmpSides sd = CmpSidesOf(t, row);
+    if (!sd.e[0] && !sd.e[1]) return;
+    const UINT32 strong = onSel ? 0xFFFFFF : cText, weak = onSel ? 0xC6D4EE : cDim, none = onSel ? 0x9FB3D9 : cFaint;
+    const float date = z.date;
+    wchar_t buf[64];
+    for (int s = 0; z.detail >= 0 && s < 2; ++s) {
+        const Entry* e = sd.e[s];
+        if (!e) {  // not on this side
+            Color(none, a);
+            Text(L"—", g_fmtCenter.Get(), z.l[s], y, z.r[s], y + kRow);
+            continue;
+        }
+        const bool lead = s == sd.from && !sd.differ;
+        if (z.detail == 0) {  // no room for more than a word
+            Color(lead ? strong : weak, a);
+            Text(sd.differ ? (e->isDir() ? L"folder" : sd.e[1 - s] && sd.e[1 - s]->isDir() ? L"file" : L"differs") : !lead ? L"older" : sd.e[1 - s] ? L"newer" : L"only here",
+                 g_fmtRight.Get(), z.l[s], y, z.r[s], y + kRow);
+            continue;
+        }
+        if (e->mtime) {
+            FormatDate(e->mtime, buf, 64);
+            Color(lead ? strong : weak, a);
+            Text(buf, g_fmtRight.Get(), z.l[s], y, z.detail == 2 ? z.l[s] + date : z.r[s], y + kRow);
+        }
+        if (z.detail == 2) {  // what differs with the same date is the size
+            if (e->isDir()) wcscpy_s(buf, L"folder");
+            else FormatSize(e->size, buf, 64);
+            Color(lead || (sd.differ && !e->isDir()) ? strong : weak, a);
+            Text(buf, g_fmtRight.Get(), z.l[s] + date + 14, y, z.r[s], y + kRow);
+        }
+    }
+    if (sd.differ) {
+        Color(onSel ? 0xFFFFFF : kDfAmber, a);
+        Text(L"≠", g_fmtCenter.Get(), z.mid - 14, y, z.mid + 14, y + kRow);
+    } else {
+        Color(onSel ? 0xFFFFFF : cAccent, a);
+        Glyph(sd.from == 0 ? gFwd : gBack, g_fmtCap.Get(), z.mid - 12, y, z.mid + 12, y + kRow);
+    }
+}
+
+// For the tests. Which way a row goes: A+ and B+ only on that side, A>B and A<B newer on A and on B, A!=B neither.
+std::wstring CmpRowMark(const Tab& t, int row) {
+    const CmpSides sd = CmpSidesOf(t, row);
+    if (sd.differ) return L"A!=B";
+    if (!sd.e[1 - sd.from]) return sd.from ? L"B+" : L"A+";
+    return sd.from ? L"A<B" : L"A>B";
+}
+// And what its two sides show: each one's size.
+std::wstring CmpRowText(const Tab& t, int row) {
+    const CmpSides sd = CmpSidesOf(t, row);
+    auto side = [&](int s) -> std::wstring {
+        if (!sd.e[s]) return L"—";
+        if (sd.e[s]->isDir()) return L"folder";
+        wchar_t buf[64];
+        FormatSize(sd.e[s]->size, buf, 64);
+        return buf;
+    };
+    return RowName(t, row) + L": " + side(0) + (sd.differ ? L" ≠ " : sd.from == 0 ? L" → " : L" ← ") + side(1);
+}
 
 // Which side a folder is on: 0, 1, or -1.
 int CmpSide(const CmpState& st, const std::wstring& dir) {
@@ -406,7 +512,7 @@ std::wstring CmpStatus(const Tab& t) {
         const int reading = st->live->reading.load();
         return L"Comparing   ·   " + Thousands(st->live->dirs.load()) + L" folders read" + (reading ? L"   ·   " + Thousands(reading) + L" files to read" : L"") + L"…";
     }
-    int differ = 0;  // each group's count is on its title
+    int differ = 0;
     for (int g = 0; g < CmpGroups; ++g) differ += st->shown[g];
     const std::wstring s = Thousands(differ) + (differ == 1 ? L" difference" : L" differences");
     const std::wstring same = Thousands(st->same) + (st->same == 1 ? L" file" : L" files") + L" the same";
@@ -414,7 +520,7 @@ std::wstring CmpStatus(const Tab& t) {
     const std::wstring failed = st->failed ? L"   ·   " + Thousands(st->failed) + (st->failed == 1 ? L" folder couldn't be read" : L" folders couldn't be read") : L"";
     if (!differ)
         return (t.filter.empty() ? L"No differences: " + same : L"No differences match") + failed + busy + L"   ·   Esc goes back";
-    return s + L"  ·  " + same + failed + busy + L"   ·   " + ShortcutFor(Cmd::CopyToOther) + L" copies to the other side   ·   Esc goes back";
+    return s + L"  ·  " + same + failed + busy + L"   ·   " + ShortcutFor(Cmd::CopyToOther) + L" copies the way the arrow points   ·   Esc goes back";
 }
 
 // A folder Jolt read again: if it is one of the compared ones, it shows as it is now, and the comparison runs again.
@@ -451,7 +557,7 @@ void CmpTimer() {
     Invalidate();
 }
 
-// F5 / F6 in a comparison: each selected item to the same place on the other side.
+// F5 / F6 in a comparison: each selected item to the same place on the other side, the way its arrow points.
 bool CmpTransfer(bool move) {
     Tab& t = T();
     if (!t.cmp || !t.cmpState) return false;
