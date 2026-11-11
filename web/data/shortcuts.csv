@@ -1,0 +1,112 @@
+command,keys,what
+up,"Backspace, Left, Alt+Up",go to the parent folder
+folder_siblings,Alt+Down,"list the folders next to this one, to jump to one"
+enter,Right,enter the highlighted folder (does not open files)
+open,Enter,open the highlighted item (folder or file)
+open_tab,Ctrl+Enter,open the highlighted folder in a new tab
+open_as_admin,Ctrl+Shift+Enter,open the highlighted folder (or this one) in a window as administrator
+back,Alt+Left,back
+forward,Alt+Right,forward
+rename,F2,rename (several selected: the rename panel)
+rename_many,Ctrl+F2,"rename several at once: pattern, find and replace, with a preview"
+delete,"Del, Shift+Del","move to the Recycle Bin (with Shift, permanently)"
+new_folder,Ctrl+Shift+N,new folder
+copy,Ctrl+C,copy
+cut,Ctrl+X,cut
+paste,Ctrl+V,paste
+select_all,Ctrl+A,select all
+select_pattern,Ctrl+Alt+A,"select by pattern: *.png, report*, >10mb, ext:pdf, type:folder, !tmp"
+select_same_extension,Ctrl+Alt+X,select every file with the extension of the highlighted one
+invert_selection,Ctrl+I,invert the selection
+checkboxes,,"selection checkboxes: none, on hover, always (switches between them)"
+favorite,Ctrl+D,add or remove the current folder from favorites
+new_tab,Ctrl+T,new tab
+close_tab,Ctrl+W,close tab
+next_tab,Ctrl+Tab,next tab
+previous_tab,Ctrl+Shift+Tab,previous tab
+path,Ctrl+L,type a path
+sidebar,Ctrl+B,show or hide the sidebar
+zen,F11,"zen mode: only the tabs and the list, without the sidebar and the navigation bar"
+reload,Ctrl+R,reload the folder
+timings,F12,show or hide timings
+context_menu,"Shift+F10, Menu",context menu
+app_menu,Alt+M,Jolt menu
+palette,Ctrl+K,command palette
+settings,"Ctrl+,","settings: options, appearance, shortcuts, colors, commands, tags and favorites"
+go_to,Ctrl+P,"go to a recent, favorite or system folder, or a path"
+search_subfolders,Ctrl+Shift+F,search this folder and all its subfolders
+find_duplicates,Ctrl+Alt+F,find duplicate files in this folder and its subfolders
+select_extra_copies,Ctrl+Shift+A,in duplicates: select every copy but the oldest of each set
+expand,Shift+Right,expand or collapse the highlighted folder (tree)
+collapse,Shift+Left,collapse the folder (or go to the one above in the tree)
+go_to_location,Ctrl+Shift+E,open the folder containing the highlighted item
+preview,Space,show or hide the preview
+preview_wrap,,wrap long lines in the text preview (toggle)
+preview_play,,play or pause the song or video in the preview
+preview_rotate,,turn the image in the preview a quarter to the right (only the view)
+preview_rotate_left,,turn the image in the preview a quarter to the left (only the view)
+preview_zoom,,"the image in the preview at its real size, or fitting (toggle)"
+preview_zoom_in,,zoom in on the image in the preview (also Ctrl+wheel over it)
+preview_zoom_out,,zoom out of the image in the preview
+check_updates,,check for updates: ask GitHub now if there's a new Jolt
+update_jolt,,"update Jolt to the new version, when there is one"
+compress,,compress the selection into a zip next to it
+extract,,extract the selected archives here (into a folder of their own unless they hold one thing)
+extract_to_folder,,extract each selected archive into a folder named after it
+archive_stop,,stop compressing or extracting
+preview_copy_image,,copy the picture in the preview to the clipboard (also a right click on it)
+preview_checker,,light or dark checkerboard behind see-through images (toggle)
+preview_markdown,,"show Markdown rendered in the preview, or as its source (toggle)"
+split,Ctrl+S,split view with two panes
+other_pane,Tab,switch to the other pane
+copy_to_other,F5,copy the selection to the other pane
+move_to_other,F6,move the selection to the other pane
+copy_to,Shift+F5,"copy the selection to a folder picked like in Go to (recents, favorites, drives, a path)"
+move_to,Shift+F6,move the selection to a folder picked like in Go to
+copy_path,Ctrl+Shift+C,copy the path of the selection (or of the folder)
+copy_name,Ctrl+Alt+C,copy the name of the selection (or of the folder)
+copy_path_unix,,copy the path with forward slashes (C:/Users/...)
+new_file,Ctrl+N,new file
+new_from_template,,new file or folder from a template (the files in %APPDATA%\\Jolt\\Templates)
+duplicate,Ctrl+Shift+D,duplicate the selection
+group_in_folder,Ctrl+Shift+G,move the selection into a new folder
+properties,Alt+Enter,Windows properties
+attributes,Shift+Alt+Enter,"attributes and dates of the selection: hidden, read-only, modified, created"
+in_use,,"which programs have the selection open, with a button to close each"
+unblock,,"unblock the selection: drop the ""downloaded from the internet"" mark (Zone.Identifier)"
+folder_sizes,Alt+R,calculate folder sizes
+show_folders,,show or hide folders (toggle folders)
+show_files,,show or hide files (toggle files)
+show_hidden,Ctrl+H,show or hide hidden files (toggle hidden files)
+show_extensions,,show or hide extensions (toggle file extensions)
+size_bars,,"show or hide a bar behind each size, next to the largest in the folder"
+reopen_tab,Ctrl+Shift+T,reopen the last closed tab
+close_others,Ctrl+Alt+W,close the other tabs
+pin_tab,Ctrl+Alt+P,"pin the tab, or unpin it: it stays at the left, small, and doesn't close"
+terminal,Ctrl+Alt+T,"open the terminal in this folder (console, cmd, powershell)"
+open_explorer,Ctrl+Alt+E,open in Windows File Explorer
+real_location,Ctrl+Alt+L,go to the real location of a shortcut
+collapse_groups,,collapse all groups
+expand_groups,,expand all groups
+group_by_day,,group this folder by day
+group_by_type,,group this folder by type
+no_groups,,remove the groups from this folder
+sort_by_type,,sort by type (extension)
+zoom_in,"Ctrl++, Ctrl+Shift++, Ctrl+Num+",enlarge the interface (zoom)
+zoom_out,"Ctrl+-, Ctrl+Num-",shrink the interface (zoom)
+zoom_reset,Ctrl+0,reset the interface to normal size (zoom)
+rows_taller,,more space between rows
+rows_shorter,,less space between rows
+view_list,,show this folder as a list (details)
+view_grid,,show this folder as a grid of thumbnails
+view_columns,Ctrl+Alt+M,"Miller columns in this tab: the folders above to the left, what the highlighted one holds to the right"
+view_bigger,,bigger cells in the grid (Ctrl+Alt+wheel up)
+view_smaller,,"smaller cells, down to the list (Ctrl+Alt+wheel down)"
+tag,,tag the selection: add or remove a tag
+folder_color,,"color the icon of the selected folders, only in Jolt"
+empty_recycle_bin,,empty the Recycle Bin
+restore,Ctrl+Shift+R,in the Recycle Bin: put the selection back where it was
+undo,Ctrl+Z,"undo the last action (rename, move, copy, create, Recycle Bin)"
+redo,"Ctrl+Y, Ctrl+Shift+Z",redo what was undone
+install,,"install Jolt, add it to PATH, make it the default"
+quit,,really quit Jolt

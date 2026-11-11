@@ -1,0 +1,174 @@
+# Jolt's corpus: what is true about it and can be published. The format is synrgs-web's CORPUS.md.
+# Every number here comes from a real run or from the released source; how each one was taken is in
+# notes/measurements.md, and the raw rows are in data/.
+
+[project]
+name = "Jolt"
+version = "0.5.0"
+released = 2026-11-10
+license = "GPL-3.0"
+platforms = ["Windows 10", "Windows 11"]
+arch = "x64"
+language = "C++20 (Win32, Direct2D, DirectWrite, WIC, Windows Shell COM)"
+dependencies = "none; 7-Zip is optional and only called when installed"
+repo = "https://github.com/SynrgStudio/jolt"
+download = "https://github.com/SynrgStudio/jolt/releases/latest/download/jolt.exe"
+releases = "https://github.com/SynrgStudio/jolt/releases"
+site = "https://jolt.synrgs.tech"
+status = "in active development; releases are built by GitHub Actions and are not code-signed yet"
+
+# The PC every measurement below ran on.
+[pc]
+cpu = "AMD Ryzen 7 5800X, 8 cores / 16 threads"
+ram = "32 GB"
+disk = "NVMe SSD (Lexar NM620 512 GB)"
+os = "Windows 11 Pro 10.0.26200"
+
+# ---------------------------------------------------------------- the program itself
+
+[facts.exe_bytes]
+value = 2657280
+unit = "bytes"
+what = "size of jolt.exe 0.5.0 as published: the program and its own installer, one file"
+source = "GitHub release v0.5.0, asset jolt.exe (SHA-256 3316bbff9fc50ae31fa0cc2798658e418dbde74294cc7f6173e5a5e1f44faf08)"
+date = 2026-11-10
+
+[facts.exe_mib]
+value = 2.53
+unit = "MiB"
+what = "the same size in MiB"
+source = "GitHub release v0.5.0, asset jolt.exe"
+date = 2026-11-10
+
+[facts.commands]
+value = 111
+unit = "commands"
+what = "commands in the Ctrl+K palette of 0.5.0; each can be given a shortcut"
+source = "src/config.inl at tag v0.5.0 (kCommands), also data/shortcuts.csv"
+date = 2026-11-10
+
+[facts.undo_steps]
+value = 100
+unit = "steps"
+what = "how many file operations Ctrl+Z keeps: renames, moves, copies, deletes, new items"
+source = "src/undo.inl at tag v0.5.0 (kUndoMax)"
+date = 2026-11-10
+
+# ---------------------------------------------------------------- reading a folder
+# build\bench.exe <folder> <runs>, from the repository's source (bench.cpp and dirlist.cpp are the same as in 0.5.0).
+# Test folders of empty-ish files (0-499 bytes) created just before on the NVMe SSD, so Windows' file cache was warm.
+# These time reading (and sorting) the folder, not the whole time until it shows on screen.
+
+[facts.list_1k_ms]
+value = 0.47
+unit = "ms"
+what = "read a folder of 1,000 files the way Jolt does (NtQueryDirectoryFile, 64 KiB batches); median of 20 runs, file cache warm"
+source = "bench.exe, data/listing-2026-11-10.csv"
+date = 2026-11-10
+
+[facts.list_10k_ms]
+value = 4.3
+unit = "ms"
+what = "read a folder of 10,000 files the way Jolt does; median of 20 runs, file cache warm"
+source = "bench.exe, data/listing-2026-11-10.csv"
+date = 2026-11-10
+
+[facts.list_100k_ms]
+value = 46.7
+unit = "ms"
+what = "read a folder of 100,000 files the way Jolt does; median of 3 runs, file cache warm"
+source = "bench.exe, data/listing-2026-11-10.csv"
+date = 2026-11-10
+
+[facts.list_sort_10k_ms]
+value = 6.9
+unit = "ms"
+what = "read and sort a folder of 10,000 files like File Explorer (natural order, folders first); median of 20 runs, file cache warm"
+source = "bench.exe, data/listing-2026-11-10.csv"
+date = 2026-11-10
+
+[facts.list_sort_100k_ms]
+value = 71.4
+unit = "ms"
+what = "read and sort a folder of 100,000 files like File Explorer (natural order, folders first); median of 3 runs, file cache warm"
+source = "bench.exe, data/listing-2026-11-10.csv"
+date = 2026-11-10
+
+[facts.shell_100k_ms]
+value = 1246.5
+unit = "ms"
+what = "the same 100,000 files read through the Windows Shell (IShellItem: name, date, size), the interface File Explorer builds on; median of 3 runs"
+source = "bench.exe, data/listing-2026-11-10.csv"
+date = 2026-11-10
+
+[facts.vs_shell_100k_x]
+value = 17.5
+unit = "x"
+what = "Shell read of 100,000 files (name, date, size) divided by Jolt's read and sort of them (1246.5 / 71.4 ms)"
+source = "bench.exe, data/listing-2026-11-10.csv"
+date = 2026-11-10
+
+[facts.system32_ms]
+value = 1.7
+unit = "ms"
+what = "read C:\\Windows\\System32 (4,868 entries) the way Jolt does; median of 3 runs, file cache warm"
+source = "bench.exe, data/listing-2026-11-10.csv"
+date = 2026-11-10
+
+# ---------------------------------------------------------------- the released program, without a window
+# jolt.exe 0.5.0 as published, run with --test (Jolt's own test mode: no window shown, drawing into a bitmap in memory,
+# a copy of the settings in %TEMP%, and no drive index for Ctrl+P). 1280x800.
+
+[facts.startup_ready_ms]
+value = 105
+unit = "ms"
+what = "from the process starting to settings, window, session and tabs ready; test mode, without the drive index; the first frame on a real screen was not timed"
+source = "jolt.exe 0.5.0 --test, boot marks logged by the measure step"
+date = 2026-11-10
+
+[facts.frame_100k_ms]
+value = 3.1
+unit = "ms"
+what = "time to draw one frame with a folder of 100,000 files open, median of 300 frames; test mode, drawn into a bitmap in memory"
+source = "jolt.exe 0.5.0 --test, measure 300"
+date = 2026-11-10
+
+[facts.frame_100k_p95_ms]
+value = 3.9
+unit = "ms"
+what = "the same, 95th percentile"
+source = "jolt.exe 0.5.0 --test, measure 300"
+date = 2026-11-10
+
+[facts.memory_headless_mb]
+value = 52
+unit = "MB"
+what = "private memory after opening folders of 1,000, 10,000 and 100,000 files and System32; test mode, without the drive index (with it, more)"
+source = "jolt.exe 0.5.0 --test, process memory sampled every 0.5 s (working set 70 MB, peak 83 MB)"
+date = 2026-11-10
+
+# ---------------------------------------------------------------- media
+
+[media.icon]
+file = "jolt-256.png"
+what = "Jolt's icon: an orange folder with a lightning bolt, 256 px"
+
+[media.icon_ico]
+file = "jolt.ico"
+what = "the same icon as a Windows .ico, all sizes"
+
+[media.tour]
+file = "tour.gif"
+what = "a scripted tour with demo files: tabs, preview, filter, command palette, split view and drive space. The pacing is the script's, not the real speed. Captured 2026-11-06, before 0.1.0: details of the look have changed since"
+
+[media.preview]
+file = "preview.png"
+what = "the preview panel showing a picture next to the list, with its details below. Demo files; captured 2026-11-06, before 0.1.0"
+
+[media.split]
+file = "split.png"
+what = "split view: two panes side by side, each with its own folder. Demo files; captured 2026-11-06, before 0.1.0"
+
+[media.palette]
+file = "palette.png"
+what = "the Ctrl+K command palette open over the list. Captured 2026-11-06, before 0.1.0"
