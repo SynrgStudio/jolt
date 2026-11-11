@@ -31,8 +31,10 @@ named `file 000000.txt` onwards; and `C:\Windows\System32` (4,868 entries). Medi
 
 What this shows, and what it doesn't:
 
-- Reading straight from the file system is 17 to 35 times faster than going through the Shell (sorted or not).
-  This compares reading a folder, not the two programs as a whole.
+- In the three test folders, reading straight from the file system is 17.5 to 34.4 times faster than going through
+  the Shell: the Shell's median divided by Jolt's, sorted (1,000 files: 23.1; 10,000: 18.9; 100,000: 17.5) or not
+  (34.4; 30.4; 26.7). In System32 it is 20.0 sorted and 44.3 not. This compares reading a folder, not the two
+  programs as a whole.
 - FindFirstFileEx is about as fast as Jolt's way here: the classic API is not slow, the Shell is. Jolt reads on a
   thread of its own, so the window keeps responding while it reads.
 - **Windows' file cache was warm** (the files had just been made). A cold read, after a restart or of a folder not

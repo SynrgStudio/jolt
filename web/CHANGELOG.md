@@ -1,5 +1,13 @@
 # Changes to Jolt's corpus
 
+## 2026-11-11 (2)
+
+- `notes/measurements.md`: the ratio to the Shell said "17 to 35"; from the CSV's medians it is 17.5 to 34.4 in the
+  three test folders. Now it gives each one, and System32's (20.0 and 44.3).
+- `notes/find.md`: the drive index note no longer names another tool (rule 3).
+- `rules.md`, rule 2: it covers performance numbers. Numbers in the notes that describe behavior (defaults,
+  thresholds, limits) come from the source and can be used as written.
+
 ## 2026-11-11
 
 - First version of the corpus, for Jolt 0.5.0.

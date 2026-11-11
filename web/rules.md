@@ -13,6 +13,10 @@ These rules come before everything else in this corpus.
    of how it feels; next to it, use the measured times and say they are with Windows' file cache warm.
    *Why: the facts are what make the page trustworthy, and the ones that are missing were not measured.*
 
+   This is about performance. Numbers in `notes/` that describe behavior (a default like `preview_hold` = 150 ms,
+   the index being rebuilt when it is older than 12 hours, a limit of 32 MB) come from the source and can be used as
+   they are written there.
+
 3. **Comparisons only with their numbers.** Jolt can be compared with File Explorer through the Windows Shell
    numbers in `facts.toml`, saying what was compared (reading a folder, not the whole program). No other file
    managers are named or compared with: none were measured.
