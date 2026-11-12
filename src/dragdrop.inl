@@ -14,6 +14,21 @@ constexpr UINT_PTR kTimerSpring = 19;  // a drag held over a tab
 int g_springTab = -1;                  // the tab under the drag (that isn't in front)
 bool ArcDragOut(ComPtr<IDataObject>& pdo, std::vector<std::wstring>& files);  // archive.inl
 
+// A file that takes a drop, as in File Explorer: its type registers a drop handler (programs, scripts, shortcuts).
+// Dropping files on it runs it with them.
+bool TakesDrop(const std::wstring& path) {
+    const wchar_t* ext = PathFindExtensionW(path.c_str());
+    if (!*ext) return false;
+    HKEY cls = nullptr;
+    if (FAILED(AssocQueryKeyW(ASSOCF_NONE, ASSOCKEY_CLASS, ext, nullptr, &cls)) || !cls)
+        return false;
+    HKEY h = nullptr;
+    const bool ok = RegOpenKeyExW(cls, L"shellex\\DropHandler", 0, KEY_READ, &h) == ERROR_SUCCESS;
+    if (h) RegCloseKey(h);
+    RegCloseKey(cls);
+    return ok;
+}
+
 // The tab under a drag: once it has been there a moment it comes to the front.
 void SpringTab(int tab) {
     if (tab >= 0 && tab < static_cast<int>(g_tabs.size()) && g_tabs[tab].get() == &T()) tab = -1;  // already in front
@@ -84,7 +99,7 @@ struct DropTarget : IDropTarget {
         Tab& t = PT(pane);
         g_dropPane = pane;
         int r = HitRowIn(pane, x, y);
-        if (r >= 0 && t.list && EntryAt(t, r).isDir()) {
+        if (r >= 0 && t.list && (EntryAt(t, r).isDir() || TakesDrop(RowPath(t, r)))) {
             row = r;
             return RowPath(t, r);
         }
@@ -176,7 +191,8 @@ struct DropTarget : IDropTarget {
         } else if (inner) {
             HRESULT hr = inner->Drop(pdo, keys, pt, effect);
             Log(L"Drop hr=0x%08X effect=%u on \"%s\"", static_cast<unsigned>(hr), *effect, innerPath.c_str());
-            if (SUCCEEDED(hr) && *effect != DROPEFFECT_NONE) SelectLanded(innerPath, DropNames(pdo));  // when it shows up
+            if (SUCCEEDED(hr) && *effect != DROPEFFECT_NONE && PathIsDir(innerPath))
+                SelectLanded(innerPath, DropNames(pdo));  // when it shows up
         } else {
             *effect = DROPEFFECT_NONE;
         }
